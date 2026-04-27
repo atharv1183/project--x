@@ -1,0 +1,150 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents an employee or admin in the system.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "employee"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "phone", "role"]
+    },
+    "Lead": {
+      "title": "Lead",
+      "description": "A real estate lead with status and follow-up info.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "interested", "not_interested", "deal_pending", "deal_approved"] },
+        "source": { "type": "string" },
+        "assignedTo": { "type": "string" },
+        "assignedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "nextFollowupAt": { "type": "string", "format": "date-time" },
+        "lastRemark": { "type": "string" },
+        "siteVisitPhoto": { "type": "string" },
+        "siteVisitLocation": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" }
+          }
+        },
+        "siteVisitAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone", "status", "source", "assignedTo"]
+    },
+    "Followup": {
+      "title": "Followup",
+      "description": "A log of interaction with a lead.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "format": "date-time" },
+        "remark": { "type": "string" },
+        "employeeId": { "type": "string" }
+      },
+      "required": ["date", "remark", "employeeId"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Daily clock-in/out records with GPS location",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "enum": ["clock_in", "clock_out"] },
+        "location": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" },
+            "address": { "type": "string" }
+          },
+          "required": ["latitude", "longitude"]
+        }
+      },
+      "required": ["uid", "timestamp", "type", "location", "employeeName"]
+    },
+    "System": {
+      "title": "System",
+      "properties": {
+        "lastIndex": { "type": "number" },
+        "employeeIds": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "Requirement": {
+      "title": "Requirement",
+      "description": "Client requirement for real estate",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "type": { "type": "string" },
+        "area": { "type": "string" },
+        "budget": { "type": "string" },
+        "location": { "type": "string" },
+        "remark": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone", "type", "employeeId"]
+    },
+    "InventoryItem": {
+      "title": "Inventory Item",
+      "description": "Property listing in inventory",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "type": { "type": "string", "enum": ["zameen", "plot", "house"] },
+        "areaAcre": { "type": "number" },
+        "areaSqft": { "type": "number" },
+        "areaSqYard": { "type": "number" },
+        "areaSqMtr": { "type": "number" },
+        "areaHectare": { "type": "number" },
+        "rate": { "type": "number" },
+        "location": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending_approval", "approved", "rejected"] },
+        "submitterId": { "type": "string" },
+        "photos": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["title", "type", "rate", "location", "status", "submitterId"]
+    }
+  },
+  "firestore": {
+    "/inventory/{itemId}": {
+      "schema": "InventoryItem",
+      "description": "Property listings"
+    },
+    "/requirements/{reqId}": {
+      "schema": "Requirement",
+      "description": "Client requirements logged by employees"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/leads/{leadId}": {
+      "schema": "Lead",
+      "description": "Lead details"
+    },
+    "/leads/{leadId}/followups/{followupId}": {
+      "schema": "Followup",
+      "description": "Follow-up history for a lead"
+    },
+    "/system/allocation": {
+      "schema": "System",
+      "description": "Lead allocation state"
+    },
+    "/attendance/{recordId}": {
+      "schema": "Attendance",
+      "description": "Location-based attendance logs"
+    }
+  }
+}

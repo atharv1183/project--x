@@ -1,0 +1,220 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------
+    // HELPERS
+    // ---------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isOwner(resourceData) {
+      return isSignedIn() && resourceData.assignedTo == request.auth.uid;
+    }
+
+    // Validation helpers
+    function isValidUser(data) {
+      return data.keys().hasAll(['name', 'email', 'phone', 'role', 'createdAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.email is string && data.email.size() <= 100
+        && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15
+        && data.role in ['admin', 'employee', 'suspended', 'deleted']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidEmployeeInvite(data) {
+      return data.keys().hasAll(['name', 'phone', 'role', 'codeHash', 'used', 'createdAt', 'createdBy'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15
+        && data.role == 'employee'
+        && data.codeHash is string && data.codeHash.size() == 64
+        && data.used is bool
+        && data.createdAt is timestamp
+        && data.createdBy is string;
+    }
+
+    function isValidEmployeeDirectory(data) {
+      return data.keys().hasAll(['name', 'phone', 'role', 'updatedAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15
+        && data.role == 'employee'
+        && data.updatedAt is timestamp;
+    }
+
+    function isInviteClaimUpdate() {
+      return isSignedIn()
+        && !resource.data.used
+        && request.auth.token.email == resource.data.phone + '@estatepulse.com'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used', 'usedAt', 'usedBy'])
+        && request.resource.data.used == true
+        && request.resource.data.usedAt is timestamp
+        && request.resource.data.usedBy == request.auth.uid;
+    }
+
+    function isValidLead(data) {
+      return data.keys().hasAll(['name', 'phone', 'status', 'assignedTo', 'createdAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15
+        && data.status in ['pending', 'interested', 'not_interested', 'deal_pending', 'deal_approved']
+        && data.assignedTo is string
+        && data.createdAt is timestamp;
+    }
+
+    function isValidFollowup(data) {
+      return data.keys().hasAll(['date', 'remark', 'employeeId'])
+        && data.keys().size() == 3
+        && data.date is timestamp
+        && data.remark is string && data.remark.size() > 0 && data.remark.size() <= 1000
+        && data.employeeId == request.auth.uid;
+    }
+
+    function isValidRequirement(data) {
+      return data.keys().hasAll(['name', 'phone', 'type', 'employeeId', 'employeeName', 'createdAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15
+        && data.type is string && data.type.size() > 0 && data.type.size() <= 50
+        && data.employeeId == request.auth.uid
+        && data.createdAt is timestamp;
+    }
+
+    function isValidInventory(data) {
+      return data.keys().hasAll(['title', 'type', 'rate', 'location', 'status', 'submitterId', 'submitterName', 'createdAt', 'updatedAt'])
+        && data.title is string && data.title.size() > 0
+        && data.type in ['zameen', 'plot', 'house']
+        && data.status in ['draft', 'pending_approval', 'approved', 'rejected']
+        && data.submitterId == request.auth.uid;
+    }
+
+    // ---------------------------------------------------------
+    // COLLECTIONS
+    // ---------------------------------------------------------
+
+    // Inventory
+    match /inventory/{itemId} {
+      allow list: if isSignedIn() && (
+        isAdmin() || 
+        resource.data.status == 'approved' || 
+        resource.data.submitterId == request.auth.uid
+      );
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() && (
+        (isAdmin() && request.resource.data.status == 'approved') || 
+        (!isAdmin() && (request.resource.data.status == 'pending_approval' || request.resource.data.status == 'draft'))
+      ) && isValidInventory(request.resource.data);
+      allow update: if isSignedIn() && (
+        isAdmin() || 
+        (resource.data.submitterId == request.auth.uid && (resource.data.status == 'draft' || resource.data.status == 'rejected' || resource.data.status == 'pending_approval'))
+      );
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.submitterId == request.auth.uid && resource.data.status == 'draft');
+    }
+
+    // Requirements
+    match /requirements/{reqId} {
+      allow list: if isSignedIn() && (
+        resource.data.employeeId == request.auth.uid || 
+        isAdmin()
+      );
+      allow get: if isSignedIn() && (isAdmin() || resource.data.employeeId == request.auth.uid);
+      allow create: if isSignedIn() && isValidRequirement(request.resource.data);
+      allow delete: if isSignedIn() && (isAdmin() || resource.data.employeeId == request.auth.uid);
+    }
+
+    // Employee invites
+    match /employeeInvites/{phone} {
+      allow get: if isAdmin() || (isSignedIn() && request.auth.token.email == phone + '@estatepulse.com');
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidEmployeeInvite(request.resource.data);
+      allow update: if (isAdmin() && isValidEmployeeInvite(request.resource.data)) || isInviteClaimUpdate();
+      allow delete: if isAdmin();
+    }
+
+    // Employee directory with only non-sensitive fields
+    match /employeeDirectory/{userId} {
+      allow get, list: if isSignedIn();
+      allow create: if isValidEmployeeDirectory(request.resource.data)
+        && (
+          isAdmin()
+          || (
+            request.auth.uid == userId
+            && request.resource.data.phone + '@estatepulse.com' == request.auth.token.email
+          )
+        );
+      allow update: if isAdmin() && isValidEmployeeDirectory(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Users
+    match /users/{userId} {
+      allow get: if isAdmin() || request.auth.uid == userId;
+      allow list: if isAdmin();
+      allow create: if isSignedIn()
+        && isValidUser(request.resource.data)
+        && (
+          isAdmin() ||
+          (
+            request.auth.uid == userId
+            && request.resource.data.role == 'employee'
+            && request.resource.data.email == request.auth.token.email
+            && request.resource.data.phone + '@estatepulse.com' == request.auth.token.email
+          )
+        );
+      allow update: if isAdmin() || (request.auth.uid == userId && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone']));
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.phone + "@estatepulse.com" == request.auth.token.email);
+    }
+
+    // Leads
+    match /leads/{leadId} {
+      allow get: if isSignedIn() && (isAdmin() || isOwner(resource.data));
+      allow list: if isSignedIn() && (resource.data.assignedTo == request.auth.uid || isAdmin());
+      allow create: if isAdmin() && isValidLead(request.resource.data);
+      allow update: if (isAdmin() || isOwner(resource.data)) && (
+        // Admin can update anything valid
+        (isAdmin() && isValidLead(request.resource.data)) ||
+        // Employee can update status, follow-up info, and transfer lead
+        (isOwner(resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'nextFollowupAt', 'lastRemark', 'siteVisitPhoto', 'siteVisitLocation', 'siteVisitAt', 'assignedTo']) 
+         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdAt', 'phone']))
+      );
+    }
+
+    // Followups
+    match /leads/{leadId}/followups/{followupId} {
+      allow read: if isAdmin() || isOwner(get(/databases/$(database)/documents/leads/$(leadId)).data);
+      allow create: if (isAdmin() || isOwner(get(/databases/$(database)/documents/leads/$(leadId)).data)) && isValidFollowup(request.resource.data);
+    }
+
+    // System allocation
+    match /system/{docId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Attendance
+    match /attendance/{recordId} {
+      allow list: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid 
+        && request.resource.data.keys().hasAll(['uid', 'employeeName', 'timestamp', 'type', 'location'])
+        && request.resource.data.timestamp == request.time;
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+    }
+
+    // Notifications
+    match /notifications/{notificationId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isAdmin();
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+  }
+}

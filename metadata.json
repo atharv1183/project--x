@@ -1,0 +1,12 @@
+{
+  "name": "EstatePulse: Real Estate Lead Manager",
+  "description": "A professional real estate lead and follow-up management system featuring automated round-robin distribution, GPS-verified site visits, and admin approval workflows.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "Real-time Collaboration",
+    "Geospatial Data"
+  ]
+}
