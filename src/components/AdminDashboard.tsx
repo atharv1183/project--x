@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, useEffect, useRef, FormEvent } from 'react';
 import { db } from '../lib/firebase';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { createUserWithEmailAndPassword, getAuth, signOut } from 'firebase/auth';
@@ -30,6 +30,7 @@ import {
   CheckCircle2, 
   XCircle, 
   Clock, 
+  ChevronLeft,
   ChevronRight,
   ShieldCheck,
   Search,
@@ -44,7 +45,7 @@ import {
   Trash2,
   LayoutGrid
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { format } from 'date-fns';
@@ -86,7 +87,7 @@ const formatLeadDate = (date: any) => {
   return format(d, 'MMM dd, yyyy hh:mm a');
 };
 
-export default function AdminDashboard({ user }: { user: User }) {
+export default function AdminDashboard({ user, backSignal = 0 }: { user: User; backSignal?: number }) {
   const [activeView, setActiveView] = useState<'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory'>('leads');
   const [employees, setEmployees] = useState<User[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -112,8 +113,24 @@ export default function AdminDashboard({ user }: { user: User }) {
   const [targetEmployeeId, setTargetEmployeeId] = useState('');
   const [reallocateLeadsCount, setReallocateLeadsCount] = useState(0);
   const [pendingRole, setPendingRole] = useState<'suspended' | 'deleted' | null>(null);
+  const [saveToast, setSaveToast] = useState<{ title: string; description: string } | null>(null);
+  const saveToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const processedBackSignalRef = useRef(0);
+  const tabsScrollRef = useRef<HTMLDivElement | null>(null);
+  const [canScrollTabsLeft, setCanScrollTabsLeft] = useState(false);
+  const [canScrollTabsRight, setCanScrollTabsRight] = useState(false);
 
   const normalizePhone = (value: string) => value.replace(/\D/g, '');
+  const showSaveToast = (title: string, description: string) => {
+    setSaveToast({ title, description });
+    if (saveToastTimerRef.current) {
+      clearTimeout(saveToastTimerRef.current);
+    }
+    saveToastTimerRef.current = setTimeout(() => {
+      setSaveToast(null);
+      saveToastTimerRef.current = null;
+    }, 4500);
+  };
 
   const handleReallocateAndChangeStatus = async () => {
     if (!reallocateEmployee || !pendingRole) return;
@@ -282,8 +299,15 @@ export default function AdminDashboard({ user }: { user: User }) {
       setNextFollowupDate('');
       // Update local state with concrete timestamps to avoid invalid date formatting crashes.
       setSelectedLead((prev) => (prev ? ({ ...prev, ...localUpdateData } as Lead) : prev));
-      
-      alert('Interaction recorded successfully');
+
+      let successMessage = 'Interaction recorded successfully.';
+      if (status === 'interested' || status === 'interest') {
+        successMessage = 'Interested successfully.';
+      } else if (status === 'not_interested') {
+        successMessage = 'Declined successfully.';
+      }
+
+      alert(successMessage);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `leads/${selectedLead.id}`);
     } finally {
@@ -319,6 +343,81 @@ export default function AdminDashboard({ user }: { user: User }) {
       unsubscribeReqs();
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (saveToastTimerRef.current) {
+        clearTimeout(saveToastTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!backSignal || backSignal === processedBackSignalRef.current) {
+      return;
+    }
+    processedBackSignalRef.current = backSignal;
+
+    if (showTransferModal) {
+      setShowTransferModal(false);
+      return;
+    }
+
+    if (showReallocateModal) {
+      setShowReallocateModal(false);
+      setReallocateEmployee(null);
+      return;
+    }
+
+    if (showAddLead) {
+      setShowAddLead(false);
+      return;
+    }
+
+    if (showAddEmployee) {
+      setShowAddEmployee(false);
+      return;
+    }
+
+    if (showEditEmployee) {
+      setShowEditEmployee(null);
+      return;
+    }
+
+    if (selectedLead) {
+      setSelectedLead(null);
+      setIsEditing(false);
+      return;
+    }
+
+    if (activeView !== 'leads') {
+      setActiveView('leads');
+    }
+  }, [backSignal]);
+
+  useEffect(() => {
+    const el = tabsScrollRef.current;
+    if (!el) return;
+
+    const updateScrollState = () => {
+      setCanScrollTabsLeft(el.scrollLeft > 4);
+      setCanScrollTabsRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+    };
+
+    updateScrollState();
+    el.addEventListener('scroll', updateScrollState, { passive: true });
+    window.addEventListener('resize', updateScrollState);
+    return () => {
+      el.removeEventListener('scroll', updateScrollState);
+      window.removeEventListener('resize', updateScrollState);
+    };
+  }, []);
+
+  const scrollTabs = (direction: 'left' | 'right') => {
+    const el = tabsScrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: direction === 'left' ? -180 : 180, behavior: 'smooth' });
+  };
 
   const deleteRequirement = async (reqId: string) => {
     if (!confirm('Are you sure you want to delete this requirement?')) return;
@@ -530,7 +629,7 @@ export default function AdminDashboard({ user }: { user: User }) {
       });
       await batch.commit();
 
-      alert(`Employee added for ${normalizedPhone}. Initial password is the mobile number.`);
+      showSaveToast(`${name} added successfully`, 'New member added');
       setEmployeeForm({ name: '', phone: '' });
       setShowAddEmployee(false);
     } catch (error) {
@@ -574,6 +673,7 @@ export default function AdminDashboard({ user }: { user: User }) {
       });
       setIsEditing(false);
       setSelectedLead({ ...selectedLead, ...editForm } as Lead);
+      showSaveToast('Changes saved', 'Lead details updated');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `leads/${selectedLead.id}`);
     } finally {
@@ -595,7 +695,11 @@ export default function AdminDashboard({ user }: { user: User }) {
   return (
     <div className="space-y-8 pb-20">
       {/* Top Navigation / Tabs */}
-      <div className="flex bg-white/50 p-1.5 rounded-[24px] border border-slate-100 mb-8 overflow-x-auto no-scrollbar whitespace-nowrap">
+      <div className="relative mb-8">
+        <div
+          ref={tabsScrollRef}
+          className="flex bg-white/50 p-1.5 rounded-[24px] border border-slate-100 overflow-x-auto no-scrollbar whitespace-nowrap"
+        >
         {[
           { id: 'leads', icon: Users, label: 'Leads' },
           { id: 'employees', icon: UserPlus, label: 'Team' },
@@ -607,7 +711,7 @@ export default function AdminDashboard({ user }: { user: User }) {
             key={tab.id}
             onClick={() => setActiveView(tab.id as any)}
             className={cn(
-              "flex-1 flex items-center justify-center gap-3 py-3.5 px-6 rounded-2xl text-xs font-black uppercase tracking-widest transition-all",
+              "min-w-[140px] md:min-w-0 md:flex-1 flex items-center justify-center gap-3 py-3.5 px-6 rounded-2xl text-xs font-black uppercase tracking-widest transition-all",
               activeView === tab.id 
                 ? "bg-slate-900 text-white shadow-xl shadow-slate-200" 
                 : "text-slate-400 hover:text-slate-600 hover:bg-white"
@@ -616,6 +720,31 @@ export default function AdminDashboard({ user }: { user: User }) {
             <tab.icon size={16} /> {tab.label}
           </button>
         ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => scrollTabs('left')}
+          className={cn(
+            "md:hidden absolute left-1 top-1/2 -translate-y-1/2 z-10 w-7 h-7 rounded-full bg-white/95 border border-slate-200 shadow-sm flex items-center justify-center text-slate-500 transition-all",
+            canScrollTabsLeft ? "opacity-100" : "opacity-30 pointer-events-none"
+          )}
+          aria-label="Scroll tabs left"
+          title="Scroll tabs left"
+        >
+          <ChevronLeft size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => scrollTabs('right')}
+          className={cn(
+            "md:hidden absolute right-1 top-1/2 -translate-y-1/2 z-10 w-7 h-7 rounded-full bg-white/95 border border-slate-200 shadow-sm flex items-center justify-center text-slate-500 transition-all",
+            canScrollTabsRight ? "opacity-100" : "opacity-30 pointer-events-none"
+          )}
+          aria-label="Scroll tabs right"
+          title="Scroll tabs right"
+        >
+          <ChevronRight size={14} />
+        </button>
       </div>
 
       {activeView === 'leads' ? (
@@ -1121,7 +1250,7 @@ export default function AdminDashboard({ user }: { user: User }) {
                   <p className="text-sm text-gray-500">{selectedLead.phone}</p>
                 </div>
               </div>
-              <button onClick={() => { setSelectedLead(null); setIsEditing(false); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-400 transition-colors">
+              <button onClick={() => { setSelectedLead(null); setIsEditing(false); }} className="p-2 hover:bg-red-100 rounded-full text-gray-400 hover:text-red-500 transition-colors">
                 <XCircle size={24} />
               </button>
             </div>
@@ -1390,10 +1519,10 @@ export default function AdminDashboard({ user }: { user: User }) {
       )}
 
       {showAddLead && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
-            <h3 className="text-2xl font-bold mb-6 text-gray-900">Add New Lead</h3>
-            <form onSubmit={handleAddLead} className="space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/50 backdrop-blur-sm">
+          <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl max-h-[92vh] overflow-y-auto">
+            <h3 className="text-2xl font-bold mb-7 text-gray-900">Add New Lead</h3>
+            <form onSubmit={handleAddLead} className="space-y-5">
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-1">Customer Name</label>
                 <input required value={leadForm.name} onChange={e => setLeadForm({...leadForm, name: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Enter name" />
@@ -1449,9 +1578,9 @@ export default function AdminDashboard({ user }: { user: User }) {
                   </select>
                 </div>
               )}
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => setShowAddLead(false)} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
-                <button type="submit" disabled={loading} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all">
+              <div className="flex gap-3 pt-6 mt-2 border-t border-gray-100">
+                <button type="button" onClick={() => setShowAddLead(false)} className="flex-1 py-3.5 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
+                <button type="submit" disabled={loading} className="flex-1 py-3.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all">
                   {loading ? 'Adding...' : 'Allocate Lead'}
                 </button>
               </div>
@@ -1493,6 +1622,27 @@ export default function AdminDashboard({ user }: { user: User }) {
           </motion.div>
         </div>
       )}
+      <AnimatePresence>
+        {saveToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -14, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.96 }}
+            transition={{ duration: 0.2 }}
+            className="fixed top-20 right-4 z-[140] w-[300px] max-w-[calc(100vw-2rem)] rounded-2xl border border-gray-200 bg-white/95 px-4 py-3 shadow-2xl backdrop-blur"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-green-100 text-green-600 flex items-center justify-center">
+                <CheckCircle2 size={18} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-gray-900 truncate">{saveToast.title}</p>
+                <p className="text-xs text-gray-500">{saveToast.description}</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

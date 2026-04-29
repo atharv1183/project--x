@@ -505,6 +505,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     return matchesFilter && matchesSearch;
   });
 
+  const areaUnits = Object.keys(AREA_CONVERSIONS) as Array<keyof typeof AREA_CONVERSIONS>;
+
   return (
     <div className="space-y-8 pb-24 max-w-[1600px] mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 px-1">
@@ -713,17 +715,17 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
               className="w-full h-full sm:h-auto sm:max-h-[90vh] max-w-5xl bg-white sm:rounded-[48px] overflow-hidden shadow-2xl flex flex-col"
             >
               <form onSubmit={handleSubmit} className="flex flex-col h-full overflow-hidden">
-                <div className="p-6 sm:p-10 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between shrink-0">
-                  <div className="flex items-center gap-4 sm:gap-6">
-                    <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-2xl sm:rounded-3xl bg-blue-600 text-white flex items-center justify-center shadow-2xl shadow-blue-200">
-                      <Plus size={28} className="sm:hidden" />
-                      <Plus size={36} className="hidden sm:block" />
+                <div className="p-4 sm:p-5 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-3 sm:gap-4">
+                    <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-xl shadow-blue-200">
+                      <Plus size={22} className="sm:hidden" />
+                      <Plus size={26} className="hidden sm:block" />
                     </div>
                     <div>
-                      <h3 className="text-xl sm:text-3xl font-black text-slate-900 tracking-tight">
+                      <h3 className="text-lg sm:text-2xl font-black text-slate-900 tracking-tight">
                         {editingItem ? 'Edit Property' : 'Add New Property'}
                       </h3>
-                      <p className="text-slate-400 font-bold text-[10px] sm:text-xs uppercase tracking-[0.2em] mt-1">Property details & Media</p>
+                      <p className="text-slate-400 font-bold text-[9px] sm:text-[10px] uppercase tracking-[0.2em] mt-0.5">Property details & media</p>
                     </div>
                   </div>
                   <button 
@@ -732,10 +734,10 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                         setShowForm(false);
                         setEditingItem(null);
                     }} 
-                    className="w-10 h-10 sm:w-14 sm:h-14 rounded-full bg-white text-slate-400 hover:text-rose-500 transition-all flex items-center justify-center shadow-xl shadow-slate-200/50"
+                    className="w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-white text-slate-400 hover:text-rose-500 transition-all flex items-center justify-center shadow-lg shadow-slate-200/50"
                   >
-                    <X size={20} className="sm:hidden" />
-                    <X size={28} className="hidden sm:block" />
+                    <X size={18} className="sm:hidden" />
+                    <X size={22} className="hidden sm:block" />
                   </button>
                 </div>
 
@@ -935,16 +937,19 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                       {/* Right Column: Measurements & Media */}
                       <div className="space-y-10">
                         <section className="bg-slate-50 rounded-[32px] p-8 border border-slate-100 space-y-6">
-                           <div className="flex items-center justify-between">
+                           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <h4 className="text-sm font-black text-slate-900 uppercase tracking-widest">Measurements</h4>
-                            <div className="flex p-1 bg-white border border-slate-200 rounded-xl">
-                                {Object.keys(AREA_CONVERSIONS).map(u => (
+                            <div
+                              className="grid w-full sm:w-auto p-1 bg-white border border-slate-200 rounded-xl overflow-hidden"
+                              style={{ gridTemplateColumns: `repeat(${areaUnits.length}, minmax(0, 1fr))` }}
+                            >
+                                {areaUnits.map(u => (
                                     <button
                                         key={u}
                                         type="button"
                                         onClick={() => setFormData({...formData, areaUnit: u as any})}
                                         className={cn(
-                                            "px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all",
+                                            "min-w-0 px-2 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all text-center",
                                             formData.areaUnit === u ? "bg-slate-900 text-white shadow-lg" : "text-slate-400 hover:text-slate-600"
                                         )}
                                     >
@@ -967,7 +972,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                            </div>
 
                            <div className="grid grid-cols-2 gap-4">
-                              {Object.keys(AREA_CONVERSIONS).map(u => {
+                              {areaUnits.map(u => {
                                   if (u === formData.areaUnit) return null;
                                   const val = formData.areaValue ? convertArea(Number(formData.areaValue), formData.areaUnit)[u as keyof typeof AREA_CONVERSIONS] : '-';
                                   return (
@@ -1081,12 +1086,12 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                   </div>
                 </div>
 
-                <div className="p-4 sm:p-6 md:p-10 bg-white border-t border-slate-100 flex flex-col sm:flex-row gap-4 shrink-0">
-                  <div className="flex flex-1 gap-4">
+                <div className="p-3 sm:p-4 md:p-5 bg-white border-t border-slate-100 flex flex-col sm:flex-row gap-3 shrink-0">
+                  <div className="flex flex-1 gap-3">
                     <button 
                       type="button" 
                       onClick={() => { setShowForm(false); setEditingItem(null); }}
-                      className="flex-1 sm:flex-none px-8 py-4 bg-white border border-slate-200 text-slate-500 font-bold text-xs uppercase tracking-widest rounded-2xl hover:bg-slate-50 transition-all"
+                      className="flex-1 sm:flex-none px-7 py-3 bg-white border border-slate-200 text-slate-500 font-bold text-xs uppercase tracking-widest rounded-2xl hover:bg-slate-50 transition-all"
                     >
                       Cancel
                     </button>
@@ -1094,7 +1099,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                       type="button" 
                       disabled={loading}
                       onClick={(e) => handleSubmit(e as any, true)}
-                      className="flex-1 sm:flex-none px-8 py-4 bg-white border border-slate-200 text-slate-900 font-bold text-xs uppercase tracking-widest rounded-2xl hover:bg-slate-50 transition-all disabled:opacity-50"
+                      className="flex-1 sm:flex-none px-7 py-3 bg-white border border-slate-200 text-slate-900 font-bold text-xs uppercase tracking-widest rounded-2xl hover:bg-slate-50 transition-all disabled:opacity-50"
                     >
                       Draft
                     </button>
@@ -1102,7 +1107,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                   <button 
                     type="submit"
                     disabled={loading}
-                    className="flex-[2] py-4 bg-slate-900 text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl shadow-xl shadow-slate-200 hover:bg-slate-800 transition-all active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-3"
+                    className="flex-[2] py-3 bg-slate-900 text-white font-black text-xs uppercase tracking-[0.2em] rounded-2xl shadow-xl shadow-slate-200 hover:bg-slate-800 transition-all active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-3"
                   >
                     {loading ? (
                         <>

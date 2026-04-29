@@ -30,6 +30,7 @@ import {
   XCircle,
   ClipboardList,
   ShieldCheck,
+  ChevronLeft,
   ChevronRight,
   Clock,
   History,
@@ -41,7 +42,8 @@ import {
   Trash2,
   PlusCircle,
   FileText,
-  LayoutGrid
+  LayoutGrid,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, isToday, isPast, isFuture, startOfDay, endOfDay } from 'date-fns';
@@ -90,7 +92,7 @@ function toMillis(value: unknown): number {
   return toDateValue(value)?.getTime() ?? 0;
 }
 
-export default function EmployeeDashboard({ user }: { user: User }) {
+export default function EmployeeDashboard({ user, backSignal = 0 }: { user: User; backSignal?: number }) {
   const [activeTab, setActiveTab] = useState<'pending' | 'today' | 'upcoming' | 'requirements' | 'inventory'>('today');
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
@@ -124,6 +126,70 @@ export default function EmployeeDashboard({ user }: { user: User }) {
   const [transferSearch, setTransferSearch] = useState('');
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const processedBackSignalRef = useRef(0);
+  const tabsScrollRef = useRef<HTMLDivElement | null>(null);
+  const [canScrollTabsLeft, setCanScrollTabsLeft] = useState(false);
+  const [canScrollTabsRight, setCanScrollTabsRight] = useState(false);
+
+  useEffect(() => {
+    if (!backSignal || backSignal === processedBackSignalRef.current) {
+      return;
+    }
+    processedBackSignalRef.current = backSignal;
+
+    if (showReqModal) {
+      setShowReqModal(false);
+      return;
+    }
+
+    if (showNotifications) {
+      setShowNotifications(false);
+      return;
+    }
+
+    if (showTransferModal) {
+      setShowTransferModal(false);
+      return;
+    }
+
+    if (showHistory) {
+      setShowHistory(false);
+      return;
+    }
+
+    if (selectedLeadIndex !== null) {
+      setSelectedLeadIndex(null);
+      return;
+    }
+
+    if (activeTab !== 'today') {
+      setActiveTab('today');
+    }
+  }, [backSignal]);
+
+  useEffect(() => {
+    const el = tabsScrollRef.current;
+    if (!el) return;
+
+    const updateScrollState = () => {
+      setCanScrollTabsLeft(el.scrollLeft > 4);
+      setCanScrollTabsRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+    };
+
+    updateScrollState();
+    el.addEventListener('scroll', updateScrollState, { passive: true });
+    window.addEventListener('resize', updateScrollState);
+    return () => {
+      el.removeEventListener('scroll', updateScrollState);
+      window.removeEventListener('resize', updateScrollState);
+    };
+  }, []);
+
+  const scrollTabs = (direction: 'left' | 'right') => {
+    const el = tabsScrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: direction === 'left' ? -170 : 170, behavior: 'smooth' });
+  };
 
   useEffect(() => {
     if (!auth.currentUser) return;
@@ -488,51 +554,54 @@ export default function EmployeeDashboard({ user }: { user: User }) {
   return (
     <div className="space-y-6 pb-20">
       {/* Professional Header & Attendance */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-white/40 backdrop-blur-2xl p-8 rounded-[48px] border border-white/40 shadow-2xl shadow-blue-900/5 ring-1 ring-black/[0.02]">
-        <div className="flex items-center gap-6">
-          <div className="w-20 h-20 rounded-[32px] bg-gradient-to-tr from-blue-600 to-blue-500 flex items-center justify-center text-white shadow-2xl shadow-blue-600/40 transform hover:rotate-3 transition-transform">
-            <UserIcon size={40} />
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6 bg-white/40 backdrop-blur-2xl p-4 sm:p-8 rounded-[32px] sm:rounded-[48px] border border-white/40 shadow-2xl shadow-blue-900/5 ring-1 ring-black/[0.02]">
+        <div className="flex items-center gap-4 sm:gap-6 px-1">
+          <div className="w-14 h-14 sm:w-20 sm:h-20 rounded-2xl sm:rounded-[32px] bg-gradient-to-tr from-blue-600 to-blue-500 flex items-center justify-center text-white shadow-2xl shadow-blue-600/40 transform hover:rotate-3 transition-transform">
+            <UserIcon size={26} className="sm:hidden" />
+            <UserIcon size={40} className="hidden sm:block" />
           </div>
           <div>
-            <h1 className="text-3xl font-black text-slate-900 tracking-tight leading-none mb-2">Hey, {user.name.split(' ')[0]}</h1>
-            <div className="flex items-center gap-3">
+            <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight leading-none mb-1.5 sm:mb-2">Hey, {user.name.split(' ')[0]}</h1>
+            <div className="flex items-center gap-2.5 sm:gap-3">
               <div className={cn(
-                "w-2.5 h-2.5 rounded-full ring-4",
+                "w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ring-4",
                 isClockedIn ? "bg-green-500 ring-green-100 animate-pulse" : "bg-red-400 ring-red-100"
               )} />
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-mono">
+              <p className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-mono">
                 {isClockedIn ? "Live Tracker Active" : "Offline Mode"}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4">
           <button
             onClick={() => handleAttendance(isClockedIn ? 'clock_out' : 'clock_in')}
             disabled={attendanceLoading}
             className={cn(
-              "px-10 py-4 rounded-[24px] font-black text-sm tracking-widest uppercase transition-all active:scale-95 flex items-center gap-3 border shadow-xl",
+              "px-6 sm:px-10 py-3 sm:py-4 rounded-2xl sm:rounded-[24px] font-black text-xs sm:text-sm tracking-widest uppercase transition-all active:scale-95 flex items-center gap-2.5 sm:gap-3 border shadow-xl",
               isClockedIn 
                 ? "bg-red-50 text-red-600 border-red-100 hover:bg-red-100/50" 
                 : "bg-blue-600 text-white border-transparent hover:bg-blue-700 shadow-blue-300/40"
             )}
           >
             {attendanceLoading ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
+              <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
             ) : (
-              <MapPin size={22} />
+              <MapPin size={18} className="sm:hidden" />
             )}
+            {!attendanceLoading && <MapPin size={22} className="hidden sm:block" />}
             {isClockedIn ? "Check Out" : "Check In"}
           </button>
           
           <button 
             onClick={() => setShowNotifications(true)}
-            className="p-4 relative bg-white border border-slate-100 rounded-[24px] hover:border-blue-200 transition-all shadow-lg shadow-slate-200/50 active:scale-95 group overflow-hidden"
+            className="p-2.5 sm:p-4 relative bg-white border border-slate-100 rounded-2xl sm:rounded-[24px] hover:border-blue-200 transition-all shadow-lg shadow-slate-200/50 active:scale-95 group"
           >
-            <Bell size={28} className="text-slate-400 group-hover:text-blue-500 transition-colors relative z-10" />
+            <Bell size={20} className="sm:hidden text-slate-400 group-hover:text-blue-500 transition-colors relative z-10" />
+            <Bell size={28} className="hidden sm:block text-slate-400 group-hover:text-blue-500 transition-colors relative z-10" />
             {notifications.filter(n => !n.read).length > 0 && (
-              <span className="absolute top-3 right-3 w-7 h-7 bg-blue-600 text-white text-[11px] font-black rounded-full flex items-center justify-center border-4 border-white shadow-lg z-20">
+              <span className="absolute top-0.5 right-0.5 sm:top-3 sm:right-3 w-5 h-5 sm:w-7 sm:h-7 bg-blue-600 text-white text-[9px] sm:text-[11px] font-black rounded-full flex items-center justify-center border-2 sm:border-4 border-white shadow-lg z-20">
                 {notifications.filter(n => !n.read).length}
               </span>
             )}
@@ -541,7 +610,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
       </div>
 
       {/* Branded Statistics Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-5">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 sm:gap-5">
         {[
           { label: 'Assigned', value: stats.total, icon: ClipboardList, color: 'text-blue-600', bg: 'bg-blue-50' },
           { label: 'Interests', value: stats.interested, icon: CheckCircle2, color: 'text-green-600', bg: 'bg-green-50' },
@@ -550,18 +619,23 @@ export default function EmployeeDashboard({ user }: { user: User }) {
           { label: 'Visits', value: leads.filter(l => l.siteVisitAt).length, icon: MapPin, color: 'text-violet-600', bg: 'bg-violet-50' },
           { label: 'Closed', value: stats.dealsApproved, icon: ShieldCheck, color: 'text-indigo-600', bg: 'bg-indigo-50' }
         ].map((item, i) => (
-          <div key={i} className="bg-white p-6 rounded-[36px] border border-slate-100 shadow-xl shadow-slate-200/20 flex flex-col items-center justify-center text-center group hover:bg-slate-50 transition-all">
-            <div className={cn("w-14 h-14 rounded-3xl flex items-center justify-center mb-4 transition-all duration-500 group-hover:scale-110 shadow-inner", item.bg, item.color)}>
-              <item.icon size={26} />
+          <div key={i} className="bg-white p-4 sm:p-6 rounded-[28px] sm:rounded-[36px] border border-slate-100 shadow-xl shadow-slate-200/20 flex flex-col items-center justify-center text-center group hover:bg-slate-50 transition-all">
+            <div className={cn("w-11 h-11 sm:w-14 sm:h-14 rounded-2xl sm:rounded-3xl flex items-center justify-center mb-3 sm:mb-4 transition-all duration-500 group-hover:scale-110 shadow-inner", item.bg, item.color)}>
+              <item.icon size={20} className="sm:hidden" />
+              <item.icon size={26} className="hidden sm:block" />
             </div>
-            <p className="text-3xl font-black text-slate-900 tracking-tighter">{item.value}</p>
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1.5">{item.label}</p>
+            <p className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tighter">{item.value}</p>
+            <p className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">{item.label}</p>
           </div>
         ))}
       </div>
 
       {/* Tab Navigation */}
-      <div className="flex bg-white/50 p-1.5 rounded-[24px] border border-slate-100 mb-8 sticky top-20 z-10 overflow-x-auto no-scrollbar whitespace-nowrap">
+      <div className="relative mb-6 md:mb-8 md:sticky md:top-20 z-30">
+        <div
+          ref={tabsScrollRef}
+          className="flex bg-white/90 backdrop-blur p-1.5 rounded-[24px] border border-slate-100 overflow-x-auto no-scrollbar whitespace-nowrap"
+        >
         {[
           { id: 'pending', icon: Clock, label: 'Pending' },
           { id: 'today', icon: Calendar, label: 'Today' },
@@ -573,7 +647,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
             key={tab.id}
             onClick={() => { setActiveTab(tab.id as any); setSelectedLeadIndex(null); }}
             className={cn(
-              "flex-1 flex items-center justify-center gap-3 py-3.5 px-6 rounded-2xl text-xs font-black uppercase tracking-widest transition-all",
+              "min-w-[130px] md:min-w-0 md:flex-1 flex items-center justify-center gap-3 py-3.5 px-6 rounded-2xl text-xs font-black uppercase tracking-widest transition-all",
               activeTab === tab.id 
                 ? "bg-slate-900 text-white shadow-xl shadow-slate-200" 
                 : "text-slate-400 hover:text-slate-600 hover:bg-white"
@@ -582,15 +656,40 @@ export default function EmployeeDashboard({ user }: { user: User }) {
             <tab.icon size={16} /> {tab.label}
           </button>
         ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => scrollTabs('left')}
+          className={cn(
+            "md:hidden absolute left-1 top-1/2 -translate-y-1/2 z-10 w-7 h-7 rounded-full bg-white/95 border border-slate-200 shadow-sm flex items-center justify-center text-slate-500 transition-all",
+            canScrollTabsLeft ? "opacity-100" : "opacity-30 pointer-events-none"
+          )}
+          aria-label="Scroll tabs left"
+          title="Scroll tabs left"
+        >
+          <ChevronLeft size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => scrollTabs('right')}
+          className={cn(
+            "md:hidden absolute right-1 top-1/2 -translate-y-1/2 z-10 w-7 h-7 rounded-full bg-white/95 border border-slate-200 shadow-sm flex items-center justify-center text-slate-500 transition-all",
+            canScrollTabsRight ? "opacity-100" : "opacity-30 pointer-events-none"
+          )}
+          aria-label="Scroll tabs right"
+          title="Scroll tabs right"
+        >
+          <ChevronRight size={14} />
+        </button>
       </div>
 
       {activeTab === 'requirements' ? (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-black text-slate-800 tracking-tight">Requirement List</h2>
+        <div className="space-y-7 pt-3 sm:pt-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">Requirement List</h2>
             <button 
               onClick={() => setShowReqModal(true)}
-              className="px-6 py-3 bg-blue-600 text-white font-black text-xs uppercase tracking-widest rounded-2xl shadow-xl shadow-blue-200 hover:bg-blue-700 transition-all flex items-center gap-2"
+              className="w-full sm:w-auto px-5 py-3 bg-blue-600 text-white font-black text-[10px] sm:text-xs uppercase tracking-widest rounded-2xl shadow-xl shadow-blue-200 hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
             >
               <PlusCircle size={18} /> Add New Requirement
             </button>
@@ -657,7 +756,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
       ) : activeTab === 'inventory' ? (
         <InventoryManagement user={user} />
       ) : (
-        <div className="flex flex-col lg:flex-row gap-6">
+        <div className="flex flex-col lg:flex-row gap-5 md:gap-6">
         {/* Leads List Side */}
         <div className={cn("w-full lg:w-[400px] space-y-4", selectedLeadIndex !== null && "hidden lg:block")}>
           <div className="flex items-center justify-between px-4">
@@ -665,7 +764,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
               {activeTab} Queue ({filteredLeads.length})
             </h3>
           </div>
-          <div className="space-y-3 max-h-[calc(100vh-450px)] overflow-y-auto pr-2 custom-scrollbar">
+          <div className="space-y-3 max-h-none lg:max-h-[calc(100vh-450px)] overflow-visible lg:overflow-y-auto pr-0 lg:pr-2 pb-2 custom-scrollbar">
             {filteredLeads.map((lead, idx) => (
               <motion.button
                 key={lead.id}
@@ -676,14 +775,14 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                 whileTap={{ scale: 0.98 }}
                 onClick={() => setSelectedLeadIndex(idx)}
                 className={cn(
-                  "w-full text-left p-5 rounded-[32px] border transition-all duration-300 flex items-center gap-4 group",
+                  "w-full text-left p-4 sm:p-5 rounded-[28px] sm:rounded-[32px] border transition-all duration-300 flex items-center gap-3 sm:gap-4 group",
                   selectedLeadIndex === idx 
                     ? "bg-white border-blue-500 shadow-2xl shadow-blue-900/10 ring-4 ring-blue-50/50" 
                     : "bg-white border-slate-100 shadow-xl shadow-slate-200/10 hover:border-blue-200"
                 )}
               >
                 <div className={cn(
-                  "w-12 h-12 rounded-2xl flex items-center justify-center font-black text-lg transition-all duration-500",
+                  "w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center font-black text-base sm:text-lg transition-all duration-500 shrink-0",
                   selectedLeadIndex === idx 
                     ? "bg-blue-600 text-white rotate-3 scale-110 shadow-lg shadow-blue-200" 
                     : "bg-slate-50 text-slate-400 group-hover:bg-blue-50 group-hover:text-blue-600 group-hover:rotate-6"
@@ -691,7 +790,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                   {lead.name[0]}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-black text-slate-800 truncate tracking-tight">{lead.name}</p>
+                  <p className="font-black text-slate-800 truncate tracking-tight text-sm sm:text-base">{lead.name}</p>
                   <div className="flex items-center gap-2 mt-0.5">
                     <Phone size={10} className="text-slate-300" />
                     <p className="text-[10px] text-slate-400 font-bold tracking-tight">
@@ -738,22 +837,22 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                 className="bg-white rounded-3xl border border-gray-100 shadow-xl overflow-hidden flex flex-col"
               >
                 {/* Enhanced Detail View */}
-                <div className="p-8 md:p-10 bg-slate-50/50 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-6">
-                  <div className="flex items-center gap-6">
-                    <div className="w-20 h-20 rounded-[32px] bg-blue-600 flex items-center justify-center text-white text-3xl font-black shadow-2xl shadow-blue-200 ring-8 ring-blue-50">
+                <div className="p-4 sm:p-8 md:p-10 bg-slate-50/50 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6">
+                  <div className="flex items-start sm:items-center gap-4 sm:gap-6 min-w-0">
+                    <div className="w-14 h-14 sm:w-20 sm:h-20 rounded-2xl sm:rounded-[32px] bg-blue-600 flex items-center justify-center text-white text-2xl sm:text-3xl font-black shadow-2xl shadow-blue-200 ring-4 sm:ring-8 ring-blue-50 shrink-0">
                       {currentLead.name[0]}
                     </div>
-                    <div>
-                      <h2 className="text-3xl font-black text-slate-900 tracking-tight">{currentLead.name}</h2>
-                      <div className="flex flex-wrap items-center gap-4 mt-2">
-                        <a href={`tel:${currentLead.phone}`} className="bg-white px-4 py-1.5 rounded-full shadow-sm border border-slate-100 text-blue-600 font-black text-[11px] uppercase tracking-widest hover:bg-blue-50 transition-all flex items-center gap-2">
+                    <div className="min-w-0">
+                      <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight break-words leading-tight">{currentLead.name}</h2>
+                      <div className="flex flex-wrap items-center gap-2 sm:gap-4 mt-2">
+                        <a href={`tel:${currentLead.phone}`} className="bg-white px-3 py-1.5 rounded-full shadow-sm border border-slate-100 text-blue-600 font-black text-[10px] sm:text-[11px] uppercase tracking-widest hover:bg-blue-50 transition-all flex items-center gap-2">
                           <Phone size={12} /> {currentLead.phone}
                         </a>
-                        <div className="flex items-center gap-2 text-slate-400 font-bold text-[10px] uppercase tracking-widest">
+                        <div className="flex items-center gap-2 text-slate-400 font-bold text-[9px] sm:text-[10px] uppercase tracking-widest">
                           <Clock size={12} /> Added {formatDateValue(currentLead.createdAt, 'MMM dd', 'Unknown')}
                         </div>
                         {currentLead.lastInteractionAt && (
-                          <div className="flex items-center gap-2 text-blue-500 font-black text-[10px] uppercase tracking-widest bg-blue-50 px-3 py-1 rounded-full border border-blue-100">
+                          <div className="flex items-center gap-2 text-blue-500 font-black text-[9px] sm:text-[10px] uppercase tracking-widest bg-blue-50 px-3 py-1 rounded-full border border-blue-100">
                             <History size={12} /> Last Follow-up: {formatDateValue(currentLead.lastInteractionAt, 'MMM dd, hh:mm a', 'N/A')}
                           </div>
                         )}
@@ -763,11 +862,11 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-3">
-                    <button onClick={() => setShowTransferModal(true)} className="px-5 py-2.5 bg-white border border-slate-200 rounded-2xl text-orange-600 hover:bg-orange-50 transition-all shadow-sm flex items-center gap-2 font-black text-[11px] uppercase tracking-widest">
+                  <div className="flex flex-wrap md:flex-nowrap gap-2 sm:gap-3 w-full md:w-auto">
+                    <button onClick={() => setShowTransferModal(true)} className="flex-1 md:flex-none px-4 sm:px-5 py-2.5 bg-white border border-slate-200 rounded-2xl text-orange-600 hover:bg-orange-50 transition-all shadow-sm flex items-center justify-center gap-2 font-black text-[10px] sm:text-[11px] uppercase tracking-widest">
                       <ArrowLeftRight size={16} /> Transfer
                     </button>
-                    <button onClick={() => setShowHistory(!showHistory)} className="px-5 py-2.5 bg-white border border-slate-200 rounded-2xl text-slate-600 hover:bg-slate-50 transition-all shadow-sm flex items-center gap-2 font-black text-[11px] uppercase tracking-widest">
+                    <button onClick={() => setShowHistory(!showHistory)} className="flex-1 md:flex-none px-4 sm:px-5 py-2.5 bg-white border border-slate-200 rounded-2xl text-slate-600 hover:bg-slate-50 transition-all shadow-sm flex items-center justify-center gap-2 font-black text-[10px] sm:text-[11px] uppercase tracking-widest">
                       <History size={16} /> History
                     </button>
                     <button 
@@ -776,7 +875,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                         if (nextIdx < filteredLeads.length) setSelectedLeadIndex(nextIdx);
                         else setSelectedLeadIndex(null);
                       }}
-                      className="px-5 py-2.5 bg-blue-600 text-white rounded-2xl shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all flex items-center gap-2 font-black text-[11px] uppercase tracking-widest"
+                      className="flex-1 md:flex-none px-4 sm:px-5 py-2.5 bg-blue-600 text-white rounded-2xl shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all flex items-center justify-center gap-2 font-black text-[10px] sm:text-[11px] uppercase tracking-widest"
                     >
                       Next <ChevronRight size={16} />
                     </button>
@@ -898,7 +997,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                 </div>
               </motion.div>
             ) : (
-              <div className="flex-1 bg-white rounded-3xl border border-dashed border-gray-200 py-32 flex flex-col items-center justify-center text-center px-8">
+              <div className="flex-1 bg-white rounded-3xl border border-dashed border-gray-200 py-16 sm:py-32 flex flex-col items-center justify-center text-center px-6 sm:px-8">
                 <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center text-blue-600 mb-4 animate-pulse">
                   <UserIcon size={40} />
                 </div>
@@ -929,11 +1028,12 @@ export default function EmployeeDashboard({ user }: { user: User }) {
               </div>
               <div className="p-6 space-y-4">
                 <div className="relative">
-                  <textarea
+                  <input
+                    type="text"
                     placeholder="Search employee by name..."
                     value={transferSearch}
                     onChange={e => setTransferSearch(e.target.value)}
-                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition-all h-12"
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition-all h-12 text-sm"
                   />
                 </div>
                 <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
@@ -1190,33 +1290,35 @@ export default function EmployeeDashboard({ user }: { user: User }) {
         )}
 
         {showReqModal && (
-          <div className="fixed inset-0 z-[110] bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[110] bg-black/70 backdrop-blur-md flex items-center justify-center p-5 sm:p-4">
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="w-full max-w-xl bg-white rounded-[48px] overflow-hidden shadow-2xl flex flex-col"
+              className="w-full max-w-xl bg-white rounded-[36px] sm:rounded-[48px] overflow-hidden shadow-2xl flex flex-col max-h-[88vh]"
             >
               <form onSubmit={handleSaveRequirement}>
-                <div className="p-10 border-b border-slate-100 bg-blue-50/50">
+                <div className="p-5 sm:p-10 border-b border-slate-100 bg-blue-50/50">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
-                      <div className="w-14 h-14 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-xl shadow-blue-100">
-                        <PlusCircle size={32} />
+                      <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-xl shadow-blue-100">
+                        <PlusCircle size={22} className="sm:hidden" />
+                        <PlusCircle size={32} className="hidden sm:block" />
                       </div>
                       <div>
-                        <h3 className="text-2xl font-black text-slate-900 tracking-tight">Add Requirement</h3>
-                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mt-1">Log a new client inquiry</p>
+                        <h3 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Add Requirement</h3>
+                        <p className="text-slate-400 font-bold text-[10px] sm:text-xs uppercase tracking-widest mt-1">Log a new client inquiry</p>
                       </div>
                     </div>
-                    <button type="button" onClick={() => setShowReqModal(false)} className="w-12 h-12 rounded-full bg-white text-slate-400 hover:text-rose-500 transition-all flex items-center justify-center shadow-sm">
-                      <XSquare size={24} />
+                    <button type="button" onClick={() => setShowReqModal(false)} className="w-9 h-9 sm:w-12 sm:h-12 rounded-full bg-white border border-slate-200 text-slate-400 hover:text-rose-500 hover:border-rose-200 transition-all flex items-center justify-center shadow-sm shrink-0">
+                      <X size={16} className="sm:hidden" />
+                      <X size={22} className="hidden sm:block" />
                     </button>
                   </div>
                 </div>
 
-                <div className="p-10 space-y-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
-                  <div className="grid grid-cols-2 gap-6">
+                <div className="p-5 sm:p-10 space-y-5 sm:space-y-6 max-h-[56vh] sm:max-h-[60vh] overflow-y-auto custom-scrollbar">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                     <div className="space-y-2">
                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Client Name *</label>
                       <input 
@@ -1224,7 +1326,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                         value={reqForm.name}
                         onChange={e => setReqForm({...reqForm, name: e.target.value})}
                         className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                        placeholder="Enter name"
+                        placeholder="Enter client name"
                       />
                     </div>
                     <div className="space-y-2">
@@ -1234,7 +1336,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                         value={reqForm.phone}
                         onChange={e => setReqForm({...reqForm, phone: e.target.value})}
                         className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                        placeholder="10-digit number"
+                        placeholder="10-digit mobile number"
                       />
                     </div>
                     <div className="space-y-2">
@@ -1256,7 +1358,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                         value={reqForm.budget}
                         onChange={e => setReqForm({...reqForm, budget: e.target.value})}
                         className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                        placeholder="Budget range"
+                        placeholder="Enter budget"
                       />
                     </div>
                     <div className="space-y-2">
@@ -1265,7 +1367,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                         value={reqForm.area}
                         onChange={e => setReqForm({...reqForm, area: e.target.value})}
                         className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                        placeholder="Area size"
+                        placeholder="Enter area"
                       />
                     </div>
                     <div className="space-y-2">
@@ -1274,7 +1376,7 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                         value={reqForm.location}
                         onChange={e => setReqForm({...reqForm, location: e.target.value})}
                         className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                        placeholder="Preferred area"
+                        placeholder="Preferred location"
                       />
                     </div>
                   </div>
@@ -1290,18 +1392,18 @@ export default function EmployeeDashboard({ user }: { user: User }) {
                   </div>
                 </div>
 
-                <div className="p-10 bg-slate-50 border-t border-slate-100 flex gap-4">
+                <div className="p-5 sm:p-10 pb-6 sm:pb-10 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row gap-3 sm:gap-4">
                   <button 
                     type="button" 
                     onClick={() => setShowReqModal(false)}
-                    className="flex-1 py-5 font-black text-xs uppercase tracking-widest text-slate-400 bg-white rounded-3xl border border-slate-200 hover:bg-slate-100 transition-all"
+                    className="flex-1 py-4 sm:py-5 font-black text-xs uppercase tracking-widest text-slate-400 bg-white rounded-3xl border border-slate-200 hover:bg-slate-100 transition-all"
                   >
                     Cancel
                   </button>
                   <button 
                     type="submit"
                     disabled={loading}
-                    className="flex-[2] py-5 bg-blue-600 text-white font-black text-xs uppercase tracking-widest rounded-3xl shadow-2xl shadow-blue-200 hover:bg-blue-700 transition-all active:scale-95 disabled:opacity-50"
+                    className="flex-[2] py-4 sm:py-5 bg-blue-600 text-white font-black text-xs uppercase tracking-widest rounded-3xl shadow-2xl shadow-blue-200 hover:bg-blue-700 transition-all active:scale-95 disabled:opacity-50"
                   >
                     {loading ? 'Adding...' : 'Save Requirement'}
                   </button>

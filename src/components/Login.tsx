@@ -3,7 +3,7 @@ import { auth, db } from '../lib/firebase';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { User } from '../types';
-import { LogIn, Building2, Phone, Lock } from 'lucide-react';
+import { LogIn, Building2, Phone, Lock, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface LoginProps {
@@ -13,6 +13,7 @@ interface LoginProps {
 export default function Login({ onLoginSuccess }: LoginProps) {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -109,16 +110,27 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                 <Lock className="w-4 h-4 text-gray-400" />
                 Password
               </label>
-              <input
-                type="password"
-                name="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all text-gray-900"
-                placeholder="Enter password"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  name="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  className="w-full px-4 pr-12 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all text-gray-900"
+                  placeholder="Enter password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute inset-y-0 right-0 px-3 text-gray-400 hover:text-gray-600 transition-colors"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
+              </div>
             </div>
             <p className="text-xs text-gray-500">
               New employee accounts start with password equal to mobile number. Change it after login from Profile.

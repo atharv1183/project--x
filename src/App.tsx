@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
@@ -18,7 +18,21 @@ import { motion, AnimatePresence } from 'motion/react';
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile'>('dashboard');
+  const [dashboardBackSignal, setDashboardBackSignal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loginToastName, setLoginToastName] = useState<string | null>(null);
+  const loginToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showLoginToast = (name: string) => {
+    setLoginToastName(name);
+    if (loginToastTimerRef.current) {
+      clearTimeout(loginToastTimerRef.current);
+    }
+    loginToastTimerRef.current = setTimeout(() => {
+      setLoginToastName(null);
+      loginToastTimerRef.current = null;
+    }, 4500);
+  };
 
   useEffect(() => {
     let unsubscribe = () => {};
@@ -59,6 +73,14 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (loginToastTimerRef.current) {
+        clearTimeout(loginToastTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleLogout = async () => {
     await signOut(auth);
     setUser(null);
@@ -70,8 +92,8 @@ export default function App() {
       setActiveScreen('dashboard');
       return;
     }
-    if (window.history.length > 1) {
-      window.history.back();
+    if (activeScreen === 'dashboard') {
+      setDashboardBackSignal((prev) => prev + 1);
     }
   };
 
@@ -84,7 +106,14 @@ export default function App() {
   }
 
   if (!user) {
-    return <Login onLoginSuccess={(u) => setUser(u)} />;
+    return (
+      <Login
+        onLoginSuccess={(u) => {
+          setUser(u);
+          showLoginToast(u.name);
+        }}
+      />
+    );
   }
 
   return (
@@ -140,13 +169,35 @@ export default function App() {
             {activeScreen === 'profile' ? (
               <ProfilePage user={user} onClose={() => setActiveScreen('dashboard')} />
             ) : user.role === 'admin' ? (
-              <AdminDashboard user={user} />
+              <AdminDashboard user={user} backSignal={dashboardBackSignal} />
             ) : (
-              <EmployeeDashboard user={user} />
+              <EmployeeDashboard user={user} backSignal={dashboardBackSignal} />
             )}
           </motion.div>
         </AnimatePresence>
       </main>
+
+      <AnimatePresence>
+        {loginToastName && (
+          <motion.div
+            initial={{ opacity: 0, y: -16, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -12, scale: 0.96 }}
+            transition={{ duration: 0.2 }}
+            className="fixed top-20 right-4 z-[120] w-[300px] max-w-[calc(100vw-2rem)] rounded-2xl bg-white/95 border border-gray-200 shadow-2xl px-4 py-3 backdrop-blur"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                {loginToastName.charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-gray-900 truncate">{loginToastName}</p>
+                <p className="text-xs text-gray-500">Logged in</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
