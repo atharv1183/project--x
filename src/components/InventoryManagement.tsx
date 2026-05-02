@@ -20,6 +20,7 @@ import {
   HouseType, 
   InventoryStatus, 
   ListingMode,
+  InventoryVisibility,
   ProjectUnit,
   User, 
   OperationType 
@@ -289,6 +290,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [formData, setFormData] = useState({
     title: '',
+    visibilityScope: 'internal' as InventoryVisibility,
     listingMode: 'single' as ListingMode,
     type: 'house' as InventoryType,
     areaValue: '' as string | number,
@@ -380,6 +382,27 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       };
     }
   }, [isAdmin, user.uid]);
+
+  useEffect(() => {
+    if (!isAdmin || items.length === 0) return;
+    const missingVisibility = items.filter((item) => !item.visibilityScope);
+    if (missingVisibility.length === 0) return;
+
+    const migrateVisibilityScope = async () => {
+      for (const item of missingVisibility) {
+        try {
+          await updateDoc(doc(db, 'inventory', item.id), {
+            visibilityScope: 'internal',
+            updatedAt: serverTimestamp(),
+          });
+        } catch (error) {
+          handleFirestoreError(error, OperationType.UPDATE, `inventory/${item.id}`);
+        }
+      }
+    };
+
+    void migrateVisibilityScope();
+  }, [isAdmin, items]);
 
   const handleAreaChange = (val: string) => {
     setFormData(prev => ({ ...prev, areaValue: val }));
@@ -520,6 +543,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
       const payload: Partial<InventoryItem> = {
         title: formData.title,
+        visibilityScope: formData.visibilityScope,
         listingMode: isProjectListing ? 'project' : 'single',
         isProject: isProjectListing,
         location: formData.location,
@@ -657,6 +681,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       setEditingItem(null);
       setFormData({
         title: '',
+        visibilityScope: 'internal',
         listingMode: 'single',
         type: 'house',
         areaValue: '',
@@ -751,6 +776,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     setEditingItem(item);
     setFormData({
       title: item.title,
+      visibilityScope: item.visibilityScope || 'internal',
       listingMode: inferredListingMode,
       type: item.type,
       areaValue: area?.value ?? '',
@@ -956,6 +982,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
               setEditingItem(null);
               setFormData({
                 title: '',
+                visibilityScope: 'internal',
                 listingMode: 'single',
                 type: 'house',
                 areaValue: '',
@@ -1360,6 +1387,18 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                               >
                                 <option value="single">Single Property</option>
                                 <option value="project">Project (Multiple Units)</option>
+                              </select>
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Visibility</label>
+                              <select
+                                value={formData.visibilityScope}
+                                onChange={e => setFormData({ ...formData, visibilityScope: e.target.value as InventoryVisibility })}
+                                className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700 transition-all"
+                              >
+                                <option value="internal">Internal</option>
+                                <option value="all">All</option>
                               </select>
                             </div>
 

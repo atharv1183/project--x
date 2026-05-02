@@ -13,6 +13,7 @@ import AdminDashboard from './components/AdminDashboard';
 import EmployeeDashboard from './components/EmployeeDashboard';
 import ProfilePage from './components/ProfilePage';
 import ToolsPage, { ToolTarget } from './components/ToolsPage';
+import PublicHeroPage from './components/PublicHeroPage';
 import { LogOut, Home, ArrowLeft, UserCircle2, Wrench } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -27,6 +28,8 @@ const isEmployeeView = (view: DashboardTarget): view is EmployeeDashboardView =>
   view === 'pending' || view === 'today' || view === 'upcoming' || view === 'requirements' || view === 'inventory';
 
 export default function App() {
+  const pathname = window.location.pathname.toLowerCase();
+  const isPublicHeroRoute = pathname === '/' || pathname === '/hero' || pathname === '/website';
   const [user, setUser] = useState<User | null>(null);
   const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile' | 'tools'>('dashboard');
   const [dashboardBackSignal, setDashboardBackSignal] = useState(0);
@@ -49,6 +52,11 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (isPublicHeroRoute) {
+      setLoading(false);
+      return;
+    }
+
     let unsubscribe = () => {};
 
     const initAuth = async () => {
@@ -85,7 +93,7 @@ export default function App() {
     void initAuth();
 
     return () => unsubscribe();
-  }, []);
+  }, [isPublicHeroRoute]);
 
   useEffect(() => {
     return () => {
@@ -111,6 +119,10 @@ export default function App() {
       setDashboardBackSignal((prev) => prev + 1);
     }
   };
+
+  if (isPublicHeroRoute) {
+    return <PublicHeroPage />;
+  }
 
   if (loading) {
     return (

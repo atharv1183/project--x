@@ -87,6 +87,7 @@ export type InventoryType = 'zameen' | 'house' | 'others' | 'plot';
 export type HouseType = 'simplex' | 'semi-duplex' | 'duplex';
 export type InventoryStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
 export type ListingMode = 'single' | 'project';
+export type InventoryVisibility = 'internal' | 'all';
 
 export interface ProjectUnit {
   id: string;
@@ -112,6 +113,7 @@ export interface ProjectUnit {
 export interface InventoryItem {
   id: string;
   title: string;
+  visibilityScope?: InventoryVisibility;
   listingMode?: ListingMode;
   isProject?: boolean;
   projectUnitCount?: number;
