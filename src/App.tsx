@@ -12,16 +12,30 @@ import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import EmployeeDashboard from './components/EmployeeDashboard';
 import ProfilePage from './components/ProfilePage';
-import { LogOut, Home, ArrowLeft, UserCircle2 } from 'lucide-react';
+import ToolsPage, { ToolTarget } from './components/ToolsPage';
+import { LogOut, Home, ArrowLeft, UserCircle2, Wrench } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+
+type AdminDashboardView = 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory';
+type EmployeeDashboardView = 'pending' | 'today' | 'upcoming' | 'requirements' | 'inventory';
+type DashboardTarget = ToolTarget | null;
+
+const isAdminView = (view: DashboardTarget): view is AdminDashboardView =>
+  view === 'leads' || view === 'employees' || view === 'attendance' || view === 'requirements' || view === 'inventory';
+
+const isEmployeeView = (view: DashboardTarget): view is EmployeeDashboardView =>
+  view === 'pending' || view === 'today' || view === 'upcoming' || view === 'requirements' || view === 'inventory';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile'>('dashboard');
+  const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile' | 'tools'>('dashboard');
   const [dashboardBackSignal, setDashboardBackSignal] = useState(0);
+  const [dashboardTarget, setDashboardTarget] = useState<DashboardTarget>(null);
+  const [dashboardTargetSignal, setDashboardTargetSignal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loginToastName, setLoginToastName] = useState<string | null>(null);
   const loginToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isAdminLikeUser = user?.role === 'admin' || user?.role === 'manager';
 
   const showLoginToast = (name: string) => {
     setLoginToastName(name);
@@ -85,10 +99,11 @@ export default function App() {
     await signOut(auth);
     setUser(null);
     setActiveScreen('dashboard');
+    setDashboardTarget(null);
   };
 
   const handleBack = () => {
-    if (activeScreen === 'profile') {
+    if (activeScreen === 'profile' || activeScreen === 'tools') {
       setActiveScreen('dashboard');
       return;
     }
@@ -134,6 +149,13 @@ export default function App() {
             <p className="text-xs text-gray-500">{user.phone}</p>
           </div>
           <button
+            onClick={() => setActiveScreen('tools')}
+            className="p-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
+            title="Tools"
+          >
+            <Wrench className="w-5 h-5" />
+          </button>
+          <button
             onClick={() => setActiveScreen('profile')}
             className="p-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
             title="Profile"
@@ -168,10 +190,31 @@ export default function App() {
           >
             {activeScreen === 'profile' ? (
               <ProfilePage user={user} onClose={() => setActiveScreen('dashboard')} />
-            ) : user.role === 'admin' ? (
-              <AdminDashboard user={user} backSignal={dashboardBackSignal} />
+            ) : activeScreen === 'tools' ? (
+              <ToolsPage
+                user={user}
+                onSelectTool={(tool) => {
+                  const resolvedTool =
+                    !isAdminLikeUser && tool === 'attendance' ? 'today' : tool;
+                  setDashboardTarget(resolvedTool);
+                  setDashboardTargetSignal((prev) => prev + 1);
+                  setActiveScreen('dashboard');
+                }}
+              />
+            ) : isAdminLikeUser ? (
+              <AdminDashboard
+                user={user}
+                backSignal={dashboardBackSignal}
+                initialView={isAdminView(dashboardTarget) ? dashboardTarget : undefined}
+                initialViewSignal={dashboardTargetSignal}
+              />
             ) : (
-              <EmployeeDashboard user={user} backSignal={dashboardBackSignal} />
+              <EmployeeDashboard
+                user={user}
+                backSignal={dashboardBackSignal}
+                initialView={isEmployeeView(dashboardTarget) ? dashboardTarget : undefined}
+                initialViewSignal={dashboardTargetSignal}
+              />
             )}
           </motion.div>
         </AnimatePresence>

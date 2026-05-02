@@ -60,6 +60,15 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+type AdminView = 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory';
+
+type AdminDashboardProps = {
+  user: User;
+  backSignal?: number;
+  initialView?: AdminView;
+  initialViewSignal?: number;
+};
+
 function LeadTimeline({ leadId }: { leadId: string }) {
   const [followups, setFollowups] = useState<Followup[]>([]);
 
@@ -91,8 +100,20 @@ const formatLeadDate = (date: any) => {
   return format(d, 'MMM dd, yyyy hh:mm a');
 };
 
-export default function AdminDashboard({ user, backSignal = 0 }: { user: User; backSignal?: number }) {
-  const [activeView, setActiveView] = useState<'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory'>('leads');
+const getAddedByRoleLabel = (role?: Lead['addedByRole']) => {
+  if (role === 'admin') return 'Admin';
+  if (role === 'manager') return 'Manager';
+  return 'Legacy';
+};
+
+export default function AdminDashboard({
+  user,
+  backSignal = 0,
+  initialView,
+  initialViewSignal = 0,
+}: AdminDashboardProps) {
+  const isSuperAdmin = user.role === 'admin';
+  const [activeView, setActiveView] = useState<AdminView>(initialView ?? 'leads');
   const [employees, setEmployees] = useState<User[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
@@ -103,7 +124,12 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
   const [leadForm, setLeadForm] = useState({ name: '', phone: '', source: '' });
   const [leadAllocationMode, setLeadAllocationMode] = useState<'auto' | 'manual'>('auto');
   const [manualLeadAssigneeId, setManualLeadAssigneeId] = useState('');
-  const [employeeForm, setEmployeeForm] = useState({ name: '', phone: '' });
+  const [employeeForm, setEmployeeForm] = useState({
+    name: '',
+    phone: '',
+    role: 'employee' as 'employee' | 'manager',
+    managerId: '',
+  });
   const [loading, setLoading] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferSearch, setTransferSearch] = useState('');
@@ -128,6 +154,8 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
   const [dataToolsBusy, setDataToolsBusy] = useState<string | null>(null);
 
   const normalizePhone = (value: string) => value.replace(/\D/g, '');
+  const managers = employees.filter((member) => member.role === 'manager');
+  const activeEmployees = employees.filter((member) => member.role === 'employee');
   const showSaveToast = (title: string, description: string) => {
     setSaveToast({ title, description });
     if (saveToastTimerRef.current) {
@@ -535,7 +563,7 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
       setSelectedLead((prev) => (prev ? ({ ...prev, ...localUpdateData } as Lead) : prev));
 
       let successMessage = 'Interaction recorded successfully.';
-      if (status === 'interested' || status === 'interest') {
+      if (status === 'interested') {
         successMessage = 'Interested successfully.';
       } else if (status === 'not_interested') {
         successMessage = 'Declined successfully.';
@@ -550,7 +578,7 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
   };
 
   useEffect(() => {
-    const qEmployees = query(collection(db, 'users'), where('role', 'in', ['employee', 'suspended', 'deleted']));
+    const qEmployees = query(collection(db, 'users'), where('role', 'in', ['employee', 'manager', 'suspended', 'deleted']));
     const unsubscribeEmployees = onSnapshot(qEmployees, (snapshot) => {
       setEmployees(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as User)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
@@ -630,6 +658,11 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
   }, [backSignal]);
 
   useEffect(() => {
+    if (!initialView) return;
+    setActiveView(initialView);
+  }, [initialView, initialViewSignal]);
+
+  useEffect(() => {
     const el = tabsScrollRef.current;
     if (!el) return;
 
@@ -686,18 +719,24 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
 
     setLoading(true);
     try {
+      const selectedManager = employees.find((member) => member.uid === showEditEmployee.managerId && member.role === 'manager');
+      const isEmployeeRole = showEditEmployee.role === 'employee';
       await updateDoc(doc(db, 'users', showEditEmployee.uid), {
         name: showEditEmployee.name,
         phone: showEditEmployee.phone,
         role: showEditEmployee.role, // Allow restoring deleted
+        managerId: isEmployeeRole ? (selectedManager?.uid || null) : null,
+        managerName: isEmployeeRole ? (selectedManager?.name || null) : null,
         updatedAt: serverTimestamp(),
       });
 
-      if (showEditEmployee.role === 'employee') {
+      if (isEmployeeRole) {
         await setDoc(doc(db, 'employeeDirectory', showEditEmployee.uid), {
           name: showEditEmployee.name,
           phone: showEditEmployee.phone,
           role: 'employee',
+          managerId: selectedManager?.uid || null,
+          managerName: selectedManager?.name || null,
           updatedAt: serverTimestamp(),
         });
       } else {
@@ -794,7 +833,7 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
           assignedTo: assignedEmployee.uid,
           addedById: user.uid,
           addedByName: user.name,
-          addedByRole: 'admin',
+          addedByRole: user.role === 'manager' ? 'manager' : 'admin',
           assignedAt: serverTimestamp(),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -820,7 +859,7 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
             assignedTo: assignedEmployee.uid,
             addedById: user.uid,
             addedByName: user.name,
-            addedByRole: 'admin',
+            addedByRole: user.role === 'manager' ? 'manager' : 'admin',
             assignedAt: serverTimestamp(),
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -848,15 +887,25 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
     e.preventDefault();
     const name = employeeForm.name.trim();
     const normalizedPhone = normalizePhone(employeeForm.phone);
+    const memberRole = employeeForm.role;
+    const selectedManager = managers.find((member) => member.uid === employeeForm.managerId);
     const email = `${normalizedPhone}@estatepulse.com`;
     const initialPassword = normalizedPhone;
 
     if (!name) {
-      alert('Employee name is required.');
+      alert('Member name is required.');
       return;
     }
     if (normalizedPhone.length < 10 || normalizedPhone.length > 15) {
       alert('Enter a valid mobile number (10 to 15 digits).');
+      return;
+    }
+    if (memberRole === 'manager' && !isSuperAdmin) {
+      alert('Only admin can add managers.');
+      return;
+    }
+    if (memberRole === 'employee' && managers.length > 0 && !selectedManager) {
+      alert('Please assign a manager for this employee.');
       return;
     }
 
@@ -875,21 +924,27 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
       batch.set(doc(db, 'users', userCredential.user.uid), {
         name,
         email,
-        role: 'employee',
+        role: memberRole,
         phone: normalizedPhone,
+        managerId: memberRole === 'employee' ? (selectedManager?.uid || null) : null,
+        managerName: memberRole === 'employee' ? (selectedManager?.name || null) : null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      batch.set(doc(db, 'employeeDirectory', userCredential.user.uid), {
-        name,
-        phone: normalizedPhone,
-        role: 'employee',
-        updatedAt: serverTimestamp(),
-      });
+      if (memberRole === 'employee') {
+        batch.set(doc(db, 'employeeDirectory', userCredential.user.uid), {
+          name,
+          phone: normalizedPhone,
+          role: 'employee',
+          managerId: selectedManager?.uid || null,
+          managerName: selectedManager?.name || null,
+          updatedAt: serverTimestamp(),
+        });
+      }
       await batch.commit();
 
-      showSaveToast(`${name} added successfully`, 'New member added');
-      setEmployeeForm({ name: '', phone: '' });
+      showSaveToast(`${name} added successfully`, `${memberRole === 'manager' ? 'Manager' : 'Employee'} account created`);
+      setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: '' });
       setShowAddEmployee(false);
     } catch (error) {
       if (provisionedUser) {
@@ -898,7 +953,7 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
       handleFirestoreError(error, OperationType.CREATE, 'users');
       const code = typeof error === 'object' && error && 'code' in error ? String((error as any).code) : '';
       if (code === 'auth/email-already-in-use') {
-        alert('An employee account with this mobile number already exists.');
+        alert('A member account with this mobile number already exists.');
       } else if (code === 'auth/weak-password') {
         alert('Unable to set initial password. Please use a valid mobile number.');
       } else if (error instanceof Error) {
@@ -1035,101 +1090,6 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
         </button>
       </div>
 
-      <div className="bg-white border border-gray-100 rounded-2xl p-4 sm:p-5 shadow-sm">
-        <div className="flex items-center gap-2 mb-4">
-          <Database size={18} className="text-blue-600" />
-          <h3 className="text-sm font-black text-gray-900 uppercase tracking-wider">Admin Data Tools</h3>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-gray-100 p-4 space-y-3">
-            <p className="text-xs font-black uppercase tracking-widest text-gray-500">Leads Database</p>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={Boolean(dataToolsBusy)}
-                onClick={exportLeadsData}
-                className="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-xs font-black uppercase tracking-wider hover:bg-blue-100 transition-colors disabled:opacity-40"
-              >
-                <span className="inline-flex items-center gap-1.5"><Download size={14} /> Export</span>
-              </button>
-              <button
-                type="button"
-                disabled={Boolean(dataToolsBusy)}
-                onClick={() => leadsImportInputRef.current?.click()}
-                className="px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-black uppercase tracking-wider hover:bg-emerald-100 transition-colors disabled:opacity-40"
-              >
-                <span className="inline-flex items-center gap-1.5"><Upload size={14} /> Import</span>
-              </button>
-              <button
-                type="button"
-                disabled={Boolean(dataToolsBusy)}
-                onClick={clearEntireLeads}
-                className="px-3 py-2 rounded-lg bg-rose-50 text-rose-700 text-xs font-black uppercase tracking-wider hover:bg-rose-100 transition-colors disabled:opacity-40"
-              >
-                <span className="inline-flex items-center gap-1.5"><Trash2 size={14} /> Clear All</span>
-              </button>
-            </div>
-            <input
-              ref={leadsImportInputRef}
-              type="file"
-              accept=".json,application/json"
-              className="hidden"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (file) await importDataFile('leads', file);
-                e.currentTarget.value = '';
-              }}
-            />
-          </div>
-
-          <div className="rounded-xl border border-gray-100 p-4 space-y-3">
-            <p className="text-xs font-black uppercase tracking-widest text-gray-500">Inventory Database</p>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={Boolean(dataToolsBusy)}
-                onClick={exportInventoryData}
-                className="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-xs font-black uppercase tracking-wider hover:bg-blue-100 transition-colors disabled:opacity-40"
-              >
-                <span className="inline-flex items-center gap-1.5"><Download size={14} /> Export</span>
-              </button>
-              <button
-                type="button"
-                disabled={Boolean(dataToolsBusy)}
-                onClick={() => inventoryImportInputRef.current?.click()}
-                className="px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-black uppercase tracking-wider hover:bg-emerald-100 transition-colors disabled:opacity-40"
-              >
-                <span className="inline-flex items-center gap-1.5"><Upload size={14} /> Import</span>
-              </button>
-              <button
-                type="button"
-                disabled={Boolean(dataToolsBusy)}
-                onClick={clearEntireInventory}
-                className="px-3 py-2 rounded-lg bg-rose-50 text-rose-700 text-xs font-black uppercase tracking-wider hover:bg-rose-100 transition-colors disabled:opacity-40"
-              >
-                <span className="inline-flex items-center gap-1.5"><Trash2 size={14} /> Clear All</span>
-              </button>
-            </div>
-            <input
-              ref={inventoryImportInputRef}
-              type="file"
-              accept=".json,application/json"
-              className="hidden"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (file) await importDataFile('inventory', file);
-                e.currentTarget.value = '';
-              }}
-            />
-          </div>
-        </div>
-        {dataToolsBusy && (
-          <p className="mt-3 text-[11px] font-bold text-blue-600 uppercase tracking-widest">
-            Processing: {dataToolsBusy.replace('_', ' ')}
-          </p>
-        )}
-      </div>
-
       {activeView === 'leads' ? (
         <>
           {/* Stats Grid */}
@@ -1241,7 +1201,7 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
                       </td>
                       <td className="px-6 py-4">
                         <span className="text-sm font-medium text-gray-600 bg-gray-100 px-2.5 py-1 rounded-lg">
-                          {lead.addedByName || (lead.addedByRole === 'admin' ? 'Admin' : 'Legacy')}
+                          {lead.addedByName || getAddedByRoleLabel(lead.addedByRole)}
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -1373,14 +1333,17 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
             <div>
               <h2 className="text-2xl font-bold text-gray-900">Team</h2>
               <p className="text-xs text-gray-500 mt-1">
-                New employees are added directly. Initial password is set to their mobile number.
+                Add managers and employees. Employee accounts can be assigned under managers.
               </p>
             </div>
             <button 
-              onClick={() => setShowAddEmployee(true)}
+              onClick={() => {
+                setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: '' });
+                setShowAddEmployee(true);
+              }}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-bold transition-all shadow-lg active:scale-95"
             >
-              <UserPlus size={20} /> Add New Member
+              <UserPlus size={20} /> Add Member
             </button>
           </div>
 
@@ -1407,6 +1370,7 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
                       "text-[10px] uppercase font-black px-2 py-0.5 rounded-md",
                       emp.role === 'deleted' ? "bg-red-100 text-red-600" : 
                       emp.role === 'suspended' ? "bg-orange-100 text-orange-600" :
+                      emp.role === 'manager' ? "bg-violet-100 text-violet-600" :
                       "bg-green-100 text-green-600"
                     )}>
                       {emp.role}
@@ -1414,6 +1378,11 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
                   </div>
                   <p className="text-sm text-gray-500 font-medium">{emp.phone}</p>
                   <p className="text-xs text-gray-400 mt-0.5">{emp.email}</p>
+                  {emp.role === 'employee' && (
+                    <p className="text-xs text-blue-600 font-semibold mt-1">
+                      Manager: {emp.managerName || 'Not assigned'}
+                    </p>
+                  )}
                   
                   <div className="flex gap-2 mt-4">
                     <button 
@@ -1430,15 +1399,7 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
                       >
                         <XCircle size={16} />
                       </button>
-                    ) : (
-                      <button 
-                        onClick={() => updateDoc(doc(db, 'users', emp.uid), { role: 'employee' })}
-                        className="py-2 px-3 bg-green-50 hover:bg-green-100 text-green-600 rounded-xl transition-colors border border-green-100"
-                        title="Restore Employee"
-                      >
-                        <CheckCircle2 size={16} />
-                      </button>
-                    )}
+                    ) : null}
                   </div>
                 </div>
               </motion.div>
@@ -1446,9 +1407,17 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
             {employees.length === 0 && (
               <div className="col-span-full py-20 text-center bg-gray-50 rounded-3xl border border-dashed border-gray-200">
                 <Users size={48} className="mx-auto text-gray-300 mb-4" />
-                <p className="text-gray-500 font-bold">No employees found.</p>
-                <p className="text-xs text-gray-400 mt-1">Add your first team member to start allocations.</p>
-                <button onClick={() => setShowAddEmployee(true)} className="text-blue-600 text-sm font-bold mt-2 hover:underline">Add employee</button>
+                <p className="text-gray-500 font-bold">No team members found.</p>
+                <p className="text-xs text-gray-400 mt-1">Add your first manager or employee to get started.</p>
+                <button
+                  onClick={() => {
+                    setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: '' });
+                    setShowAddEmployee(true);
+                  }}
+                  className="text-blue-600 text-sm font-bold mt-2 hover:underline"
+                >
+                  Add member
+                </button>
               </div>
             )}
           </div>
@@ -1701,7 +1670,7 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
                     <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
                       <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Added By</p>
                       <p className="text-lg font-bold text-gray-900">
-                        {selectedLead.addedByName || (selectedLead.addedByRole === 'admin' ? 'Admin' : 'Legacy')}
+                        {selectedLead.addedByName || getAddedByRoleLabel(selectedLead.addedByRole)}
                       </p>
                     </div>
                   </div>
@@ -1922,11 +1891,27 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
                   onChange={e => setShowEditEmployee({...showEditEmployee, role: e.target.value as any})}
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                 >
+                  <option value="manager" disabled={!isSuperAdmin}>Manager</option>
                   <option value="employee">Active Employee</option>
                   <option value="suspended">Suspended</option>
                   <option value="deleted">Deleted (Hard Removal)</option>
                 </select>
               </div>
+              {showEditEmployee.role === 'employee' && (
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">Assigned Manager</label>
+                  <select
+                    value={showEditEmployee.managerId || ''}
+                    onChange={e => setShowEditEmployee({ ...showEditEmployee, managerId: e.target.value, managerName: managers.find((m) => m.uid === e.target.value)?.name })}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="">No manager assigned</option>
+                    {managers.map((manager) => (
+                      <option key={manager.uid} value={manager.uid}>{manager.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="flex gap-3 pt-4">
                 <button type="button" onClick={() => setShowEditEmployee(null)} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
                 <button type="submit" disabled={loading} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all">
@@ -2072,11 +2057,22 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
       {showAddEmployee && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
-            <h3 className="text-2xl font-bold mb-6 text-gray-900">Add Employee</h3>
+            <h3 className="text-2xl font-bold mb-6 text-gray-900">Add Member</h3>
             <form onSubmit={handleAddEmployee} className="space-y-4">
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-1">Full Name</label>
                 <input required value={employeeForm.name} onChange={e => setEmployeeForm({...employeeForm, name: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Role</label>
+                <select
+                  value={employeeForm.role}
+                  onChange={e => setEmployeeForm({ ...employeeForm, role: e.target.value as 'employee' | 'manager', managerId: '' })}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  <option value="employee">Employee</option>
+                  {isSuperAdmin && <option value="manager">Manager</option>}
+                </select>
               </div>
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-1">Mobile Number</label>
@@ -2091,11 +2087,28 @@ export default function AdminDashboard({ user, backSignal = 0 }: { user: User; b
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>
-              <p className="text-xs text-gray-500">Employee account will be created immediately. Initial password will be the mobile number.</p>
+              {employeeForm.role === 'employee' && (
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">Assign Manager</label>
+                  <select
+                    value={employeeForm.managerId}
+                    onChange={e => setEmployeeForm({ ...employeeForm, managerId: e.target.value })}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="">No manager assigned</option>
+                    {managers.map((manager) => (
+                      <option key={manager.uid} value={manager.uid}>{manager.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <p className="text-xs text-gray-500">
+                Account will be created immediately. Initial password will be the mobile number.
+              </p>
               <div className="flex gap-3 pt-4">
                 <button type="button" onClick={() => setShowAddEmployee(false)} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
                 <button type="submit" disabled={loading} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all">
-                  {loading ? 'Adding...' : 'Add Employee'}
+                  {loading ? 'Adding...' : 'Add Member'}
                 </button>
               </div>
             </form>

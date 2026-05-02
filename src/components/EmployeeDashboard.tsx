@@ -98,6 +98,14 @@ function normalizePhone(value: string): string {
 }
 
 type LeadQueueTab = 'pending' | 'today' | 'upcoming';
+type EmployeeView = LeadQueueTab | 'requirements' | 'inventory';
+
+type EmployeeDashboardProps = {
+  user: User;
+  backSignal?: number;
+  initialView?: EmployeeView;
+  initialViewSignal?: number;
+};
 
 function getLeadQueueTab(lead: Lead): LeadQueueTab | null {
   if (lead.status === 'deal_approved' || lead.status === 'not_interested') return null;
@@ -109,8 +117,13 @@ function getLeadQueueTab(lead: Lead): LeadQueueTab | null {
   return null;
 }
 
-export default function EmployeeDashboard({ user, backSignal = 0 }: { user: User; backSignal?: number }) {
-  const [activeTab, setActiveTab] = useState<'pending' | 'today' | 'upcoming' | 'requirements' | 'inventory'>('today');
+export default function EmployeeDashboard({
+  user,
+  backSignal = 0,
+  initialView,
+  initialViewSignal = 0,
+}: EmployeeDashboardProps) {
+  const [activeTab, setActiveTab] = useState<EmployeeView>(initialView ?? 'today');
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [selectedLeadIndex, setSelectedLeadIndex] = useState<number | null>(null);
@@ -192,6 +205,12 @@ export default function EmployeeDashboard({ user, backSignal = 0 }: { user: User
       setActiveTab('today');
     }
   }, [backSignal, showAddLead, showReqModal, showNotifications, showTransferModal, showHistory, selectedLeadIndex, activeTab]);
+
+  useEffect(() => {
+    if (!initialView) return;
+    setActiveTab(initialView);
+    setSelectedLeadIndex(null);
+  }, [initialView, initialViewSignal]);
 
   useEffect(() => {
     const el = tabsScrollRef.current;

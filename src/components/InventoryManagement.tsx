@@ -19,6 +19,8 @@ import {
   InventoryType, 
   HouseType, 
   InventoryStatus, 
+  ListingMode,
+  ProjectUnit,
   User, 
   OperationType 
 } from '../types';
@@ -43,7 +45,8 @@ import {
   Clock,
   LayoutGrid,
   FileCheck,
-  FileText
+  FileText,
+  Film
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -235,12 +238,42 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 }
 
 export default function InventoryManagement({ user, onBack }: InventoryManagementProps) {
-  const isAdmin = user.role === 'admin';
+  const isAdmin = user.role === 'admin' || user.role === 'manager';
   type AreaUnit = keyof typeof AREA_CONVERSIONS;
+  type ProjectUnitDraft = ProjectUnit & {
+    newPhotos: File[];
+    areaValue: string | number;
+    rate: string | number;
+    bhk: string | number;
+    bathrooms: string | number;
+  };
+
+  const createProjectUnitDraft = (): ProjectUnitDraft => ({
+    id: `unit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    title: '',
+    type: 'house',
+    subType: 'new',
+    areaValue: '',
+    areaUnit: 'sqft',
+    areaAcre: 0,
+    areaSqft: 0,
+    areaSqYard: 0,
+    areaSqMtr: 0,
+    areaHectare: 0,
+    rate: '',
+    rateUnit: 'total',
+    houseType: 'simplex',
+    bhk: '',
+    bathrooms: '',
+    kitchenType: '',
+    photos: [],
+    newPhotos: [],
+  });
+
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'draft'>('all');
+  const [filter, setFilter] = useState<'all' | 'approved' | 'non_approved' | 'pending' | 'draft'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState({
     state: '',
@@ -256,10 +289,12 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [formData, setFormData] = useState({
     title: '',
-    type: 'zameen' as InventoryType,
+    listingMode: 'single' as ListingMode,
+    type: 'house' as InventoryType,
     areaValue: '' as string | number,
     areaUnit: 'sqft' as AreaUnit,
-    subType: 'agricultural',
+    subType: 'new',
+    approvalStatus: 'non_approved' as 'approved' | 'non_approved',
     rate: '' as string | number,
     rateUnit: 'total',
     location: '',
@@ -271,6 +306,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     kitchenType: '',
     features: [] as string[],
     newFeature: '',
+    projectUnits: [createProjectUnitDraft()] as ProjectUnitDraft[],
     latitude: 20.5937 as number, // Default India center
     longitude: 78.9629 as number
   });
@@ -281,8 +317,9 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   const cloudinaryUploadPreset = String(import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || '').trim();
   const hasCloudinaryConfig = cloudinaryCloudName.length > 0 && cloudinaryUploadPreset.length > 0;
 
-  const [files, setFiles] = useState<{ photos: File[], attachments: File[] }>({
+  const [files, setFiles] = useState<{ photos: File[], videos: File[], attachments: File[] }>({
     photos: [],
+    videos: [],
     attachments: []
   });
 
@@ -348,6 +385,32 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     setFormData(prev => ({ ...prev, areaValue: val }));
   };
 
+  const updateProjectUnit = (unitId: string, patch: Partial<ProjectUnitDraft>) => {
+    setFormData((prev) => ({
+      ...prev,
+      projectUnits: prev.projectUnits.map((unit) =>
+        unit.id === unitId ? { ...unit, ...patch } : unit
+      ),
+    }));
+  };
+
+  const addProjectUnit = () => {
+    setFormData((prev) => ({
+      ...prev,
+      projectUnits: [...prev.projectUnits, createProjectUnitDraft()],
+    }));
+  };
+
+  const removeProjectUnit = (unitId: string) => {
+    setFormData((prev) => {
+      if (prev.projectUnits.length <= 1) return prev;
+      return {
+        ...prev,
+        projectUnits: prev.projectUnits.filter((unit) => unit.id !== unitId),
+      };
+    });
+  };
+
   const handleFileUpload = async (file: File, path: string, timeoutMs: number = 12000) => {
     if (!hasCloudinaryConfig) {
       throw new Error('Cloudinary is not configured. Add VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET.');
@@ -384,43 +447,61 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
   const handleSubmit = async (e: FormEvent, isDraftSubmission: boolean = false) => {
     if (e) e.preventDefault();
-    if (!formData.title || !formData.areaValue || !formData.rate || !formData.location) {
+    const isProjectListing = formData.listingMode === 'project';
+
+    if (!formData.title || !formData.location) {
       alert('Please fill all mandatory fields');
       return;
     }
 
-    if (!editingItem && files.photos.length === 0) {
+    if (!isProjectListing && (!formData.areaValue || !formData.rate)) {
+      alert('Please fill all mandatory fields');
+      return;
+    }
+
+    if (!isProjectListing && !editingItem && files.photos.length === 0) {
       alert('At least one property photo is required');
       return;
     }
 
-    if ((files.photos.length > 0 || files.attachments.length > 0) && !hasCloudinaryConfig) {
+    if (isProjectListing) {
+      if (formData.projectUnits.length === 0) {
+        alert('Please add at least one project unit');
+        return;
+      }
+      for (let i = 0; i < formData.projectUnits.length; i += 1) {
+        const unit = formData.projectUnits[i];
+        if (!unit.title || !unit.areaValue || !unit.rate) {
+          alert(`Please complete title, area and rate for unit ${i + 1}`);
+          return;
+        }
+        if (!editingItem && unit.photos.length === 0 && unit.newPhotos.length === 0) {
+          alert(`At least one photo is required for unit ${i + 1}`);
+          return;
+        }
+      }
+    }
+
+    const hasProjectUnitUploads = formData.projectUnits.some((unit) => unit.newPhotos.length > 0);
+    const hasSinglePhotoUploads = !isProjectListing && files.photos.length > 0;
+    const hasVideoUploads = files.videos.length > 0;
+    if ((hasSinglePhotoUploads || files.attachments.length > 0 || hasProjectUnitUploads || hasVideoUploads) && !hasCloudinaryConfig) {
       alert('Cloudinary is not configured. Please set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET in .env.local.');
       return;
     }
 
     setLoading(true);
     try {
-      // 1. Convert Area
-      const converted = convertArea(Number(formData.areaValue), formData.areaUnit);
-      
-      // 2. Upload files (best effort). If uploads fail due CORS/network,
-      // keep saving the listing metadata instead of blocking the whole flow.
       const uploadWarnings: string[] = [];
-      const photoUrls = editingItem ? [...editingItem.photos] : [];
-      for (const file of files.photos) {
+      const videoUrls = editingItem ? [...(editingItem.videos || [])] : [];
+      for (const file of files.videos) {
         try {
-          const url = await handleFileUpload(file, 'photos');
-          photoUrls.push(url);
+          const url = await handleFileUpload(file, 'videos');
+          videoUrls.push(url);
         } catch (uploadError) {
-          console.error('Photo upload failed:', uploadError);
-          uploadWarnings.push(`Photo upload failed: ${file.name}`);
+          console.error('Video upload failed:', uploadError);
+          uploadWarnings.push(`Video upload failed: ${file.name}`);
         }
-      }
-
-      if (!editingItem && photoUrls.length === 0) {
-        alert('Could not upload required property photo. Please retry.');
-        return;
       }
 
       const attachmentData = editingItem ? [...editingItem.attachments] : [];
@@ -434,47 +515,138 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         }
       }
 
+      const selectedListingStatus: InventoryStatus =
+        formData.approvalStatus === 'approved' ? 'approved' : 'pending_approval';
+
       const payload: Partial<InventoryItem> = {
         title: formData.title,
-        type: formData.type,
-        subType: formData.subType,
-        areaValue: Number(formData.areaValue),
-        areaUnit: formData.areaUnit,
-        areaAcre: converted.acre,
-        areaSqft: converted.sqft,
-        areaSqYard: converted.sqyard,
-        areaSqMtr: converted.sqmtr,
-        areaHectare: converted.hectare,
-        rate: Number(formData.rate),
-        rateUnit: formData.rateUnit,
+        listingMode: isProjectListing ? 'project' : 'single',
+        isProject: isProjectListing,
         location: formData.location,
         nearbyLocation: formData.nearbyLocation,
         landmark: formData.landmark,
         latitude: formData.latitude,
         longitude: formData.longitude,
-        photos: photoUrls,
+        videos: videoUrls,
         attachments: attachmentData,
         updatedAt: serverTimestamp(),
       };
 
-      if (formData.type === 'house') {
-        payload.houseType = formData.houseType;
-        payload.bhk = Number(formData.bhk);
-        payload.bathrooms = Number(formData.bathrooms);
-        payload.kitchenType = formData.kitchenType;
-        payload.features = formData.features;
+      if (isProjectListing) {
+        const projectUnitsPayload: ProjectUnit[] = [];
+        for (let i = 0; i < formData.projectUnits.length; i += 1) {
+          const unit = formData.projectUnits[i];
+          const unitPhotoUrls = [...unit.photos];
+          for (const file of unit.newPhotos) {
+            try {
+              const url = await handleFileUpload(file, `project-units/unit-${i + 1}`);
+              unitPhotoUrls.push(url);
+            } catch (uploadError) {
+              console.error('Project unit photo upload failed:', uploadError);
+              uploadWarnings.push(`Unit ${i + 1} photo upload failed: ${file.name}`);
+            }
+          }
+
+          if (unitPhotoUrls.length === 0) {
+            alert(`Could not upload required photos for unit ${i + 1}. Please retry.`);
+            return;
+          }
+
+          const convertedUnit = convertArea(Number(unit.areaValue), unit.areaUnit as AreaUnit);
+          const unitPayload: ProjectUnit = {
+            id: unit.id,
+            title: unit.title,
+            type: unit.type,
+            subType: unit.subType,
+            areaValue: Number(unit.areaValue),
+            areaUnit: unit.areaUnit,
+            areaAcre: convertedUnit.acre,
+            areaSqft: convertedUnit.sqft,
+            areaSqYard: convertedUnit.sqyard,
+            areaSqMtr: convertedUnit.sqmtr,
+            areaHectare: convertedUnit.hectare,
+            rate: Number(unit.rate),
+            rateUnit: unit.rateUnit || 'total',
+            photos: unitPhotoUrls,
+          };
+
+          if (unit.type === 'house') {
+            unitPayload.houseType = unit.houseType;
+            unitPayload.bhk = Number(unit.bhk);
+            unitPayload.bathrooms = Number(unit.bathrooms);
+            unitPayload.kitchenType = unit.kitchenType;
+          }
+
+          projectUnitsPayload.push(unitPayload);
+        }
+
+        const firstUnit = projectUnitsPayload[0];
+        payload.projectUnits = projectUnitsPayload;
+        payload.projectUnitCount = projectUnitsPayload.length;
+        payload.type = firstUnit.type;
+        payload.subType = firstUnit.subType;
+        payload.areaValue = firstUnit.areaValue;
+        payload.areaUnit = firstUnit.areaUnit;
+        payload.areaAcre = firstUnit.areaAcre;
+        payload.areaSqft = firstUnit.areaSqft;
+        payload.areaSqYard = firstUnit.areaSqYard;
+        payload.areaSqMtr = firstUnit.areaSqMtr;
+        payload.areaHectare = firstUnit.areaHectare;
+        payload.rate = firstUnit.rate;
+        payload.rateUnit = firstUnit.rateUnit;
+        payload.photos = projectUnitsPayload.flatMap((unit) => unit.photos.slice(0, 1));
+      } else {
+        const converted = convertArea(Number(formData.areaValue), formData.areaUnit);
+        const photoUrls = editingItem ? [...editingItem.photos] : [];
+        for (const file of files.photos) {
+          try {
+            const url = await handleFileUpload(file, 'photos');
+            photoUrls.push(url);
+          } catch (uploadError) {
+            console.error('Photo upload failed:', uploadError);
+            uploadWarnings.push(`Photo upload failed: ${file.name}`);
+          }
+        }
+
+        if (!editingItem && photoUrls.length === 0) {
+          alert('Could not upload required property photo. Please retry.');
+          return;
+        }
+
+        payload.type = formData.type;
+        payload.subType = formData.subType;
+        payload.areaValue = Number(formData.areaValue);
+        payload.areaUnit = formData.areaUnit;
+        payload.areaAcre = converted.acre;
+        payload.areaSqft = converted.sqft;
+        payload.areaSqYard = converted.sqyard;
+        payload.areaSqMtr = converted.sqmtr;
+        payload.areaHectare = converted.hectare;
+        payload.rate = Number(formData.rate);
+        payload.rateUnit = formData.rateUnit;
+        payload.photos = photoUrls;
+        payload.projectUnits = [];
+        payload.projectUnitCount = 0;
+
+        if (formData.type === 'house') {
+          payload.houseType = formData.houseType;
+          payload.bhk = Number(formData.bhk);
+          payload.bathrooms = Number(formData.bathrooms);
+          payload.kitchenType = formData.kitchenType;
+          payload.features = formData.features;
+        }
       }
 
       if (editingItem) {
         const updatePayload = {
           ...payload,
-          status: isDraftSubmission ? 'draft' : (isAdmin ? 'approved' : 'pending_approval')
+          status: isDraftSubmission ? 'draft' : selectedListingStatus
         };
         await updateDoc(doc(db, 'inventory', editingItem.id), updatePayload);
       } else {
         await addDoc(collection(db, 'inventory'), {
           ...payload,
-          status: isDraftSubmission ? 'draft' : (isAdmin ? 'approved' : 'pending_approval'),
+          status: isDraftSubmission ? 'draft' : selectedListingStatus,
           submitterId: user.uid,
           submitterName: user.name,
           createdAt: serverTimestamp(),
@@ -485,10 +657,12 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       setEditingItem(null);
       setFormData({
         title: '',
-        type: 'zameen',
+        listingMode: 'single',
+        type: 'house',
         areaValue: '',
         areaUnit: 'sqft',
-        subType: 'agricultural',
+        subType: 'new',
+        approvalStatus: 'non_approved',
         rate: '',
         rateUnit: 'total',
         location: '',
@@ -499,13 +673,18 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         bathrooms: '',
         kitchenType: '',
         features: [],
-        newFeature: ''
+        newFeature: '',
+        projectUnits: [createProjectUnitDraft()],
+        latitude: 20.5937,
+        longitude: 78.9629
       });
-      setFiles({ photos: [], attachments: [] });
+      setFiles({ photos: [], videos: [], attachments: [] });
       
-      const successMessage = isDraftSubmission 
-        ? 'Listing saved as draft!' 
-        : (editingItem ? 'Listing updated!' : 'Listing submitted for approval!');
+      const successMessage = isDraftSubmission
+        ? 'Listing saved as draft!'
+        : (formData.approvalStatus === 'approved'
+          ? (editingItem ? 'Listing updated as approved!' : 'Listing saved as approved!')
+          : (editingItem ? 'Listing updated as non-approved!' : 'Listing saved as non-approved!'));
       if (uploadWarnings.length > 0) {
         alert(`${successMessage}\n\nSome files could not be uploaded.\n${uploadWarnings.join('\n')}`);
       } else {
@@ -543,13 +722,41 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
   const startEdit = (item: InventoryItem) => {
     const area = getAreaDisplay(item);
+    const inferredListingMode: ListingMode =
+      item.listingMode === 'project' || item.isProject || (item.projectUnits?.length || 0) > 0
+        ? 'project'
+        : 'single';
+    const mappedProjectUnits: ProjectUnitDraft[] = (item.projectUnits || []).map((unit) => ({
+      id: unit.id,
+      title: unit.title,
+      type: unit.type,
+      subType: unit.subType || (unit.type === 'house' ? 'new' : 'commercial'),
+      areaValue: typeof unit.areaValue === 'number' ? unit.areaValue : '',
+      areaUnit: unit.areaUnit || 'sqft',
+      areaAcre: unit.areaAcre || 0,
+      areaSqft: unit.areaSqft || 0,
+      areaSqYard: unit.areaSqYard || 0,
+      areaSqMtr: unit.areaSqMtr || 0,
+      areaHectare: unit.areaHectare || 0,
+      rate: unit.rate || '',
+      rateUnit: unit.rateUnit || 'total',
+      houseType: unit.houseType || 'simplex',
+      bhk: unit.bhk || '',
+      bathrooms: unit.bathrooms || '',
+      kitchenType: unit.kitchenType || '',
+      photos: unit.photos || [],
+      newPhotos: [],
+    }));
+
     setEditingItem(item);
     setFormData({
       title: item.title,
+      listingMode: inferredListingMode,
       type: item.type,
       areaValue: area?.value ?? '',
       areaUnit: area?.unit ?? 'sqft',
       subType: item.subType || (item.type === 'house' ? 'new' : item.type === 'zameen' ? 'agricultural' : 'commercial'),
+      approvalStatus: item.status === 'approved' ? 'approved' : 'non_approved',
       rate: item.rate,
       rateUnit: item.rateUnit,
       location: item.location,
@@ -561,6 +768,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       kitchenType: item.kitchenType || '',
       features: item.features || [],
       newFeature: '',
+      projectUnits: mappedProjectUnits.length > 0 ? mappedProjectUnits : [createProjectUnitDraft()],
       latitude: (item as any).latitude || 20.5937,
       longitude: (item as any).longitude || 78.9629
     });
@@ -568,13 +776,15 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   };
 
   const filteredItems = items.filter(item => {
-    const matchesFilter = filter === 'all' 
-      ? item.status !== 'draft' || item.submitterId === user.uid
-      : item.status === (
-          filter === 'pending' ? 'pending_approval' : 
-          filter === 'approved' ? 'approved' : 
-          'draft'
-        );
+    const isPersonalItem = item.submitterId === user.uid;
+    const isVisibleNonApproved = isAdmin || isPersonalItem;
+    const matchesFilter = (() => {
+      if (filter === 'all') return item.status !== 'draft' || isPersonalItem;
+      if (filter === 'approved') return item.status === 'approved';
+      if (filter === 'non_approved') return item.status !== 'approved' && isVisibleNonApproved;
+      if (filter === 'pending') return item.status === 'pending_approval';
+      return item.status === 'draft';
+    })();
     const matchesSearch = item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           item.location.toLowerCase().includes(searchQuery.toLowerCase());
 
@@ -589,12 +799,12 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     const sizeComparable = (() => {
       if (typeof item.areaSqft === 'number' && item.areaSqft > 0) return item.areaSqft;
       if (typeof item.areaValue === 'number' && item.areaUnit && AREA_CONVERSIONS[item.areaUnit]) {
-        return item.areaValue * AREA_CONVERSIONS[item.areaUnit].sqft;
+        return convertArea(item.areaValue, item.areaUnit).sqft;
       }
-      if (typeof item.areaSqYard === 'number' && item.areaSqYard > 0) return item.areaSqYard * AREA_CONVERSIONS.sqyard.sqft;
-      if (typeof item.areaSqMtr === 'number' && item.areaSqMtr > 0) return item.areaSqMtr * AREA_CONVERSIONS.sqmtr.sqft;
-      if (typeof item.areaAcre === 'number' && item.areaAcre > 0) return item.areaAcre * AREA_CONVERSIONS.acre.sqft;
-      if (typeof item.areaHectare === 'number' && item.areaHectare > 0) return item.areaHectare * AREA_CONVERSIONS.hectare.sqft;
+      if (typeof item.areaSqYard === 'number' && item.areaSqYard > 0) return item.areaSqYard * (AREA_CONVERSIONS.sqft / AREA_CONVERSIONS.sqyard);
+      if (typeof item.areaSqMtr === 'number' && item.areaSqMtr > 0) return item.areaSqMtr * (AREA_CONVERSIONS.sqft / AREA_CONVERSIONS.sqmtr);
+      if (typeof item.areaAcre === 'number' && item.areaAcre > 0) return item.areaAcre * AREA_CONVERSIONS.sqft;
+      if (typeof item.areaHectare === 'number' && item.areaHectare > 0) return item.areaHectare * (AREA_CONVERSIONS.sqft / AREA_CONVERSIONS.hectare);
       return 0;
     })();
 
@@ -689,6 +899,9 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     const imageLinks = item.photos?.length
       ? item.photos.map((url, idx) => `- Image ${idx + 1}: ${url}`).join('\n')
       : '- No images available';
+    const videoLinks = item.videos?.length
+      ? item.videos.map((url, idx) => `- Video ${idx + 1}: ${url}`).join('\n')
+      : '- No videos available';
 
     const message = [
       `*${item.title}*`,
@@ -696,12 +909,15 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       '1. Property Images:',
       imageLinks,
       '',
-      `2. Location: ${item.location}`,
+      '2. Property Videos:',
+      videoLinks,
+      '',
+      `3. Location: ${item.location}`,
       mapLink,
       '',
-      `3. Type: ${getTypeWithSubType(item)}`,
+      `4. Type: ${getTypeWithSubType(item)}`,
       '',
-      `4. Size: ${getPrimarySizeText(item)}`
+      `5. Size: ${getPrimarySizeText(item)}`
     ].join('\n');
 
     const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
@@ -738,6 +954,30 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           <button 
             onClick={() => {
               setEditingItem(null);
+              setFormData({
+                title: '',
+                listingMode: 'single',
+                type: 'house',
+                areaValue: '',
+                areaUnit: 'sqft',
+                subType: 'new',
+                approvalStatus: 'non_approved',
+                rate: '',
+                rateUnit: 'total',
+                location: '',
+                nearbyLocation: '',
+                landmark: '',
+                houseType: 'simplex',
+                bhk: '',
+                bathrooms: '',
+                kitchenType: '',
+                features: [],
+                newFeature: '',
+                projectUnits: [createProjectUnitDraft()],
+                latitude: 20.5937,
+                longitude: 78.9629
+              });
+              setFiles({ photos: [], videos: [], attachments: [] });
               setShowForm(true);
             }}
             className="px-6 py-3 bg-slate-900 text-white font-bold text-xs uppercase tracking-widest rounded-2xl shadow-xl shadow-slate-200 hover:bg-slate-800 transition-all flex items-center gap-2 active:scale-95"
@@ -759,10 +999,13 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
             className="w-full pl-14 pr-6 py-4 bg-white rounded-3xl outline-none border border-transparent focus:border-blue-100 focus:bg-white font-semibold text-slate-700 transition-all shadow-sm"
           />
         </div>
-        <div className="flex bg-slate-200/50 p-1 rounded-2xl gap-1 overflow-x-auto no-scrollbar whitespace-nowrap">
+        <div className="space-y-1">
+          <p className="px-1 text-[10px] font-black text-slate-400 uppercase tracking-widest">Property Status</p>
+          <div className="flex bg-slate-200/50 p-1 rounded-2xl gap-1 overflow-x-auto no-scrollbar whitespace-nowrap">
           {[
             { id: 'all', label: 'All', icon: LayoutGrid },
-            { id: 'approved', label: 'Live', icon: FileCheck },
+            { id: 'approved', label: 'Approved', icon: FileCheck },
+            { id: 'non_approved', label: 'Non-Approved', icon: FileText },
             { id: 'pending', label: 'Awaiting', icon: Clock },
             { id: 'draft', label: 'Drafts', icon: Edit2 }
           ].map(t => (
@@ -777,6 +1020,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
               <t.icon size={14} /> {t.label}
             </button>
           ))}
+          </div>
         </div>
       </div>
 
@@ -882,6 +1126,12 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                   <div className="px-4 py-1.5 bg-black/60 backdrop-blur-md text-white rounded-full text-[9px] font-black uppercase tracking-[0.2em]">
                     {getTypeWithSubType(item)}
                   </div>
+                  {!!item.videos?.length && (
+                    <div className="px-4 py-1.5 bg-indigo-600/80 backdrop-blur-md text-white rounded-full text-[9px] font-black uppercase tracking-[0.2em] flex items-center gap-1.5">
+                      <Film size={10} />
+                      {item.videos.length} Video{item.videos.length > 1 ? 's' : ''}
+                    </div>
+                  )}
                 </div>
 
                 {/* Admin Quick Actions */}
@@ -943,6 +1193,17 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                     </p>
                   )}
                 </div>
+
+                {!!item.videos?.[0] && (
+                  <div className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-50">
+                    <video
+                      src={item.videos[0]}
+                      controls
+                      preload="metadata"
+                      className="w-full h-40 object-cover bg-black"
+                    />
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="p-4 bg-slate-50 rounded-2xl">
@@ -1080,6 +1341,28 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                               />
                             </div>
 
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Listing Mode</label>
+                              <select
+                                value={formData.listingMode}
+                                onChange={e => {
+                                  const nextMode = e.target.value as ListingMode;
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    listingMode: nextMode,
+                                    projectUnits:
+                                      nextMode === 'project' && prev.projectUnits.length === 0
+                                        ? [createProjectUnitDraft()]
+                                        : prev.projectUnits
+                                  }));
+                                }}
+                                className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700 transition-all"
+                              >
+                                <option value="single">Single Property</option>
+                                <option value="project">Project (Multiple Units)</option>
+                              </select>
+                            </div>
+
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                               <div className="space-y-2">
                                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Property Type</label>
@@ -1092,7 +1375,6 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                   }}
                                   className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700 transition-all"
                                 >
-                                  <option value="zameen">Zameen</option>
                                   <option value="house">House/Villa</option>
                                   <option value="others">Others</option>
                                   <option value="plot">Plot (Legacy)</option>
@@ -1113,9 +1395,21 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                 </select>
                               </div>
                               <div className="space-y-2 sm:col-span-2">
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Approval Status</label>
+                                <select
+                                  required
+                                  value={formData.approvalStatus}
+                                  onChange={e => setFormData({ ...formData, approvalStatus: e.target.value as 'approved' | 'non_approved' })}
+                                  className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700 transition-all"
+                                >
+                                  <option value="approved">Approved</option>
+                                  <option value="non_approved">Non Approved</option>
+                                </select>
+                              </div>
+                              <div className="space-y-2 sm:col-span-2">
                                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Rate (₹)</label>
                                 <input 
-                                  required
+                                  required={formData.listingMode === 'single'}
                                   type="number"
                                   value={formData.rate}
                                   onChange={e => setFormData({...formData, rate: e.target.value})}
@@ -1293,7 +1587,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
                            <div className="space-y-2">
                              <input 
-                                required
+                                required={formData.listingMode === 'single'}
                                 type="number"
                                 step="any"
                                 value={formData.areaValue}
@@ -1317,6 +1611,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                            </div>
                         </section>
 
+                        {formData.listingMode === 'single' && (
                         <section className="space-y-6">
                            <header className="flex items-center justify-between border-b border-slate-100 pb-4">
                              <div className="flex items-center gap-3">
@@ -1361,6 +1656,260 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                               </label>
                            </div>
                         </section>
+                        )}
+
+                        <section className="space-y-6">
+                           <header className="flex items-center justify-between border-b border-slate-100 pb-4">
+                             <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center">
+                                  <Film size={20} />
+                                </div>
+                                <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Videos</h3>
+                             </div>
+                             <p className="text-[10px] font-bold text-slate-400 uppercase">Optional</p>
+                           </header>
+
+                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              {[...files.videos, ...(editingItem?.videos || [])].map((video, i) => (
+                                 <div key={`video-${i}`} className="relative rounded-2xl overflow-hidden bg-slate-100 group border border-slate-200">
+                                    <video
+                                      src={typeof video === 'string' ? video : URL.createObjectURL(video)}
+                                      controls
+                                      preload="metadata"
+                                      className="w-full h-48 object-cover bg-black"
+                                    />
+                                    <button
+                                       type="button"
+                                       onClick={() => {
+                                          if (typeof video === 'string') {
+                                            if (editingItem) {
+                                              setEditingItem({
+                                                ...editingItem,
+                                                videos: (editingItem.videos || []).filter((_, idx) => (editingItem.videos || [])[idx] !== video)
+                                              });
+                                            }
+                                          } else {
+                                            setFiles({
+                                              ...files,
+                                              videos: files.videos.filter((_, idx) => files.videos[idx] !== video)
+                                            });
+                                          }
+                                       }}
+                                       className="absolute top-2 right-2 w-8 h-8 rounded-full bg-rose-600/80 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                                    >
+                                       <Trash2 size={16} />
+                                    </button>
+                                 </div>
+                              ))}
+                              <label className="rounded-2xl border-2 border-dashed border-slate-200 hover:border-indigo-400 hover:bg-indigo-50 transition-all cursor-pointer flex flex-col items-center justify-center text-slate-400 hover:text-indigo-600 group min-h-[192px]">
+                                 <Upload size={24} className="group-hover:-translate-y-1 transition-transform" />
+                                 <span className="text-[10px] font-black uppercase mt-2 tracking-widest">Add Videos</span>
+                                 <input
+                                   type="file"
+                                   accept="video/*"
+                                   multiple
+                                   className="hidden"
+                                   onChange={e => {
+                                     if (e.target.files) {
+                                       setFiles({ ...files, videos: [...files.videos, ...Array.from(e.target.files)] });
+                                     }
+                                   }}
+                                 />
+                              </label>
+                           </div>
+                        </section>
+
+                        {formData.listingMode === 'project' && (
+                          <section className="space-y-6">
+                            <header className="flex items-center justify-between border-b border-slate-100 pb-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-orange-500 text-white flex items-center justify-center">
+                                  <LayoutGrid size={20} />
+                                </div>
+                                <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Project Units</h3>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={addProjectUnit}
+                                className="px-4 py-2 bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-slate-800 transition-colors"
+                              >
+                                Add Unit
+                              </button>
+                            </header>
+
+                            <div className="space-y-5">
+                              {formData.projectUnits.map((unit, unitIndex) => {
+                                const unitAreaUnits = Object.keys(AREA_CONVERSIONS) as AreaUnit[];
+                                return (
+                                  <div key={unit.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-5 space-y-4">
+                                    <div className="flex items-center justify-between">
+                                      <p className="text-xs font-black text-slate-700 uppercase tracking-widest">Unit {unitIndex + 1}</p>
+                                      <button
+                                        type="button"
+                                        onClick={() => removeProjectUnit(unit.id)}
+                                        disabled={formData.projectUnits.length <= 1}
+                                        className="text-slate-400 hover:text-rose-500 disabled:opacity-40 transition-colors"
+                                      >
+                                        <Trash2 size={16} />
+                                      </button>
+                                    </div>
+
+                                    <input
+                                      value={unit.title}
+                                      onChange={(e) => updateProjectUnit(unit.id, { title: e.target.value })}
+                                      className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
+                                      placeholder="Unit title (e.g. Tower A - Flat 302)"
+                                    />
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                      <select
+                                        value={unit.type}
+                                        onChange={(e) => {
+                                          const nextType = e.target.value as InventoryType;
+                                          const defaultSubType = subTypeOptionsByType[nextType]?.[0]?.value || '';
+                                          updateProjectUnit(unit.id, { type: nextType, subType: defaultSubType });
+                                        }}
+                                        className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700"
+                                      >
+                                        <option value="house">House/Villa</option>
+                                        <option value="others">Others</option>
+                                        <option value="plot">Plot (Legacy)</option>
+                                      </select>
+                                      <select
+                                        value={unit.subType}
+                                        onChange={(e) => updateProjectUnit(unit.id, { subType: e.target.value })}
+                                        className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700"
+                                      >
+                                        {(subTypeOptionsByType[unit.type] || []).map((opt) => (
+                                          <option key={opt.value} value={opt.value}>
+                                            {opt.label}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <input
+                                        type="number"
+                                        step="any"
+                                        value={unit.areaValue}
+                                        onChange={(e) => updateProjectUnit(unit.id, { areaValue: e.target.value })}
+                                        className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-mono font-bold text-slate-700"
+                                        placeholder="Area"
+                                      />
+                                      <select
+                                        value={unit.areaUnit}
+                                        onChange={(e) => updateProjectUnit(unit.id, { areaUnit: e.target.value as AreaUnit })}
+                                        className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700"
+                                      >
+                                        {unitAreaUnits.map((u) => (
+                                          <option key={u} value={u}>
+                                            {areaUnitLabels[u]}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <input
+                                        type="number"
+                                        value={unit.rate}
+                                        onChange={(e) => updateProjectUnit(unit.id, { rate: e.target.value })}
+                                        className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-mono font-bold text-slate-700"
+                                        placeholder="Rate"
+                                      />
+                                      <input
+                                        value={unit.rateUnit}
+                                        onChange={(e) => updateProjectUnit(unit.id, { rateUnit: e.target.value })}
+                                        className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
+                                        placeholder="Rate Unit (total/per_sqft)"
+                                      />
+                                    </div>
+
+                                    {unit.type === 'house' && (
+                                      <div className="grid grid-cols-2 gap-3">
+                                        <input
+                                          type="number"
+                                          value={unit.bhk}
+                                          onChange={(e) => updateProjectUnit(unit.id, { bhk: e.target.value })}
+                                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
+                                          placeholder="BHK"
+                                        />
+                                        <input
+                                          type="number"
+                                          value={unit.bathrooms}
+                                          onChange={(e) => updateProjectUnit(unit.id, { bathrooms: e.target.value })}
+                                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
+                                          placeholder="Bathrooms"
+                                        />
+                                        <select
+                                          value={unit.houseType}
+                                          onChange={(e) => updateProjectUnit(unit.id, { houseType: e.target.value as HouseType })}
+                                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700"
+                                        >
+                                          <option value="simplex">Simplex</option>
+                                          <option value="semi-duplex">Semi-Duplex</option>
+                                          <option value="duplex">Duplex</option>
+                                        </select>
+                                        <input
+                                          value={unit.kitchenType}
+                                          onChange={(e) => updateProjectUnit(unit.id, { kitchenType: e.target.value })}
+                                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
+                                          placeholder="Kitchen Type"
+                                        />
+                                      </div>
+                                    )}
+
+                                    <div className="space-y-2">
+                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Unit Photos</p>
+                                      <div className="grid grid-cols-3 gap-3">
+                                        {[...unit.newPhotos, ...unit.photos].map((photo, photoIdx) => {
+                                          const isExisting = typeof photo === 'string';
+                                          return (
+                                            <div key={`${unit.id}-photo-${photoIdx}`} className="relative aspect-square rounded-2xl overflow-hidden bg-slate-200 group">
+                                              <img
+                                                src={isExisting ? (photo as string) : URL.createObjectURL(photo as File)}
+                                                className="w-full h-full object-cover"
+                                                referrerPolicy="no-referrer"
+                                              />
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  if (isExisting) {
+                                                    updateProjectUnit(unit.id, {
+                                                      photos: unit.photos.filter((_, idx) => idx !== unit.photos.indexOf(photo as string))
+                                                    });
+                                                  } else {
+                                                    updateProjectUnit(unit.id, {
+                                                      newPhotos: unit.newPhotos.filter((_, idx) => idx !== unit.newPhotos.indexOf(photo as File))
+                                                    });
+                                                  }
+                                                }}
+                                                className="absolute inset-0 bg-rose-600/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white"
+                                              >
+                                                <Trash2 size={18} />
+                                              </button>
+                                            </div>
+                                          );
+                                        })}
+                                        <label className="aspect-square rounded-2xl border-2 border-dashed border-slate-300 hover:border-blue-400 hover:bg-blue-50 transition-all cursor-pointer flex flex-col items-center justify-center text-slate-400 hover:text-blue-600 group">
+                                          <Upload size={20} className="group-hover:-translate-y-1 transition-transform" />
+                                          <span className="text-[9px] font-black uppercase mt-1">Add</span>
+                                          <input
+                                            type="file"
+                                            accept="image/*"
+                                            multiple
+                                            className="hidden"
+                                            onChange={(e) => {
+                                              if (!e.target.files) return;
+                                              updateProjectUnit(unit.id, {
+                                                newPhotos: [...unit.newPhotos, ...Array.from(e.target.files)]
+                                              });
+                                            }}
+                                          />
+                                        </label>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </section>
+                        )}
 
                         <section className="space-y-6">
                            <header className="flex items-center justify-between border-b border-slate-100 pb-4">

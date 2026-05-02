@@ -14,7 +14,7 @@ export interface Lead {
   assignedTo: string;
   addedById?: string;
   addedByName?: string;
-  addedByRole?: 'admin' | 'employee';
+  addedByRole?: 'admin' | 'manager' | 'employee';
   assignedAt: any;
   createdAt: any;
   updatedAt?: any;
@@ -53,7 +53,9 @@ export interface User {
   name: string;
   email: string;
   phone: string;
-  role: 'admin' | 'employee' | 'suspended' | 'deleted';
+  role: 'admin' | 'manager' | 'employee' | 'suspended' | 'deleted';
+  managerId?: string;
+  managerName?: string;
   createdAt: any;
 }
 
@@ -84,10 +86,36 @@ export interface Requirement {
 export type InventoryType = 'zameen' | 'house' | 'others' | 'plot';
 export type HouseType = 'simplex' | 'semi-duplex' | 'duplex';
 export type InventoryStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
+export type ListingMode = 'single' | 'project';
+
+export interface ProjectUnit {
+  id: string;
+  title: string;
+  type: InventoryType;
+  subType?: string;
+  areaValue?: number;
+  areaUnit?: 'acre' | 'sqft' | 'sqyard' | 'sqmtr' | 'hectare';
+  areaAcre?: number;
+  areaSqft?: number;
+  areaSqYard?: number;
+  areaSqMtr?: number;
+  areaHectare?: number;
+  rate: number;
+  rateUnit: string;
+  houseType?: HouseType;
+  bhk?: number;
+  bathrooms?: number;
+  kitchenType?: string;
+  photos: string[];
+}
 
 export interface InventoryItem {
   id: string;
   title: string;
+  listingMode?: ListingMode;
+  isProject?: boolean;
+  projectUnitCount?: number;
+  projectUnits?: ProjectUnit[];
   type: InventoryType;
   subType?: string;
   // Area in different units
@@ -109,6 +137,7 @@ export interface InventoryItem {
   longitude: number;
   
   photos: string[]; // URLs
+  videos?: string[]; // URLs
   attachments: { name: string; url: string }[];
   
   // House specific
