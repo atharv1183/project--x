@@ -442,17 +442,21 @@ export default function AdminDashboard({
         });
       });
 
-      // Finally update user role
-      batch.update(doc(db, 'users', reallocateEmployee.uid), { 
-        role: pendingRole,
-        updatedAt: serverTimestamp()
-      });
+      // Finally apply member status action.
+      if (pendingRole === 'deleted') {
+        batch.delete(doc(db, 'users', reallocateEmployee.uid));
+      } else {
+        batch.update(doc(db, 'users', reallocateEmployee.uid), { 
+          role: pendingRole,
+          updatedAt: serverTimestamp()
+        });
+      }
       batch.delete(doc(db, 'employeeDirectory', reallocateEmployee.uid));
 
       await batch.commit();
       setShowReallocateModal(false);
       setReallocateEmployee(null);
-      alert(`Successfully reallocated ${reallocateLeadsCount} leads and updated status.`);
+      alert(`Successfully reallocated ${reallocateLeadsCount} leads and ${pendingRole === 'deleted' ? 'removed the member.' : 'updated status.'}`);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Allocation failed');
     } finally {
@@ -578,7 +582,7 @@ export default function AdminDashboard({
   };
 
   useEffect(() => {
-    const qEmployees = query(collection(db, 'users'), where('role', 'in', ['employee', 'manager', 'suspended', 'deleted']));
+    const qEmployees = query(collection(db, 'users'), where('role', 'in', ['employee', 'manager', 'suspended']));
     const unsubscribeEmployees = onSnapshot(qEmployees, (snapshot) => {
       setEmployees(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as User)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
@@ -719,12 +723,21 @@ export default function AdminDashboard({
 
     setLoading(true);
     try {
+      if (showEditEmployee.role === 'deleted') {
+        const batch = writeBatch(db);
+        batch.delete(doc(db, 'users', showEditEmployee.uid));
+        batch.delete(doc(db, 'employeeDirectory', showEditEmployee.uid));
+        await batch.commit();
+        setShowEditEmployee(null);
+        return;
+      }
+
       const selectedManager = employees.find((member) => member.uid === showEditEmployee.managerId && member.role === 'manager');
       const isEmployeeRole = showEditEmployee.role === 'employee';
       await updateDoc(doc(db, 'users', showEditEmployee.uid), {
         name: showEditEmployee.name,
         phone: showEditEmployee.phone,
-        role: showEditEmployee.role, // Allow restoring deleted
+        role: showEditEmployee.role,
         managerId: isEmployeeRole ? (selectedManager?.uid || null) : null,
         managerName: isEmployeeRole ? (selectedManager?.name || null) : null,
         updatedAt: serverTimestamp(),
@@ -787,18 +800,18 @@ export default function AdminDashboard({
   const deleteEmployee = async (empId: string) => {
     const emp = employees.find(e => e.uid === empId);
     if (!emp) return;
-    if (!confirm('Are you sure? This will mark the employee as deleted.')) return;
+    if (!confirm('Are you sure? This will permanently remove this member from the site.')) return;
     
     const interrupted = checkAndPromptReallocation(emp, 'deleted');
     if (interrupted) return;
 
     try {
       const batch = writeBatch(db);
-      batch.update(doc(db, 'users', empId), { role: 'deleted', updatedAt: serverTimestamp() });
+      batch.delete(doc(db, 'users', empId));
       batch.delete(doc(db, 'employeeDirectory', empId));
       await batch.commit();
     } catch (error) {
-       handleFirestoreError(error, OperationType.UPDATE, `users/${empId}`);
+       handleFirestoreError(error, OperationType.DELETE, `users/${empId}`);
     }
   };
 
@@ -1894,7 +1907,6 @@ export default function AdminDashboard({
                   <option value="manager" disabled={!isSuperAdmin}>Manager</option>
                   <option value="employee">Active Employee</option>
                   <option value="suspended">Suspended</option>
-                  <option value="deleted">Deleted (Hard Removal)</option>
                 </select>
               </div>
               {showEditEmployee.role === 'employee' && (
