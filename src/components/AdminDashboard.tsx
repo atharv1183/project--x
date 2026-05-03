@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, FormEvent } from 'react';
-import { db } from '../lib/firebase';
+import { useState, useEffect, useRef, FormEvent, useMemo } from 'react';
+import { db, auth } from '../lib/firebase';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { createUserWithEmailAndPassword, getAuth, signOut } from 'firebase/auth';
 import { 
@@ -20,7 +20,7 @@ import {
   writeBatch,
   Timestamp
 } from 'firebase/firestore';
-import { Lead, User, LeadStatus, OperationType, Requirement } from '../types';
+import { Lead, User, LeadStatus, OperationType, Requirement, Attendance } from '../types';
 import { handleFirestoreError } from '../lib/utils';
 import InventoryManagement from './InventoryManagement';
 import { 
@@ -106,6 +106,44 @@ const getAddedByRoleLabel = (role?: Lead['addedByRole']) => {
   return 'Legacy';
 };
 
+const parseTimestamp = (value: any): Date | null => {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value?.toDate === 'function') {
+    const converted = value.toDate();
+    return converted instanceof Date && !Number.isNaN(converted.getTime()) ? converted : null;
+  }
+  if (typeof value?.seconds === 'number') {
+    const converted = new Date(value.seconds * 1000);
+    return Number.isNaN(converted.getTime()) ? null : converted;
+  }
+  const converted = new Date(value);
+  return Number.isNaN(converted.getTime()) ? null : converted;
+};
+
+const formatDuration = (minutes: number) => {
+  if (minutes <= 0) return '0m';
+  const safeMinutes = Math.max(0, Math.round(minutes));
+  const hrs = Math.floor(safeMinutes / 60);
+  const mins = safeMinutes % 60;
+  if (hrs === 0) return `${mins}m`;
+  if (mins === 0) return `${hrs}h`;
+  return `${hrs}h ${mins}m`;
+};
+
+type AttendanceEmployeeSummary = {
+  uid: string;
+  employeeName: string;
+  recordsToday: number;
+  clockInCount: number;
+  clockOutCount: number;
+  firstClockIn: Date | null;
+  lastClockOut: Date | null;
+  lastSeenAt: Date | null;
+  isClockedIn: boolean;
+  totalWorkedMinutes: number;
+};
+
 export default function AdminDashboard({
   user,
   backSignal = 0,
@@ -113,11 +151,12 @@ export default function AdminDashboard({
   initialViewSignal = 0,
 }: AdminDashboardProps) {
   const isSuperAdmin = user.role === 'admin';
+  const isManager = user.role === 'manager';
   const [activeView, setActiveView] = useState<AdminView>(initialView ?? 'leads');
   const [employees, setEmployees] = useState<User[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
-  const [attendance, setAttendance] = useState<any[]>([]);
+  const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [showAddLead, setShowAddLead] = useState(false);
   const [showAddEmployee, setShowAddEmployee] = useState(false);
   const [showEditEmployee, setShowEditEmployee] = useState<User | null>(null);
@@ -128,7 +167,7 @@ export default function AdminDashboard({
     name: '',
     phone: '',
     role: 'employee' as 'employee' | 'manager',
-    managerId: '',
+    managerId: isManager ? user.uid : '',
   });
   const [loading, setLoading] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
@@ -152,10 +191,43 @@ export default function AdminDashboard({
   const [canScrollTabsLeft, setCanScrollTabsLeft] = useState(false);
   const [canScrollTabsRight, setCanScrollTabsRight] = useState(false);
   const [dataToolsBusy, setDataToolsBusy] = useState<string | null>(null);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const managerScopeUserIdsRef = useRef<Set<string>>(new Set([user.uid]));
+  const rawLeadsRef = useRef<Lead[]>([]);
+  const rawAttendanceRef = useRef<Attendance[]>([]);
+  const rawRequirementsRef = useRef<Requirement[]>([]);
+  const actorLabel = isManager ? 'Manager' : 'Admin';
 
   const normalizePhone = (value: string) => value.replace(/\D/g, '');
-  const managers = employees.filter((member) => member.role === 'manager');
-  const activeEmployees = employees.filter((member) => member.role === 'employee');
+  const managers = employees.filter((member) => member.role === 'manager' && (!isManager || member.uid === user.uid));
+  const activeEmployees = employees.filter(
+    (member) => member.role === 'employee' && (!isManager || member.managerId === user.uid)
+  );
+  const leadAssignableMembers = isManager
+    ? [{ uid: user.uid, name: user.name, phone: user.phone }, ...activeEmployees.map((member) => ({ uid: member.uid, name: member.name, phone: member.phone }))]
+    : activeEmployees.map((member) => ({ uid: member.uid, name: member.name, phone: member.phone }));
+  const visibleEmployees = isManager
+    ? employees.filter((member) => {
+        if (member.uid === user.uid) return true;
+        return (
+          (member.role === 'employee' || member.role === 'suspended' || member.role === 'deleted') &&
+          member.managerId === user.uid
+        );
+      })
+    : employees;
+  const attendanceMembers = isManager
+    ? [
+        ...activeEmployees,
+        {
+          uid: user.uid,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          role: 'manager' as const,
+          createdAt: null,
+        },
+      ]
+    : activeEmployees;
   const showSaveToast = (title: string, description: string) => {
     setSaveToast({ title, description });
     if (saveToastTimerRef.current) {
@@ -402,9 +474,9 @@ export default function AdminDashboard({
     try {
       const leadsToReallocate = leads.filter(l => l.assignedTo === reallocateEmployee.uid);
       const batch = writeBatch(db);
-      const activeEmployees = employees.filter(e => e.uid !== reallocateEmployee.uid && e.role === 'employee');
+      const reallocationPool = leadAssignableMembers.filter((e) => e.uid !== reallocateEmployee.uid);
 
-      if (activeEmployees.length === 0 && reallocateToMethod === 'auto') {
+      if (reallocationPool.length === 0 && reallocateToMethod === 'auto') {
         throw new Error('No other active employees available for automatic reallocation.');
       }
 
@@ -413,7 +485,7 @@ export default function AdminDashboard({
         let newAssigneeId = targetEmployeeId;
         
         if (reallocateToMethod === 'auto') {
-          newAssigneeId = activeEmployees[index % activeEmployees.length].uid;
+          newAssigneeId = reallocationPool[index % reallocationPool.length].uid;
         }
 
         const newAssigneeName = employees.find(e => e.uid === newAssigneeId)?.name || 'New Executive';
@@ -476,7 +548,7 @@ export default function AdminDashboard({
     return false;
   };
 
-  const handleTransfer = async (targetEmployee: User) => {
+  const handleTransfer = async (targetEmployee: { uid: string; name: string }) => {
     if (!selectedLead) return;
     if (!confirm(`Transfer lead to ${targetEmployee.name}?`)) return;
     setLoading(true);
@@ -490,7 +562,7 @@ export default function AdminDashboard({
 
       await addDoc(collection(db, 'leads', selectedLead.id, 'followups'), {
         date: serverTimestamp(),
-        remark: `Admin transferred lead from ${employees.find(e => e.uid === selectedLead.assignedTo)?.name || 'Unknown'} to ${targetEmployee.name}`,
+        remark: `${actorLabel} transferred lead from ${employees.find(e => e.uid === selectedLead.assignedTo)?.name || 'Unknown'} to ${targetEmployee.name}`,
         employeeId: user.uid
       });
 
@@ -498,7 +570,7 @@ export default function AdminDashboard({
       await addDoc(collection(db, 'notifications'), {
         userId: targetEmployee.uid,
         title: 'New Lead Assigned',
-        message: `Admin re-assigned lead "${selectedLead.name}" to you.`,
+        message: `${actorLabel} re-assigned lead "${selectedLead.name}" to you.`,
         leadId: selectedLead.id,
         read: false,
         createdAt: serverTimestamp()
@@ -553,8 +625,8 @@ export default function AdminDashboard({
       if (selectedLead.assignedTo) {
         await addDoc(collection(db, 'notifications'), {
           userId: selectedLead.assignedTo,
-          title: 'Admin Remark Added',
-          message: `Admin added a remark on your lead "${selectedLead.name}": ${interactionRemark}`,
+          title: `${actorLabel} Remark Added`,
+          message: `${actorLabel} added a remark on your lead "${selectedLead.name}": ${interactionRemark}`,
           leadId: selectedLead.id,
           read: false,
           createdAt: serverTimestamp()
@@ -584,22 +656,58 @@ export default function AdminDashboard({
   useEffect(() => {
     const qEmployees = query(collection(db, 'users'), where('role', 'in', ['employee', 'manager', 'suspended']));
     const unsubscribeEmployees = onSnapshot(qEmployees, (snapshot) => {
-      setEmployees(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as User)));
+      const nextEmployees = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as User));
+      setEmployees(nextEmployees);
+      if (isManager) {
+        const scopedIds = new Set<string>([user.uid]);
+        nextEmployees.forEach((member) => {
+          if (member.managerId === user.uid && (member.role === 'employee' || member.role === 'suspended' || member.role === 'deleted')) {
+            scopedIds.add(member.uid);
+          }
+        });
+        managerScopeUserIdsRef.current = scopedIds;
+        setLeads(rawLeadsRef.current.filter((lead) => scopedIds.has(lead.assignedTo) || lead.addedById === user.uid));
+        setAttendance(rawAttendanceRef.current.filter((log) => scopedIds.has(log.uid)));
+        setRequirements(rawRequirementsRef.current.filter((req) => scopedIds.has(req.employeeId)));
+      }
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
 
     const qLeads = query(collection(db, 'leads'), orderBy('createdAt', 'desc'));
     const unsubscribeLeads = onSnapshot(qLeads, (snapshot) => {
-      setLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead)));
+      const allLeads = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead));
+      rawLeadsRef.current = allLeads;
+      if (!isManager) {
+        setLeads(allLeads);
+        return;
+      }
+      const scopeIds = managerScopeUserIdsRef.current;
+      setLeads(
+        allLeads.filter((lead) => scopeIds.has(lead.assignedTo) || lead.addedById === user.uid)
+      );
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'leads'));
 
     const qAttendance = query(collection(db, 'attendance'), orderBy('timestamp', 'desc'), limit(100));
     const unsubscribeAttendance = onSnapshot(qAttendance, (snapshot) => {
-      setAttendance(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const allLogs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Attendance));
+      rawAttendanceRef.current = allLogs;
+      if (!isManager) {
+        setAttendance(allLogs);
+        return;
+      }
+      const scopeIds = managerScopeUserIdsRef.current;
+      setAttendance(allLogs.filter((log) => scopeIds.has(log.uid)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendance'));
 
     const qReqs = query(collection(db, 'requirements'), orderBy('createdAt', 'desc'));
     const unsubscribeReqs = onSnapshot(qReqs, (snapshot) => {
-      setRequirements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Requirement)));
+      const allRequirements = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Requirement));
+      rawRequirementsRef.current = allRequirements;
+      if (!isManager) {
+        setRequirements(allRequirements);
+        return;
+      }
+      const scopeIds = managerScopeUserIdsRef.current;
+      setRequirements(allRequirements.filter((req) => scopeIds.has(req.employeeId)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'requirements'));
 
     return () => {
@@ -608,7 +716,7 @@ export default function AdminDashboard({
       unsubscribeAttendance();
       unsubscribeReqs();
     };
-  }, []);
+  }, [isManager, user.uid]);
 
   useEffect(() => {
     return () => {
@@ -797,6 +905,129 @@ export default function AdminDashboard({
     return searchableText.includes(adminLeadSearchTerm);
   });
 
+  const attendanceAnalysis = useMemo(() => {
+    const now = new Date();
+    const dayStart = new Date(now);
+    dayStart.setHours(0, 0, 0, 0);
+
+    const groupedLogs = new Map<string, { employeeName: string; logs: Array<{ at: Date; type: Attendance['type'] }> }>();
+
+    attendance.forEach((log) => {
+      const at = parseTimestamp(log.timestamp);
+      if (!at || at < dayStart || at > now || !log.uid) return;
+      const existing = groupedLogs.get(log.uid) ?? {
+        employeeName: log.employeeName || 'Unknown Employee',
+        logs: [],
+      };
+      existing.employeeName = log.employeeName || existing.employeeName;
+      existing.logs.push({ at, type: log.type });
+      groupedLogs.set(log.uid, existing);
+    });
+
+    const summaries: AttendanceEmployeeSummary[] = attendanceMembers.map((employee) => {
+      const logs = (groupedLogs.get(employee.uid)?.logs ?? []).sort((a, b) => a.at.getTime() - b.at.getTime());
+
+      let clockInCount = 0;
+      let clockOutCount = 0;
+      let firstClockIn: Date | null = null;
+      let lastClockOut: Date | null = null;
+      let totalWorkedMinutes = 0;
+      let openClockIn: Date | null = null;
+
+      logs.forEach((entry) => {
+        if (entry.type === 'clock_in') {
+          clockInCount += 1;
+          if (!firstClockIn) firstClockIn = entry.at;
+          openClockIn = entry.at;
+        } else {
+          clockOutCount += 1;
+          lastClockOut = entry.at;
+          if (openClockIn && entry.at.getTime() >= openClockIn.getTime()) {
+            totalWorkedMinutes += (entry.at.getTime() - openClockIn.getTime()) / 60000;
+          }
+          openClockIn = null;
+        }
+      });
+
+      if (openClockIn) {
+        totalWorkedMinutes += (now.getTime() - openClockIn.getTime()) / 60000;
+      }
+
+      return {
+        uid: employee.uid,
+        employeeName: employee.name,
+        recordsToday: logs.length,
+        clockInCount,
+        clockOutCount,
+        firstClockIn,
+        lastClockOut,
+        lastSeenAt: logs.length ? logs[logs.length - 1].at : null,
+        isClockedIn: Boolean(openClockIn),
+        totalWorkedMinutes,
+      };
+    }).sort((a, b) => {
+      if (a.isClockedIn !== b.isClockedIn) return a.isClockedIn ? -1 : 1;
+      if (a.recordsToday !== b.recordsToday) return b.recordsToday - a.recordsToday;
+      return a.employeeName.localeCompare(b.employeeName);
+    });
+
+    const presentEmployees = summaries.filter((item) => item.recordsToday > 0).length;
+    const clockedInEmployees = summaries.filter((item) => item.isClockedIn).length;
+    const checkedOutEmployees = summaries.filter((item) => item.recordsToday > 0 && !item.isClockedIn).length;
+    const absentEmployees = summaries.filter((item) => item.recordsToday === 0).length;
+    const totalWorkedMinutes = summaries.reduce((sum, item) => sum + item.totalWorkedMinutes, 0);
+    const averageWorkedMinutes = presentEmployees > 0 ? totalWorkedMinutes / presentEmployees : 0;
+    const todayLogsCount = summaries.reduce((sum, item) => sum + item.recordsToday, 0);
+
+    return {
+      summaries,
+      totals: {
+        teamSize: summaries.length,
+        presentEmployees,
+        clockedInEmployees,
+        checkedOutEmployees,
+        absentEmployees,
+        totalWorkedMinutes,
+        averageWorkedMinutes,
+        todayLogsCount,
+      },
+    };
+  }, [attendance, attendanceMembers]);
+
+  const managerLastAttendance = useMemo(() => {
+    if (!isManager) return null;
+    const ownLogs = attendance
+      .filter((log) => log.uid === user.uid)
+      .map((log) => ({ log, at: parseTimestamp(log.timestamp) }))
+      .filter((entry): entry is { log: Attendance; at: Date } => Boolean(entry.at))
+      .sort((a, b) => b.at.getTime() - a.at.getTime());
+    return ownLogs[0]?.log ?? null;
+  }, [attendance, isManager, user.uid]);
+
+  const isManagerClockedIn = managerLastAttendance?.type === 'clock_in';
+
+  const handleManagerAttendance = async (type: 'clock_in' | 'clock_out') => {
+    if (!isManager || !auth.currentUser) return;
+    setAttendanceLoading(true);
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject);
+      });
+      const { latitude, longitude } = position.coords;
+      await addDoc(collection(db, 'attendance'), {
+        uid: auth.currentUser.uid,
+        employeeName: user.name,
+        timestamp: serverTimestamp(),
+        type,
+        location: { latitude, longitude },
+      });
+    } catch (error) {
+      alert('Error fetching location or saving attendance. Please ensure GPS is enabled.');
+    } finally {
+      setAttendanceLoading(false);
+    }
+  };
+
   const deleteEmployee = async (empId: string) => {
     const emp = employees.find(e => e.uid === empId);
     if (!emp) return;
@@ -820,11 +1051,17 @@ export default function AdminDashboard({
     const normalizedLeadPhone = normalizePhone(leadForm.phone);
     if (!normalizedLeadPhone || !leadForm.source) return alert('Phone and Source are mandatory');
     if (normalizedLeadPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
+
+    const existingLead = leads.find((lead) => normalizePhone(lead.phone || '') === normalizedLeadPhone);
+    if (existingLead) {
+      return alert(`Lead with mobile ${normalizedLeadPhone} already exists (${existingLead.name || 'Unknown'}).`);
+    }
+
     setLoading(true);
 
     try {
-      const activeEmployees = employees.filter(e => e.role === 'employee');
-      if (activeEmployees.length === 0) {
+      const assignableMembers = leadAssignableMembers;
+      if (assignableMembers.length === 0) {
         throw new Error('No active employees available for allocation. Add or activate an employee first.');
       }
 
@@ -833,7 +1070,7 @@ export default function AdminDashboard({
           throw new Error('Select an active employee for manual allocation.');
         }
 
-        const assignedEmployee = activeEmployees.find(e => e.uid === manualLeadAssigneeId);
+        const assignedEmployee = assignableMembers.find(e => e.uid === manualLeadAssigneeId);
         if (!assignedEmployee) {
           throw new Error('Selected employee is not active. Please choose another employee.');
         }
@@ -858,10 +1095,10 @@ export default function AdminDashboard({
           
           let nextIndex = 0;
           if (allocationDoc.exists()) {
-            nextIndex = (allocationDoc.data().lastIndex + 1) % activeEmployees.length;
+            nextIndex = (allocationDoc.data().lastIndex + 1) % assignableMembers.length;
           }
 
-          const assignedEmployee = activeEmployees[nextIndex];
+          const assignedEmployee = assignableMembers[nextIndex];
           
           const newLeadRef = doc(collection(db, 'leads'));
           transaction.set(newLeadRef, {
@@ -901,7 +1138,9 @@ export default function AdminDashboard({
     const name = employeeForm.name.trim();
     const normalizedPhone = normalizePhone(employeeForm.phone);
     const memberRole = employeeForm.role;
-    const selectedManager = managers.find((member) => member.uid === employeeForm.managerId);
+    const selectedManager = isManager
+      ? { uid: user.uid, name: user.name }
+      : managers.find((member) => member.uid === employeeForm.managerId);
     const email = `${normalizedPhone}@estatepulse.com`;
     const initialPassword = normalizedPhone;
 
@@ -917,7 +1156,7 @@ export default function AdminDashboard({
       alert('Only admin can add managers.');
       return;
     }
-    if (memberRole === 'employee' && managers.length > 0 && !selectedManager) {
+    if (memberRole === 'employee' && !selectedManager) {
       alert('Please assign a manager for this employee.');
       return;
     }
@@ -957,7 +1196,7 @@ export default function AdminDashboard({
       await batch.commit();
 
       showSaveToast(`${name} added successfully`, `${memberRole === 'manager' ? 'Manager' : 'Employee'} account created`);
-      setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: '' });
+      setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: isManager ? user.uid : '' });
       setShowAddEmployee(false);
     } catch (error) {
       if (provisionedUser) {
@@ -1032,7 +1271,7 @@ export default function AdminDashboard({
 
       await addDoc(collection(db, 'leads', selectedLead.id, 'followups'), {
         date: serverTimestamp(),
-        remark: `Admin verified site visit photo and location evidence.`,
+        remark: `${actorLabel} verified site visit photo and location evidence.`,
         employeeId: user.uid
       });
 
@@ -1143,7 +1382,7 @@ export default function AdminDashboard({
             <div className="flex gap-2">
               <button 
                 onClick={() => {
-                  if (employees.length === 0) {
+                  if (leadAssignableMembers.length === 0) {
                     alert('Please add at least one employee first to enable lead allocation.');
                     return;
                   }
@@ -1153,11 +1392,11 @@ export default function AdminDashboard({
                 }}
                 className={cn(
                   "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-md active:scale-95",
-                  employees.length === 0 
+                  leadAssignableMembers.length === 0 
                   ? "bg-gray-400 cursor-not-allowed text-white" 
                   : "bg-blue-600 hover:bg-blue-700 text-white"
                 )}
-                title={employees.length === 0 ? "Add an employee first" : "Add new client"}
+                title={leadAssignableMembers.length === 0 ? "Add an employee first" : "Add new client"}
               >
                 <Plus size={18} />
                 Add Lead
@@ -1282,8 +1521,111 @@ export default function AdminDashboard({
     ) : activeView === 'attendance' ? (
         <div className="space-y-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-bold text-gray-900">Live Attendance Logs</h2>
-            <p className="text-sm text-gray-500 font-medium bg-gray-100 px-3 py-1 rounded-full">Real-time Location Based tracking</p>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Live Attendance Logs</h2>
+              <p className="text-sm text-gray-500 font-medium bg-gray-100 px-3 py-1 rounded-full inline-block mt-2">Real-time Location Based tracking</p>
+            </div>
+            {isManager && (
+              <button
+                type="button"
+                disabled={attendanceLoading}
+                onClick={() => handleManagerAttendance(isManagerClockedIn ? 'clock_out' : 'clock_in')}
+                className={cn(
+                  "inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95",
+                  isManagerClockedIn ? "bg-red-600 hover:bg-red-700 text-white" : "bg-green-600 hover:bg-green-700 text-white",
+                  attendanceLoading && "opacity-60 cursor-not-allowed"
+                )}
+              >
+                {attendanceLoading ? <Loader2 size={16} className="animate-spin" /> : <MapPin size={16} />}
+                {attendanceLoading ? 'Saving...' : isManagerClockedIn ? 'Clock Out' : 'Clock In'}
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-[10px] uppercase tracking-widest text-gray-400 font-black">Team Size</p>
+              <p className="mt-2 text-2xl font-black text-gray-900">{attendanceAnalysis.totals.teamSize}</p>
+            </div>
+            <div className="bg-white border border-green-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-[10px] uppercase tracking-widest text-green-600 font-black">Present Today</p>
+              <p className="mt-2 text-2xl font-black text-green-700">{attendanceAnalysis.totals.presentEmployees}</p>
+            </div>
+            <div className="bg-white border border-blue-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-[10px] uppercase tracking-widest text-blue-600 font-black">Clocked In Now</p>
+              <p className="mt-2 text-2xl font-black text-blue-700">{attendanceAnalysis.totals.clockedInEmployees}</p>
+            </div>
+            <div className="bg-white border border-amber-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-[10px] uppercase tracking-widest text-amber-600 font-black">Checked Out</p>
+              <p className="mt-2 text-2xl font-black text-amber-700">{attendanceAnalysis.totals.checkedOutEmployees}</p>
+            </div>
+            <div className="bg-white border border-red-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-[10px] uppercase tracking-widest text-red-600 font-black">Not Marked</p>
+              <p className="mt-2 text-2xl font-black text-red-700">{attendanceAnalysis.totals.absentEmployees}</p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider">Employee Attendance Analysis (Today)</h3>
+                <p className="text-xs text-gray-500">
+                  {attendanceAnalysis.totals.todayLogsCount} logs | Total worked {formatDuration(attendanceAnalysis.totals.totalWorkedMinutes)} | Avg {formatDuration(attendanceAnalysis.totals.averageWorkedMinutes)} per present employee
+                </p>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Employee</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Status</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">First In</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Last Out</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Worked</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Logs</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {attendanceAnalysis.summaries.map((summary) => (
+                    <tr key={summary.uid} className="hover:bg-gray-50/50 transition-colors">
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-gray-900">{summary.employeeName}</p>
+                        <p className="text-xs text-gray-400">{summary.uid.slice(-6)}</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        {summary.recordsToday === 0 ? (
+                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-gray-100 text-gray-500">Not Marked</span>
+                        ) : summary.isClockedIn ? (
+                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-blue-100 text-blue-600">Clocked In</span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-green-100 text-green-600">Checked Out</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-700 font-medium">
+                        {summary.firstClockIn ? format(summary.firstClockIn, 'p') : '-'}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-700 font-medium">
+                        {summary.lastClockOut ? format(summary.lastClockOut, 'p') : '-'}
+                      </td>
+                      <td className="px-6 py-4 text-sm font-bold text-gray-900">
+                        {summary.recordsToday > 0 ? formatDuration(summary.totalWorkedMinutes) : '-'}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-600">
+                        {summary.recordsToday > 0 ? `${summary.clockInCount} in / ${summary.clockOutCount} out` : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                  {attendanceAnalysis.summaries.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-gray-400 font-medium italic">
+                        No active employees available for attendance analysis.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
@@ -1301,8 +1643,8 @@ export default function AdminDashboard({
                   {attendance.map((log) => (
                     <tr key={log.id} className="hover:bg-gray-50/50 transition-colors">
                       <td className="px-6 py-4">
-                        <p className="font-bold text-gray-900">{log.employeeName}</p>
-                        <p className="text-xs text-gray-400">{log.uid.slice(-6)}</p>
+                        <p className="font-bold text-gray-900">{log.employeeName || 'Unknown Employee'}</p>
+                        <p className="text-xs text-gray-400">{log.uid ? log.uid.slice(-6) : 'N/A'}</p>
                       </td>
                       <td className="px-6 py-4">
                         <span className={cn(
@@ -1317,14 +1659,18 @@ export default function AdminDashboard({
                         <p className="text-xs text-gray-500">{log.timestamp ? format(log.timestamp.toDate(), 'p') : ''}</p>
                       </td>
                       <td className="px-6 py-4">
-                        <a 
-                          href={`https://www.google.com/maps?q=${log.location.latitude},${log.location.longitude}`} 
-                          target="_blank" 
-                          rel="noreferrer"
-                          className="flex items-center gap-2 text-xs font-bold text-blue-600 hover:underline"
-                        >
-                          <History size={14} /> View Location
-                        </a>
+                        {typeof log.location?.latitude === 'number' && typeof log.location?.longitude === 'number' ? (
+                          <a 
+                            href={`https://www.google.com/maps?q=${log.location.latitude},${log.location.longitude}`} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="flex items-center gap-2 text-xs font-bold text-blue-600 hover:underline"
+                          >
+                            <History size={14} /> View Location
+                          </a>
+                        ) : (
+                          <span className="text-xs text-gray-400 font-medium">No GPS data</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1351,7 +1697,7 @@ export default function AdminDashboard({
             </div>
             <button 
               onClick={() => {
-                setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: '' });
+                setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: isManager ? user.uid : '' });
                 setShowAddEmployee(true);
               }}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-bold transition-all shadow-lg active:scale-95"
@@ -1361,7 +1707,7 @@ export default function AdminDashboard({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {employees.map((emp) => (
+            {visibleEmployees.map((emp) => (
               <motion.div 
                 key={emp.uid} 
                 layout
@@ -1398,33 +1744,41 @@ export default function AdminDashboard({
                   )}
                   
                   <div className="flex gap-2 mt-4">
-                    <button 
-                      onClick={() => setShowEditEmployee(emp)}
-                      className="flex-1 py-2 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-xl text-xs font-bold border border-gray-200 transition-colors"
-                    >
-                      Edit Profile
-                    </button>
-                    {emp.role !== 'deleted' ? (
-                      <button 
-                        onClick={() => deleteEmployee(emp.uid)}
-                        className="py-2 px-3 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-colors border border-red-100"
-                        title="Delete Employee"
-                      >
-                        <XCircle size={16} />
-                      </button>
-                    ) : null}
+                    {isManager && emp.uid === user.uid ? (
+                      <div className="w-full py-2 text-center bg-blue-50 text-blue-700 rounded-xl text-xs font-bold border border-blue-100">
+                        Manage your account from Profile
+                      </div>
+                    ) : (
+                      <>
+                        <button 
+                          onClick={() => setShowEditEmployee(emp)}
+                          className="flex-1 py-2 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-xl text-xs font-bold border border-gray-200 transition-colors"
+                        >
+                          Edit Profile
+                        </button>
+                        {emp.role !== 'deleted' ? (
+                          <button 
+                            onClick={() => deleteEmployee(emp.uid)}
+                            className="py-2 px-3 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-colors border border-red-100"
+                            title="Delete Employee"
+                          >
+                            <XCircle size={16} />
+                          </button>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                 </div>
               </motion.div>
             ))}
-            {employees.length === 0 && (
+            {visibleEmployees.length === 0 && (
               <div className="col-span-full py-20 text-center bg-gray-50 rounded-3xl border border-dashed border-gray-200">
                 <Users size={48} className="mx-auto text-gray-300 mb-4" />
                 <p className="text-gray-500 font-bold">No team members found.</p>
                 <p className="text-xs text-gray-400 mt-1">Add your first manager or employee to get started.</p>
                 <button
                   onClick={() => {
-                    setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: '' });
+                    setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: isManager ? user.uid : '' });
                     setShowAddEmployee(true);
                   }}
                   className="text-blue-600 text-sm font-bold mt-2 hover:underline"
@@ -1586,8 +1940,8 @@ export default function AdminDashboard({
                     className="w-full px-6 py-4 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-gray-700"
                   >
                     <option value="">-- Choose Employee --</option>
-                    {employees
-                      .filter(e => e.uid !== reallocateEmployee.uid && e.role === 'employee')
+                    {leadAssignableMembers
+                      .filter(e => e.uid !== reallocateEmployee.uid)
                       .map(e => <option key={e.uid} value={e.uid}>{e.name} ({leads.filter(l => l.assignedTo === e.uid).length} leads)</option>)}
                   </select>
                 </div>
@@ -1852,7 +2206,7 @@ export default function AdminDashboard({
                     <div>
                       <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Re-assign To</label>
                       <select value={editForm.assignedTo || ''} onChange={e => setEditForm({...editForm, assignedTo: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
-                        {employees.filter(e => e.role === 'employee').map(e => <option key={e.uid} value={e.uid}>{e.name}</option>)}
+                        {leadAssignableMembers.map(e => <option key={e.uid} value={e.uid}>{e.name}</option>)}
                       </select>
                     </div>
                   </div>
@@ -1944,7 +2298,7 @@ export default function AdminDashboard({
             className="w-full max-w-md bg-white rounded-[32px] overflow-hidden shadow-2xl flex flex-col"
           >
             <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="text-xl font-bold text-gray-900">Admin Re-assign Lead</h3>
+              <h3 className="text-xl font-bold text-gray-900">Re-assign Lead</h3>
               <button onClick={() => setShowTransferModal(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400">
                 <XCircle size={20} />
               </button>
@@ -1959,8 +2313,8 @@ export default function AdminDashboard({
                 />
               </div>
               <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-                {employees
-                  .filter(emp => emp.role === 'employee' && emp.name.toLowerCase().includes(transferSearch.toLowerCase()))
+                {leadAssignableMembers
+                  .filter(emp => emp.name.toLowerCase().includes(transferSearch.toLowerCase()))
                   .map(emp => (
                     <button
                       key={emp.uid}
@@ -2047,8 +2401,7 @@ export default function AdminDashboard({
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                   >
                     <option value="">Select employee</option>
-                    {employees
-                      .filter(emp => emp.role === 'employee')
+                    {leadAssignableMembers
                       .map(emp => (
                         <option key={emp.uid} value={emp.uid}>{emp.name} ({emp.phone})</option>
                       ))}
@@ -2079,7 +2432,7 @@ export default function AdminDashboard({
                 <label className="block text-sm font-bold text-gray-700 mb-1">Role</label>
                 <select
                   value={employeeForm.role}
-                  onChange={e => setEmployeeForm({ ...employeeForm, role: e.target.value as 'employee' | 'manager', managerId: '' })}
+                  onChange={e => setEmployeeForm({ ...employeeForm, role: e.target.value as 'employee' | 'manager', managerId: isManager ? user.uid : '' })}
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                 >
                   <option value="employee">Employee</option>
@@ -2099,7 +2452,7 @@ export default function AdminDashboard({
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>
-              {employeeForm.role === 'employee' && (
+              {employeeForm.role === 'employee' && !isManager && (
                 <div>
                   <label className="block text-sm font-bold text-gray-700 mb-1">Assign Manager</label>
                   <select
@@ -2112,6 +2465,12 @@ export default function AdminDashboard({
                       <option key={manager.uid} value={manager.uid}>{manager.name}</option>
                     ))}
                   </select>
+                </div>
+              )}
+              {employeeForm.role === 'employee' && isManager && (
+                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+                  <p className="text-xs font-black uppercase tracking-wider text-blue-600">Assigned Manager</p>
+                  <p className="text-sm font-semibold text-blue-800 mt-1">{user.name}</p>
                 </div>
               )}
               <p className="text-xs text-gray-500">

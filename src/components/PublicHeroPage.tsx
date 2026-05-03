@@ -54,7 +54,7 @@ export default function PublicHeroPage() {
   return (
     <div
       className="min-h-screen bg-[radial-gradient(circle_at_10%_10%,#fef3c7_0%,transparent_35%),radial-gradient(circle_at_90%_20%,#dbeafe_0%,transparent_32%),linear-gradient(180deg,#fffdf7_0%,#ffffff_50%,#f8fafc_100%)] text-slate-900"
-      style={{ fontFamily: '"Poppins", "Segoe UI", sans-serif' }}
+      style={{ fontFamily: '"Poppins","Segoe UI",sans-serif' }}
     >
       <main className="mx-auto max-w-6xl px-5 py-14 sm:py-20">
         <motion.section
@@ -83,24 +83,12 @@ export default function PublicHeroPage() {
               {items.length} live listings available
             </span>
           </div>
-          <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="mt-8">
             <a
-              href="/login?as=admin"
-              className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-center text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:bg-blue-50"
+              href="/login"
+              className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 py-3 text-center text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 sm:w-auto sm:min-w-[280px]"
             >
-              Continue as Admin
-            </a>
-            <a
-              href="/login?as=manager"
-              className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-center text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:bg-blue-50"
-            >
-              Continue as Manager
-            </a>
-            <a
-              href="/login?as=employee"
-              className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-center text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:bg-blue-50"
-            >
-              Continue as Employee
+              Continue to Login
             </a>
           </div>
         </motion.section>
@@ -150,7 +138,7 @@ export default function PublicHeroPage() {
                       <span className="font-medium text-slate-600">{getAreaText(item)}</span>
                     </div>
                     <p className="text-xl font-semibold text-slate-900">
-                      ₹ {Number(item.rate || 0).toLocaleString()}
+                      Rs. {Number(item.rate || 0).toLocaleString()}
                     </p>
                   </div>
                 </motion.article>
@@ -162,3 +150,4 @@ export default function PublicHeroPage() {
     </div>
   );
 }
+

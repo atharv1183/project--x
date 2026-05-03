@@ -452,6 +452,10 @@ export default function EmployeeDashboard({
 
     if (!normalizedPhone) return alert('Mobile number is mandatory.');
     if (normalizedPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
+    const existingLead = leads.find((lead) => normalizePhone(lead.phone || '') === normalizedPhone);
+    if (existingLead) {
+      return alert(`Lead with mobile ${normalizedPhone} already exists (${existingLead.name || 'Unknown'}).`);
+    }
 
     setLoading(true);
     try {

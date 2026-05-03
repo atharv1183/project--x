@@ -1540,7 +1540,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                             </div>
                           </div>
                           
-                          {formData.type === 'house' && (
+                          {formData.listingMode === 'single' && formData.type === 'house' && (
                             <motion.div 
                               initial={{ opacity: 0, height: 0 }}
                               animate={{ opacity: 1, height: 'auto' }}
@@ -1602,6 +1602,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
                       {/* Right Column: Measurements & Media */}
                       <div className="space-y-10">
+                        {formData.listingMode === 'single' && (
                         <section className="bg-slate-50 rounded-[32px] p-8 border border-slate-100 space-y-6">
                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <h4 className="text-sm font-black text-slate-900 uppercase tracking-widest">Measurements</h4>
@@ -1649,6 +1650,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                               })}
                            </div>
                         </section>
+                        )}
 
                         {formData.listingMode === 'single' && (
                         <section className="space-y-6">
@@ -1860,36 +1862,39 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                     </div>
 
                                     {unit.type === 'house' && (
-                                      <div className="grid grid-cols-2 gap-3">
-                                        <input
-                                          type="number"
-                                          value={unit.bhk}
-                                          onChange={(e) => updateProjectUnit(unit.id, { bhk: e.target.value })}
-                                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                                          placeholder="BHK"
-                                        />
-                                        <input
-                                          type="number"
-                                          value={unit.bathrooms}
-                                          onChange={(e) => updateProjectUnit(unit.id, { bathrooms: e.target.value })}
-                                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                                          placeholder="Bathrooms"
-                                        />
-                                        <select
-                                          value={unit.houseType}
-                                          onChange={(e) => updateProjectUnit(unit.id, { houseType: e.target.value as HouseType })}
-                                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700"
-                                        >
-                                          <option value="simplex">Simplex</option>
-                                          <option value="semi-duplex">Semi-Duplex</option>
-                                          <option value="duplex">Duplex</option>
-                                        </select>
-                                        <input
-                                          value={unit.kitchenType}
-                                          onChange={(e) => updateProjectUnit(unit.id, { kitchenType: e.target.value })}
-                                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                                          placeholder="Kitchen Type"
-                                        />
+                                      <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4 space-y-3">
+                                        <p className="text-[10px] font-black text-blue-700 uppercase tracking-widest">House Details</p>
+                                        <div className="grid grid-cols-2 gap-3">
+                                          <input
+                                            type="number"
+                                            value={unit.bhk}
+                                            onChange={(e) => updateProjectUnit(unit.id, { bhk: e.target.value })}
+                                            className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
+                                            placeholder="BHK"
+                                          />
+                                          <input
+                                            type="number"
+                                            value={unit.bathrooms}
+                                            onChange={(e) => updateProjectUnit(unit.id, { bathrooms: e.target.value })}
+                                            className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
+                                            placeholder="Bathrooms"
+                                          />
+                                          <select
+                                            value={unit.houseType}
+                                            onChange={(e) => updateProjectUnit(unit.id, { houseType: e.target.value as HouseType })}
+                                            className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700"
+                                          >
+                                            <option value="simplex">Simplex</option>
+                                            <option value="semi-duplex">Semi-Duplex</option>
+                                            <option value="duplex">Duplex</option>
+                                          </select>
+                                          <input
+                                            value={unit.kitchenType}
+                                            onChange={(e) => updateProjectUnit(unit.id, { kitchenType: e.target.value })}
+                                            className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
+                                            placeholder="Kitchen Type"
+                                          />
+                                        </div>
                                       </div>
                                     )}
 

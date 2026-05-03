@@ -31,6 +31,14 @@ const adminTools: ToolCard[] = [
   { id: 'employees', title: 'Team', description: 'Manage employee accounts and status.', icon: UserPlus },
 ];
 
+const managerTools: ToolCard[] = [
+  { id: 'leads', title: 'Leads', description: 'Manage your leads and your team leads.', icon: Users },
+  { id: 'attendance', title: 'Attendance', description: 'Track your and your team clock-in/out logs.', icon: Clock },
+  { id: 'inventory', title: 'Inventory', description: 'View and manage property inventory.', icon: LayoutGrid },
+  { id: 'requirements', title: 'Requirements', description: 'Track customer needs for your team.', icon: FileText },
+  { id: 'employees', title: 'Team', description: 'Manage employees assigned under you.', icon: UserPlus },
+];
+
 const employeeTools: ToolCard[] = [
   { id: 'today', title: 'Leads', description: 'Open today follow-up queue.', icon: Users },
   { id: 'attendance', title: 'Attendance', description: 'Use clock-in and clock-out with GPS.', icon: Clock },
@@ -46,8 +54,8 @@ type ToolsPageProps = {
 };
 
 export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
-  const isAdminLike = user.role === 'admin' || user.role === 'manager';
-  const cards = isAdminLike ? adminTools : employeeTools;
+  const isSuperAdmin = user.role === 'admin';
+  const cards = user.role === 'admin' ? adminTools : user.role === 'manager' ? managerTools : employeeTools;
   const leadsImportInputRef = useRef<HTMLInputElement | null>(null);
   const inventoryImportInputRef = useRef<HTMLInputElement | null>(null);
   const [dataToolsBusy, setDataToolsBusy] = useState<string | null>(null);
@@ -310,7 +318,7 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
         ))}
       </div>
 
-      {isAdminLike && (
+      {isSuperAdmin && (
         <div className="bg-white border border-gray-100 rounded-3xl p-5 sm:p-6 shadow-sm">
           <div className="flex items-center gap-2 mb-4">
             <Database size={18} className="text-blue-600" />
