@@ -17,7 +17,9 @@ import {
 import { Lead, User, Followup, Attendance, Notification, OperationType, Location, Requirement } from '../types';
 import { handleFirestoreError } from '../lib/utils';
 import InventoryManagement from './InventoryManagement';
+import SalesPerformanceDashboard from './SalesPerformanceDashboard';
 import { 
+  BarChart3,
   Calendar, 
   MessageSquare, 
   Phone, 
@@ -97,8 +99,24 @@ function normalizePhone(value: string): string {
   return value.replace(/\D/g, '');
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: number | undefined;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+    }
+  }
+}
+
 type LeadQueueTab = 'pending' | 'today' | 'upcoming';
-type EmployeeView = LeadQueueTab | 'requirements' | 'inventory';
+type EmployeeView = LeadQueueTab | 'performance' | 'requirements' | 'inventory';
 
 type EmployeeDashboardProps = {
   user: User;
@@ -147,6 +165,7 @@ export default function EmployeeDashboard({
   const [nextDate, setNextDate] = useState('');
   const [showHistory, setShowHistory] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<Lead['status'] | null>(null);
+  const [kycFiles, setKycFiles] = useState<{ aadhaar: File | null; pan: File | null }>({ aadhaar: null, pan: null });
   const videoRef = useRef<HTMLVideoElement>(null);
   const [visitStep, setVisitStep] = useState<'idle' | 'capture' | 'confirm' | 'verifying' | 'verified'>('idle');
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -154,6 +173,7 @@ export default function EmployeeDashboard({
 
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [lastAttendance, setLastAttendance] = useState<Attendance | null>(null);
+  const [attendanceRecords, setAttendanceRecords] = useState<Attendance[]>([]);
   const [employees, setEmployees] = useState<User[]>([]);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferSearch, setTransferSearch] = useState('');
@@ -164,6 +184,9 @@ export default function EmployeeDashboard({
   const tabsScrollRef = useRef<HTMLDivElement | null>(null);
   const [canScrollTabsLeft, setCanScrollTabsLeft] = useState(false);
   const [canScrollTabsRight, setCanScrollTabsRight] = useState(false);
+  const cloudinaryCloudName = String(import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || '').trim();
+  const cloudinaryUploadPreset = String(import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || '').trim();
+  const hasCloudinaryConfig = cloudinaryCloudName.length > 0 && cloudinaryUploadPreset.length > 0;
 
   useEffect(() => {
     if (!backSignal || backSignal === processedBackSignalRef.current) {
@@ -314,13 +337,16 @@ export default function EmployeeDashboard({
     const unsubscribe = onSnapshot(qAttendance, (snapshot) => {
       if (snapshot.empty) {
         setLastAttendance(null);
+        setAttendanceRecords([]);
         return;
       }
 
-      const latestAttendance = snapshot.docs
+      const records = snapshot.docs
         .map(doc => ({ id: doc.id, ...doc.data() } as Attendance))
-        .sort((a, b) => toMillis(b.timestamp) - toMillis(a.timestamp))[0];
+        .sort((a, b) => toMillis(b.timestamp) - toMillis(a.timestamp));
+      const latestAttendance = records[0];
 
+      setAttendanceRecords(records);
       setLastAttendance(latestAttendance ?? null);
     }, (error) => handleFirestoreError(error, OperationType.GET, 'attendance'));
 
@@ -521,12 +547,52 @@ export default function EmployeeDashboard({
   useEffect(() => {
     setSelectedStatus(null);
     setShowHistory(false);
+    setKycFiles({ aadhaar: null, pan: null });
   }, [currentLead?.id]);
+
+  const uploadKycDocument = async (file: File, leadId: string, docType: 'aadhaar' | 'pan') => {
+    if (!hasCloudinaryConfig) {
+      throw new Error('Cloudinary is not configured. Add VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET.');
+    }
+
+    const endpoint = `https://api.cloudinary.com/v1_1/${cloudinaryCloudName}/auto/upload`;
+    const body = new FormData();
+    body.append('file', file);
+    body.append('upload_preset', cloudinaryUploadPreset);
+    body.append('folder', `leads/${leadId}/kyc/${docType}`);
+
+    const response = await withTimeout(
+      fetch(endpoint, { method: 'POST', body }),
+      12000,
+      `Upload timed out for ${file.name}.`
+    );
+
+    const result = await withTimeout(
+      response.json() as Promise<{ secure_url?: string; error?: { message?: string } }>,
+      8000,
+      `Could not parse upload response for ${file.name}.`
+    );
+
+    if (!response.ok || !result.secure_url) {
+      const reason = result?.error?.message || 'Unknown upload error';
+      throw new Error(`KYC upload failed for ${file.name}: ${reason}`);
+    }
+
+    return result.secure_url;
+  };
 
   const handleUpdateLead = async (status: Lead['status']) => {
     if (!currentLead) return;
     if (currentLead.assignedTo !== user.uid) return alert('This lead is not assigned to you. You can only view it.');
     if (!remark) return alert('Remark is mandatory for call made');
+    if (status === 'deal_pending') {
+      const hasAadhaar = Boolean(currentLead.kycAadhaarUrl || kycFiles.aadhaar);
+      const hasPan = Boolean(currentLead.kycPanUrl || kycFiles.pan);
+      if (!hasAadhaar || !hasPan) return alert('Aadhaar card and PAN card are mandatory for deal review.');
+      if ((kycFiles.aadhaar || kycFiles.pan) && !hasCloudinaryConfig) {
+        return alert('Cloudinary is not configured. Please set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET in .env.local.');
+      }
+    }
     setLoading(true);
 
     try {
@@ -537,6 +603,18 @@ export default function EmployeeDashboard({
         updatedAt: serverTimestamp(),
         lastInteractionAt: serverTimestamp(),
       };
+
+      if (status === 'deal_pending') {
+        if (kycFiles.aadhaar) {
+          updateData.kycAadhaarUrl = await uploadKycDocument(kycFiles.aadhaar, currentLead.id, 'aadhaar');
+          updateData.kycAadhaarName = kycFiles.aadhaar.name;
+        }
+        if (kycFiles.pan) {
+          updateData.kycPanUrl = await uploadKycDocument(kycFiles.pan, currentLead.id, 'pan');
+          updateData.kycPanName = kycFiles.pan.name;
+        }
+        updateData.kycUploadedAt = serverTimestamp();
+      }
 
       if (nextDate && !isNaN(new Date(nextDate).getTime())) {
         updateData.nextFollowupAt = Timestamp.fromDate(new Date(nextDate));
@@ -555,6 +633,7 @@ export default function EmployeeDashboard({
       setRemark('');
       setNextDate('');
       setSelectedStatus(null);
+      setKycFiles({ aadhaar: null, pan: null });
       setCapturedImage(null);
       // Move to next lead if exists
       if (selectedLeadIndex !== null && selectedLeadIndex < filteredLeads.length - 1) {
@@ -766,6 +845,7 @@ export default function EmployeeDashboard({
         >
         {[
           { id: 'pending', icon: Clock, label: 'Pending' },
+          { id: 'performance', icon: BarChart3, label: 'Dashboard' },
           { id: 'today', icon: Calendar, label: 'Today' },
           { id: 'upcoming', icon: TrendingUp, label: 'Upcoming' },
           { id: 'requirements', icon: FileText, label: 'Needs' },
@@ -811,7 +891,15 @@ export default function EmployeeDashboard({
         </button>
       </div>
 
-      {activeTab === 'requirements' ? (
+      {activeTab === 'performance' ? (
+        <SalesPerformanceDashboard
+          user={user}
+          leads={leads}
+          employees={employees}
+          attendance={attendanceRecords}
+          scope="employee"
+        />
+      ) : activeTab === 'requirements' ? (
         <div className="space-y-7 pt-3 sm:pt-4">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">Requirement List</h2>
@@ -1157,6 +1245,50 @@ export default function EmployeeDashboard({
                         <ShieldCheck className="w-8 h-8 group-hover:scale-110 transition-transform text-indigo-400" />
                         <span className="font-black text-xs uppercase tracking-widest">Submit for Review</span>
                       </button>
+                    </div>
+
+                    <div className="space-y-4 p-6 bg-indigo-50/40 rounded-[32px] border border-indigo-100">
+                      <h4 className="font-black text-slate-900 flex items-center gap-2 uppercase text-xs tracking-[0.2em]">
+                        <FileText className="text-indigo-500" size={18} /> KYC Documents
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {([
+                          { key: 'aadhaar' as const, label: 'Aadhaar Card', existingUrl: currentLead.kycAadhaarUrl, existingName: currentLead.kycAadhaarName },
+                          { key: 'pan' as const, label: 'PAN Card', existingUrl: currentLead.kycPanUrl, existingName: currentLead.kycPanName },
+                        ]).map((docItem) => {
+                          const selectedFile = kycFiles[docItem.key];
+                          return (
+                            <label key={docItem.key} className="block rounded-2xl border-2 border-dashed border-indigo-200 bg-white p-4 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-all">
+                              <span className="block text-[10px] font-black text-indigo-600 uppercase tracking-widest">
+                                {docItem.label} <span className="text-rose-500">*</span>
+                              </span>
+                              <span className="mt-2 block text-xs font-bold text-slate-600 truncate">
+                                {selectedFile?.name || docItem.existingName || (docItem.existingUrl ? 'Uploaded document' : 'Upload image or PDF')}
+                              </span>
+                              {docItem.existingUrl && !selectedFile && (
+                                <a
+                                  href={docItem.existingUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={(event) => event.stopPropagation()}
+                                  className="mt-2 inline-flex text-[10px] font-black uppercase tracking-widest text-blue-600 hover:underline"
+                                >
+                                  View Current
+                                </a>
+                              )}
+                              <input
+                                type="file"
+                                accept="image/*,.pdf"
+                                className="hidden"
+                                onChange={(event) => {
+                                  const file = event.target.files?.[0] || null;
+                                  setKycFiles((prev) => ({ ...prev, [docItem.key]: file }));
+                                }}
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
 
                     {currentLead.siteVisitPhoto && (
@@ -1563,7 +1695,7 @@ export default function EmployeeDashboard({
               <h3 className="text-2xl font-bold mb-7 text-gray-900">Add New Lead</h3>
               <form onSubmit={handleAddLead} className="space-y-5">
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">Customer Name</label>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">Customer Name <span className="text-rose-500">*</span></label>
                   <input
                     required
                     value={leadForm.name}
@@ -1573,7 +1705,7 @@ export default function EmployeeDashboard({
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">Mobile Number *</label>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">Mobile Number <span className="text-rose-500">*</span></label>
                   <input
                     required
                     type="tel"
@@ -1587,7 +1719,7 @@ export default function EmployeeDashboard({
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">Source *</label>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">Source <span className="text-rose-500">*</span></label>
                   <input
                     value={leadForm.source}
                     disabled
@@ -1657,7 +1789,7 @@ export default function EmployeeDashboard({
                 <div className="flex-1 min-h-0 p-5 sm:p-10 space-y-5 sm:space-y-6 overflow-y-auto custom-scrollbar">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                     <div className="space-y-2">
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Client Name *</label>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Client Name <span className="text-rose-500">*</span></label>
                       <input 
                         required
                         value={reqForm.name}
@@ -1667,7 +1799,7 @@ export default function EmployeeDashboard({
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Phone Number *</label>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Phone Number <span className="text-rose-500">*</span></label>
                       <input 
                         required
                         type="tel"
@@ -1681,7 +1813,7 @@ export default function EmployeeDashboard({
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Requirement Type *</label>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Requirement Type <span className="text-rose-500">*</span></label>
                       <select 
                         required
                         value={reqForm.type}

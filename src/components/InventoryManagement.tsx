@@ -22,6 +22,7 @@ import {
   ListingMode,
   InventoryVisibility,
   ProjectUnit,
+  Broker,
   User, 
   OperationType 
 } from '../types';
@@ -47,7 +48,9 @@ import {
   LayoutGrid,
   FileCheck,
   FileText,
-  Film
+  Film,
+  Link2,
+  ExternalLink
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -238,10 +241,39 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   }
 }
 
+function RequiredLabel({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return (
+    <label className={className}>
+      {children} <span className="text-rose-500">*</span>
+    </label>
+  );
+}
+
+function normalizeVideoLink(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+function isDirectVideoUrl(url: string): boolean {
+  return /\.(mp4|webm|ogg|mov|m4v)(\?.*)?(#.*)?$/i.test(url)
+    || /res\.cloudinary\.com\/.+\/video\/upload/i.test(url);
+}
+
+function getVideoLinkLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return 'Video link';
+  }
+}
+
 export default function InventoryManagement({ user, onBack }: InventoryManagementProps) {
   const isAdmin = user.role === 'admin' || user.role === 'manager';
+  const isSuperAdmin = user.role === 'admin';
   type AreaUnit = keyof typeof AREA_CONVERSIONS;
-  type ProjectUnitDraft = ProjectUnit & {
+  type ProjectUnitDraft = Omit<ProjectUnit, 'areaValue' | 'rate' | 'bhk' | 'bathrooms'> & {
     newPhotos: File[];
     areaValue: string | number;
     rate: string | number;
@@ -272,6 +304,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   });
 
   const [items, setItems] = useState<InventoryItem[]>([]);
+  const [brokers, setBrokers] = useState<Broker[]>([]);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<'all' | 'approved' | 'non_approved' | 'pending' | 'draft'>('all');
@@ -290,6 +323,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [formData, setFormData] = useState({
     title: '',
+    description: '',
+    brokerId: '',
     visibilityScope: 'internal' as InventoryVisibility,
     listingMode: 'single' as ListingMode,
     type: 'house' as InventoryType,
@@ -324,6 +359,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     videos: [],
     attachments: []
   });
+  const [videoLinks, setVideoLinks] = useState<string[]>([]);
+  const [videoLinkInput, setVideoLinkInput] = useState('');
 
   useEffect(() => {
     let unsubscribeApproved: () => void;
@@ -384,6 +421,20 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   }, [isAdmin, user.uid]);
 
   useEffect(() => {
+    if (!isSuperAdmin) {
+      setBrokers([]);
+      return;
+    }
+
+    const q = query(collection(db, 'brokers'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setBrokers(snapshot.docs.map((brokerDoc) => ({ id: brokerDoc.id, ...brokerDoc.data() } as Broker)));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'brokers'));
+
+    return () => unsubscribe();
+  }, [isSuperAdmin]);
+
+  useEffect(() => {
     if (!isAdmin || items.length === 0) return;
     const missingVisibility = items.filter((item) => !item.visibilityScope);
     if (missingVisibility.length === 0) return;
@@ -432,6 +483,30 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         projectUnits: prev.projectUnits.filter((unit) => unit.id !== unitId),
       };
     });
+  };
+
+  const addVideoLink = () => {
+    const normalizedLink = normalizeVideoLink(videoLinkInput);
+    if (!normalizedLink) return;
+
+    try {
+      new URL(normalizedLink);
+    } catch {
+      alert('Please enter a valid video URL.');
+      return;
+    }
+
+    const existingLinks = new Set([
+      ...videoLinks,
+      ...(editingItem?.videos || []),
+    ]);
+    if (existingLinks.has(normalizedLink)) {
+      alert('This video link is already added.');
+      return;
+    }
+
+    setVideoLinks((prev) => [...prev, normalizedLink]);
+    setVideoLinkInput('');
   };
 
   const handleFileUpload = async (file: File, path: string, timeoutMs: number = 12000) => {
@@ -517,6 +592,11 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     try {
       const uploadWarnings: string[] = [];
       const videoUrls = editingItem ? [...(editingItem.videos || [])] : [];
+      videoLinks.forEach((link) => {
+        if (!videoUrls.includes(link)) {
+          videoUrls.push(link);
+        }
+      });
       for (const file of files.videos) {
         try {
           const url = await handleFileUpload(file, 'videos');
@@ -543,6 +623,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
       const payload: Partial<InventoryItem> = {
         title: formData.title,
+        description: formData.description,
         visibilityScope: formData.visibilityScope,
         listingMode: isProjectListing ? 'project' : 'single',
         isProject: isProjectListing,
@@ -555,6 +636,13 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         attachments: attachmentData,
         updatedAt: serverTimestamp(),
       };
+
+      if (isSuperAdmin) {
+        const selectedBroker = brokers.find((broker) => broker.id === formData.brokerId);
+        payload.brokerId = selectedBroker?.id || '';
+        payload.brokerName = selectedBroker?.name || '';
+        payload.brokerPhone = selectedBroker?.phone || '';
+      }
 
       if (isProjectListing) {
         const projectUnitsPayload: ProjectUnit[] = [];
@@ -681,6 +769,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       setEditingItem(null);
       setFormData({
         title: '',
+        description: '',
+        brokerId: '',
         visibilityScope: 'internal',
         listingMode: 'single',
         type: 'house',
@@ -704,6 +794,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         longitude: 78.9629
       });
       setFiles({ photos: [], videos: [], attachments: [] });
+      setVideoLinks([]);
+      setVideoLinkInput('');
       
       const successMessage = isDraftSubmission
         ? 'Listing saved as draft!'
@@ -776,6 +868,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     setEditingItem(item);
     setFormData({
       title: item.title,
+      description: item.description || '',
+      brokerId: item.brokerId || '',
       visibilityScope: item.visibilityScope || 'internal',
       listingMode: inferredListingMode,
       type: item.type,
@@ -798,6 +892,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       latitude: (item as any).latitude || 20.5937,
       longitude: (item as any).longitude || 78.9629
     });
+    setVideoLinks([]);
+    setVideoLinkInput('');
     setShowForm(true);
   };
 
@@ -943,7 +1039,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       '',
       `4. Type: ${getTypeWithSubType(item)}`,
       '',
-      `5. Size: ${getPrimarySizeText(item)}`
+      `5. Size: ${getPrimarySizeText(item)}`,
+      item.description ? `\n6. Description: ${item.description}` : ''
     ].join('\n');
 
     const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
@@ -982,6 +1079,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
               setEditingItem(null);
               setFormData({
                 title: '',
+                description: '',
+                brokerId: '',
                 visibilityScope: 'internal',
                 listingMode: 'single',
                 type: 'house',
@@ -1005,6 +1104,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                 longitude: 78.9629
               });
               setFiles({ photos: [], videos: [], attachments: [] });
+              setVideoLinks([]);
+              setVideoLinkInput('');
               setShowForm(true);
             }}
             className="px-6 py-3 bg-slate-900 text-white font-bold text-xs uppercase tracking-widest rounded-2xl shadow-xl shadow-slate-200 hover:bg-slate-800 transition-all flex items-center gap-2 active:scale-95"
@@ -1219,16 +1320,39 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                       {getTypeWithSubType(item)}
                     </p>
                   )}
+                  {item.description && (
+                    <p className="text-xs font-medium text-slate-500 leading-relaxed line-clamp-3">
+                      {item.description}
+                    </p>
+                  )}
+                  {isSuperAdmin && item.brokerName && (
+                    <p className="text-[10px] font-black text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1.5 rounded-xl inline-flex w-fit uppercase tracking-widest">
+                      Broker: {item.brokerName}
+                    </p>
+                  )}
                 </div>
 
                 {!!item.videos?.[0] && (
                   <div className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-50">
-                    <video
-                      src={item.videos[0]}
-                      controls
-                      preload="metadata"
-                      className="w-full h-40 object-cover bg-black"
-                    />
+                    {isDirectVideoUrl(item.videos[0]) ? (
+                      <video
+                        src={item.videos[0]}
+                        controls
+                        preload="metadata"
+                        className="w-full h-40 object-cover bg-black"
+                      />
+                    ) : (
+                      <a
+                        href={item.videos[0]}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex h-40 flex-col items-center justify-center gap-3 text-indigo-600 hover:bg-indigo-50 transition-colors"
+                      >
+                        <ExternalLink size={24} />
+                        <span className="text-xs font-black uppercase tracking-widest">Open Video Link</span>
+                        <span className="max-w-[80%] truncate text-[10px] font-bold text-slate-400">{getVideoLinkLabel(item.videos[0])}</span>
+                      </a>
+                    )}
                   </div>
                 )}
 
@@ -1358,13 +1482,23 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
                           <div className="space-y-4">
                             <div className="space-y-2">
-                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Listing Title</label>
+                              <RequiredLabel className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Listing Title</RequiredLabel>
                               <input 
                                 required
                                 value={formData.title}
                                 onChange={e => setFormData({...formData, title: e.target.value})}
                                 className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:bg-white outline-none font-bold text-slate-700 transition-all"
                                 placeholder="Prime Property Title"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Description</label>
+                              <textarea
+                                value={formData.description}
+                                onChange={e => setFormData({ ...formData, description: e.target.value })}
+                                className="w-full h-28 px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:bg-white outline-none font-medium text-slate-700 transition-all resize-none"
+                                placeholder="Property notes, owner terms, access details..."
                               />
                             </div>
 
@@ -1404,7 +1538,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                               <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Property Type</label>
+                                <RequiredLabel className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Property Type</RequiredLabel>
                                 <select 
                                   value={formData.type}
                                   onChange={e => {
@@ -1415,12 +1549,13 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                   className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700 transition-all"
                                 >
                                   <option value="house">House/Villa</option>
+                                  <option value="zameen">Land</option>
                                   <option value="others">Others</option>
                                   <option value="plot">Plot (Legacy)</option>
                                 </select>
                               </div>
                               <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Category</label>
+                                <RequiredLabel className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Category</RequiredLabel>
                                 <select
                                   value={formData.subType}
                                   onChange={e => setFormData({ ...formData, subType: e.target.value })}
@@ -1433,8 +1568,25 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                   ))}
                                 </select>
                               </div>
+                              {isSuperAdmin && (
+                                <div className="space-y-2 sm:col-span-2">
+                                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Assign Broker</label>
+                                  <select
+                                    value={formData.brokerId}
+                                    onChange={e => setFormData({ ...formData, brokerId: e.target.value })}
+                                    className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700 transition-all"
+                                  >
+                                    <option value="">No broker assigned</option>
+                                    {brokers.map((broker) => (
+                                      <option key={broker.id} value={broker.id}>
+                                        {broker.name} ({broker.phone})
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
                               <div className="space-y-2 sm:col-span-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Approval Status</label>
+                                <RequiredLabel className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Approval Status</RequiredLabel>
                                 <select
                                   required
                                   value={formData.approvalStatus}
@@ -1446,7 +1598,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                 </select>
                               </div>
                               <div className="space-y-2 sm:col-span-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Rate (₹)</label>
+                                <RequiredLabel className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Rate</RequiredLabel>
                                 <input 
                                   required={formData.listingMode === 'single'}
                                   type="number"
@@ -1470,7 +1622,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
                           <div className="space-y-4">
                             <div className="space-y-2">
-                               <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Primary Location</label>
+                               <RequiredLabel className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Primary Location</RequiredLabel>
                                <input 
                                   required
                                   value={formData.location}
@@ -1496,7 +1648,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
                             <div className="space-y-3 pt-2">
                               <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1 flex items-center gap-2">
-                                <Maximize2 size={12} className="text-blue-500" /> Pin Exact Location (Mandatory)
+                                <Maximize2 size={12} className="text-blue-500" /> Pin Exact Location <span className="text-rose-500">*</span>
                               </label>
                               {hasMapsApiKey ? (
                                 <MapPicker
@@ -1605,7 +1757,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                         {formData.listingMode === 'single' && (
                         <section className="bg-slate-50 rounded-[32px] p-8 border border-slate-100 space-y-6">
                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                            <h4 className="text-sm font-black text-slate-900 uppercase tracking-widest">Measurements</h4>
+                            <h4 className="text-sm font-black text-slate-900 uppercase tracking-widest">Measurements <span className="text-rose-500">*</span></h4>
                             <div
                               className="grid w-full grid-cols-3 sm:grid-cols-5 gap-1.5 p-1.5 bg-white border border-slate-200 rounded-xl"
                             >
@@ -1659,7 +1811,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                 <div className="w-10 h-10 rounded-xl bg-orange-500 text-white flex items-center justify-center">
                                   <ImageIcon size={20} />
                                 </div>
-                                <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Photos</h3>
+                                <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Photos <span className="text-rose-500">*</span></h3>
                              </div>
                              <p className="text-[10px] font-bold text-slate-400 uppercase">Min 1 Required</p>
                            </header>
@@ -1710,20 +1862,62 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                              <p className="text-[10px] font-bold text-slate-400 uppercase">Optional</p>
                            </header>
 
+                           <div className="space-y-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
+                              <div className="relative">
+                                <Link2 size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                                <input
+                                  type="url"
+                                  value={videoLinkInput}
+                                  onChange={(e) => setVideoLinkInput(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      addVideoLink();
+                                    }
+                                  }}
+                                  className="w-full pl-11 pr-4 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-slate-700 transition-all"
+                                  placeholder="Paste video link (YouTube, Drive, Vimeo, etc.)"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                onClick={addVideoLink}
+                                className="px-5 py-4 bg-indigo-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-indigo-700 transition-colors"
+                              >
+                                Add Link
+                              </button>
+                            </div>
+
                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                              {[...files.videos, ...(editingItem?.videos || [])].map((video, i) => (
+                              {[...files.videos, ...videoLinks, ...(editingItem?.videos || [])].map((video, i) => (
                                  <div key={`video-${i}`} className="relative rounded-2xl overflow-hidden bg-slate-100 group border border-slate-200">
-                                    <video
-                                      src={typeof video === 'string' ? video : URL.createObjectURL(video)}
-                                      controls
-                                      preload="metadata"
-                                      className="w-full h-48 object-cover bg-black"
-                                    />
+                                    {typeof video === 'string' && !isDirectVideoUrl(video) ? (
+                                      <a
+                                        href={video}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="flex h-48 flex-col items-center justify-center gap-3 bg-indigo-50/60 px-5 text-center text-indigo-600 hover:bg-indigo-50 transition-colors"
+                                      >
+                                        <ExternalLink size={24} />
+                                        <span className="text-xs font-black uppercase tracking-widest">Open Video Link</span>
+                                        <span className="max-w-full truncate text-[11px] font-bold text-slate-500">{getVideoLinkLabel(video)}</span>
+                                      </a>
+                                    ) : (
+                                      <video
+                                        src={typeof video === 'string' ? video : URL.createObjectURL(video)}
+                                        controls
+                                        preload="metadata"
+                                        className="w-full h-48 object-cover bg-black"
+                                      />
+                                    )}
                                     <button
                                        type="button"
                                        onClick={() => {
                                           if (typeof video === 'string') {
-                                            if (editingItem) {
+                                            if (videoLinks.includes(video)) {
+                                              setVideoLinks(videoLinks.filter((link) => link !== video));
+                                            } else if (editingItem) {
                                               setEditingItem({
                                                 ...editingItem,
                                                 videos: (editingItem.videos || []).filter((_, idx) => (editingItem.videos || [])[idx] !== video)
@@ -1757,6 +1951,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                    }}
                                  />
                               </label>
+                           </div>
                            </div>
                         </section>
 
@@ -1812,8 +2007,9 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                         }}
                                         className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none font-black text-slate-700"
                                       >
-                                        <option value="house">House/Villa</option>
-                                        <option value="others">Others</option>
+                                          <option value="house">House/Villa</option>
+                                          <option value="zameen">Land</option>
+                                          <option value="others">Others</option>
                                         <option value="plot">Plot (Legacy)</option>
                                       </select>
                                       <select

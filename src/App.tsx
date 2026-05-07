@@ -17,15 +17,15 @@ import PublicHeroPage from './components/PublicHeroPage';
 import { LogOut, Home, ArrowLeft, UserCircle2, Wrench } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-type AdminDashboardView = 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory';
-type EmployeeDashboardView = 'pending' | 'today' | 'upcoming' | 'requirements' | 'inventory';
+type AdminDashboardView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory';
+type EmployeeDashboardView = 'performance' | 'pending' | 'today' | 'upcoming' | 'requirements' | 'inventory';
 type DashboardTarget = ToolTarget | null;
 
 const isAdminView = (view: DashboardTarget): view is AdminDashboardView =>
-  view === 'leads' || view === 'employees' || view === 'attendance' || view === 'requirements' || view === 'inventory';
+  view === 'performance' || view === 'leads' || view === 'employees' || view === 'attendance' || view === 'requirements' || view === 'inventory';
 
 const isEmployeeView = (view: DashboardTarget): view is EmployeeDashboardView =>
-  view === 'pending' || view === 'today' || view === 'upcoming' || view === 'requirements' || view === 'inventory';
+  view === 'performance' || view === 'pending' || view === 'today' || view === 'upcoming' || view === 'requirements' || view === 'inventory';
 
 export default function App() {
   const pathname = window.location.pathname.toLowerCase();

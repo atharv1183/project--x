@@ -100,9 +100,15 @@ service cloud.firestore {
     function isValidInventory(data) {
       return data.keys().hasAll(['title', 'type', 'rate', 'location', 'status', 'submitterId', 'submitterName', 'createdAt', 'updatedAt'])
         && data.title is string && data.title.size() > 0
-        && data.type in ['zameen', 'plot', 'house']
+        && data.type in ['zameen', 'plot', 'house', 'others']
         && data.status in ['draft', 'pending_approval', 'approved', 'rejected']
         && data.submitterId == request.auth.uid;
+    }
+
+    function isValidBroker(data) {
+      return data.keys().hasAll(['name', 'phone', 'createdAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15;
     }
 
     // ---------------------------------------------------------
@@ -126,6 +132,13 @@ service cloud.firestore {
         (resource.data.submitterId == request.auth.uid && (resource.data.status == 'draft' || resource.data.status == 'rejected' || resource.data.status == 'pending_approval'))
       );
       allow delete: if isAdmin() || (isSignedIn() && resource.data.submitterId == request.auth.uid && resource.data.status == 'draft');
+    }
+
+    // Admin-only broker directory
+    match /brokers/{brokerId} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() && isValidBroker(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     // Requirements

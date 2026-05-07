@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Calendar, Clock, Database, Download, FileText, LayoutGrid, Trash2, TrendingUp, Upload, UserPlus, Users, Wrench } from 'lucide-react';
+import { BarChart3, Calendar, Clock, Database, Download, FileText, LayoutGrid, Trash2, TrendingUp, Upload, UserPlus, Users, Wrench } from 'lucide-react';
 import { collection, doc, getDocs, limit, orderBy, query, Timestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { handleFirestoreError } from '../lib/utils';
@@ -8,6 +8,7 @@ import { OperationType, User } from '../types';
 
 export type ToolTarget =
   | 'leads'
+  | 'performance'
   | 'employees'
   | 'attendance'
   | 'requirements'
@@ -24,6 +25,7 @@ type ToolCard = {
 };
 
 const adminTools: ToolCard[] = [
+  { id: 'performance', title: 'Sales Dashboard', description: 'Review KPIs, conversions, alerts, and performers.', icon: BarChart3 },
   { id: 'leads', title: 'Leads', description: 'Manage and update all leads.', icon: Users },
   { id: 'attendance', title: 'Attendance', description: 'Check team clock-in and clock-out logs.', icon: Clock },
   { id: 'inventory', title: 'Inventory', description: 'View and manage property inventory.', icon: LayoutGrid },
@@ -32,6 +34,7 @@ const adminTools: ToolCard[] = [
 ];
 
 const managerTools: ToolCard[] = [
+  { id: 'performance', title: 'Sales Dashboard', description: 'Track your team KPIs, conversions, and alerts.', icon: BarChart3 },
   { id: 'leads', title: 'Leads', description: 'Manage your leads and your team leads.', icon: Users },
   { id: 'attendance', title: 'Attendance', description: 'Track your and your team clock-in/out logs.', icon: Clock },
   { id: 'inventory', title: 'Inventory', description: 'View and manage property inventory.', icon: LayoutGrid },
@@ -40,6 +43,7 @@ const managerTools: ToolCard[] = [
 ];
 
 const employeeTools: ToolCard[] = [
+  { id: 'performance', title: 'My Dashboard', description: 'View your personal sales performance analytics.', icon: BarChart3 },
   { id: 'today', title: 'Leads', description: 'Open today follow-up queue.', icon: Users },
   { id: 'attendance', title: 'Attendance', description: 'Use clock-in and clock-out with GPS.', icon: Clock },
   { id: 'inventory', title: 'Inventory', description: 'Browse approved inventory records.', icon: LayoutGrid },

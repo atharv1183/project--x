@@ -20,10 +20,12 @@ import {
   writeBatch,
   Timestamp
 } from 'firebase/firestore';
-import { Lead, User, LeadStatus, OperationType, Requirement, Attendance } from '../types';
+import { Lead, User, LeadStatus, OperationType, Requirement, Attendance, Broker } from '../types';
 import { handleFirestoreError } from '../lib/utils';
 import InventoryManagement from './InventoryManagement';
+import SalesPerformanceDashboard from './SalesPerformanceDashboard';
 import { 
+  BarChart3,
   Users, 
   UserPlus, 
   ClipboardList, 
@@ -60,7 +62,7 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-type AdminView = 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory';
+type AdminView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'brokers';
 
 type AdminDashboardProps = {
   user: User;
@@ -152,13 +154,15 @@ export default function AdminDashboard({
 }: AdminDashboardProps) {
   const isSuperAdmin = user.role === 'admin';
   const isManager = user.role === 'manager';
-  const [activeView, setActiveView] = useState<AdminView>(initialView ?? 'leads');
+  const [activeView, setActiveView] = useState<AdminView>(initialView ?? 'performance');
   const [employees, setEmployees] = useState<User[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
+  const [brokers, setBrokers] = useState<Broker[]>([]);
   const [showAddLead, setShowAddLead] = useState(false);
   const [showAddEmployee, setShowAddEmployee] = useState(false);
+  const [showAddBroker, setShowAddBroker] = useState(false);
   const [showEditEmployee, setShowEditEmployee] = useState<User | null>(null);
   const [leadForm, setLeadForm] = useState({ name: '', phone: '', source: '' });
   const [leadAllocationMode, setLeadAllocationMode] = useState<'auto' | 'manual'>('auto');
@@ -169,6 +173,7 @@ export default function AdminDashboard({
     role: 'employee' as 'employee' | 'manager',
     managerId: isManager ? user.uid : '',
   });
+  const [brokerForm, setBrokerForm] = useState({ name: '', phone: '', email: '', company: '' });
   const [loading, setLoading] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferSearch, setTransferSearch] = useState('');
@@ -719,6 +724,20 @@ export default function AdminDashboard({
   }, [isManager, user.uid]);
 
   useEffect(() => {
+    if (!isSuperAdmin) {
+      setBrokers([]);
+      return;
+    }
+
+    const qBrokers = query(collection(db, 'brokers'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(qBrokers, (snapshot) => {
+      setBrokers(snapshot.docs.map((brokerDoc) => ({ id: brokerDoc.id, ...brokerDoc.data() } as Broker)));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'brokers'));
+
+    return () => unsubscribe();
+  }, [isSuperAdmin]);
+
+  useEffect(() => {
     return () => {
       if (saveToastTimerRef.current) {
         clearTimeout(saveToastTimerRef.current);
@@ -753,6 +772,11 @@ export default function AdminDashboard({
       return;
     }
 
+    if (showAddBroker) {
+      setShowAddBroker(false);
+      return;
+    }
+
     if (showEditEmployee) {
       setShowEditEmployee(null);
       return;
@@ -764,10 +788,10 @@ export default function AdminDashboard({
       return;
     }
 
-    if (activeView !== 'leads') {
-      setActiveView('leads');
+    if (activeView !== 'performance') {
+      setActiveView('performance');
     }
-  }, [backSignal]);
+  }, [backSignal, showAddBroker]);
 
   useEffect(() => {
     if (!initialView) return;
@@ -1228,6 +1252,47 @@ export default function AdminDashboard({
     }
   };
 
+  const handleAddBroker = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!isSuperAdmin) return alert('Only admin can add brokers.');
+
+    const name = brokerForm.name.trim();
+    const phone = normalizePhone(brokerForm.phone);
+    if (!name) return alert('Broker name is required.');
+    if (phone.length !== 10) return alert('Broker mobile number must be exactly 10 digits.');
+
+    setLoading(true);
+    try {
+      await addDoc(collection(db, 'brokers'), {
+        name,
+        phone,
+        email: brokerForm.email.trim(),
+        company: brokerForm.company.trim(),
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setBrokerForm({ name: '', phone: '', email: '', company: '' });
+      setShowAddBroker(false);
+      showSaveToast('Broker added', `${name} is available for inventory assignment`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'brokers');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteBroker = async (brokerId: string) => {
+    if (!isSuperAdmin) return alert('Only admin can delete brokers.');
+    if (!confirm('Delete this broker from the broker list? Existing inventory assignments will keep the saved broker name.')) return;
+
+    try {
+      await deleteDoc(doc(db, 'brokers', brokerId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `brokers/${brokerId}`);
+    }
+  };
+
   const handleUpdateLead = async (e: FormEvent) => {
     e.preventDefault();
     if (!selectedLead) return;
@@ -1248,6 +1313,12 @@ export default function AdminDashboard({
   };
 
   const approveDeal = async (leadId: string) => {
+    const lead = leads.find((item) => item.id === leadId);
+    if (lead && (!lead.kycAadhaarUrl || !lead.kycPanUrl)) {
+      alert('Aadhaar and PAN KYC documents are required before approving this deal.');
+      return;
+    }
+
     try {
       await updateDoc(doc(db, 'leads', leadId), {
         status: 'deal_approved',
@@ -1296,11 +1367,13 @@ export default function AdminDashboard({
           className="flex bg-white/50 p-1.5 rounded-[24px] border border-slate-100 overflow-x-auto no-scrollbar whitespace-nowrap"
         >
         {[
+          { id: 'performance', icon: BarChart3, label: 'Dashboard' },
           { id: 'leads', icon: Users, label: 'Leads' },
           { id: 'employees', icon: UserPlus, label: 'Team' },
           { id: 'attendance', icon: Clock, label: 'Attendance' },
           { id: 'requirements', icon: FileText, label: 'Needs' },
-          { id: 'inventory', icon: LayoutGrid, label: 'Inventory' }
+          { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
+          ...(isSuperAdmin ? [{ id: 'brokers', icon: ClipboardList, label: 'Brokers' }] : [])
         ].map(tab => (
           <button 
             key={tab.id}
@@ -1342,7 +1415,15 @@ export default function AdminDashboard({
         </button>
       </div>
 
-      {activeView === 'leads' ? (
+      {activeView === 'performance' ? (
+        <SalesPerformanceDashboard
+          user={user}
+          leads={leads}
+          employees={employees}
+          attendance={attendance}
+          scope={isManager ? 'manager' : 'admin'}
+        />
+      ) : activeView === 'leads' ? (
         <>
           {/* Stats Grid */}
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
@@ -1490,8 +1571,13 @@ export default function AdminDashboard({
                       <td className="px-6 py-4 text-right">
                         {lead.status === 'deal_pending' && (
                           <button 
-                            onClick={() => approveDeal(lead.id)}
-                            className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              approveDeal(lead.id);
+                            }}
+                            disabled={!lead.kycAadhaarUrl || !lead.kycPanUrl}
+                            className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                            title={!lead.kycAadhaarUrl || !lead.kycPanUrl ? 'KYC documents required' : 'Approve deal'}
                           >
                             Approve Deal
                           </button>
@@ -1877,6 +1963,66 @@ export default function AdminDashboard({
             </div>
           </div>
         </div>
+      ) : activeView === 'brokers' && isSuperAdmin ? (
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Broker List</h2>
+              <p className="text-xs text-gray-500 mt-1">Admin-only brokers available for inventory assignment.</p>
+            </div>
+            <button
+              onClick={() => setShowAddBroker(true)}
+              className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-bold transition-all shadow-lg active:scale-95"
+            >
+              <Plus size={20} /> Add Broker
+            </button>
+          </div>
+
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Broker</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Company</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Email</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {brokers.map((broker) => (
+                    <tr key={broker.id} className="hover:bg-gray-50/50 transition-colors">
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-gray-900">{broker.name}</p>
+                        <p className="text-sm text-gray-500">{broker.phone}</p>
+                      </td>
+                      <td className="px-6 py-4 text-sm font-medium text-gray-600">{broker.company || '-'}</td>
+                      <td className="px-6 py-4 text-sm font-medium text-gray-600">{broker.email || '-'}</td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => deleteBroker(broker.id)}
+                          className="inline-flex w-10 h-10 items-center justify-center rounded-xl bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
+                          title="Delete broker"
+                          aria-label="Delete broker"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {brokers.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-6 py-16 text-center text-gray-400 font-medium">
+                        No brokers added yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       ) : activeView === 'inventory' ? (
         <InventoryManagement user={user} />
       ) : null}
@@ -2041,6 +2187,36 @@ export default function AdminDashboard({
                       </p>
                     </div>
                   </div>
+
+                  {(selectedLead.kycAadhaarUrl || selectedLead.kycPanUrl || selectedLead.status === 'deal_pending' || selectedLead.status === 'deal_approved') && (
+                    <div className="space-y-4 p-6 bg-indigo-50/40 rounded-[32px] border border-indigo-100">
+                      <h4 className="font-bold text-gray-900 flex items-center gap-2">
+                        <FileText className="text-indigo-500" size={20} /> KYC Documents
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {[
+                          { label: 'Aadhaar Card', url: selectedLead.kycAadhaarUrl, name: selectedLead.kycAadhaarName },
+                          { label: 'PAN Card', url: selectedLead.kycPanUrl, name: selectedLead.kycPanName },
+                        ].map((docItem) => (
+                          <div key={docItem.label} className="p-4 bg-white rounded-2xl border border-indigo-100">
+                            <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-2">{docItem.label}</p>
+                            {docItem.url ? (
+                              <a
+                                href={docItem.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-sm font-bold text-blue-600 hover:underline break-all"
+                              >
+                                {docItem.name || 'View document'}
+                              </a>
+                            ) : (
+                              <p className="text-sm font-bold text-rose-500">Missing</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Quick Interaction Panel for Admin */}
                   <div className="space-y-4 p-6 bg-blue-50/30 rounded-[32px] border border-blue-100/50">
@@ -2345,11 +2521,11 @@ export default function AdminDashboard({
             <h3 className="text-2xl font-bold mb-7 text-gray-900">Add New Lead</h3>
             <form onSubmit={handleAddLead} className="space-y-5">
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">Customer Name</label>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Customer Name <span className="text-rose-500">*</span></label>
                 <input required value={leadForm.name} onChange={e => setLeadForm({...leadForm, name: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Enter name" />
               </div>
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">Mobile Number *</label>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Mobile Number <span className="text-rose-500">*</span></label>
                 <input
                   required
                   type="tel"
@@ -2363,7 +2539,7 @@ export default function AdminDashboard({
                 />
               </div>
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">Source *</label>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Source <span className="text-rose-500">*</span></label>
                 <input required value={leadForm.source} onChange={e => setLeadForm({...leadForm, source: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g. Website, Instagram, Outdoor" />
               </div>
               <div>
@@ -2425,7 +2601,7 @@ export default function AdminDashboard({
             <h3 className="text-2xl font-bold mb-6 text-gray-900">Add Member</h3>
             <form onSubmit={handleAddEmployee} className="space-y-4">
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">Full Name</label>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Full Name <span className="text-rose-500">*</span></label>
                 <input required value={employeeForm.name} onChange={e => setEmployeeForm({...employeeForm, name: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
               </div>
               <div>
@@ -2440,7 +2616,7 @@ export default function AdminDashboard({
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">Mobile Number</label>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Mobile Number <span className="text-rose-500">*</span></label>
                 <input
                   required
                   type="tel"
@@ -2480,6 +2656,60 @@ export default function AdminDashboard({
                 <button type="button" onClick={() => setShowAddEmployee(false)} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
                 <button type="submit" disabled={loading} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all">
                   {loading ? 'Adding...' : 'Add Member'}
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+
+      {showAddBroker && isSuperAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+            <h3 className="text-2xl font-bold mb-6 text-gray-900">Add Broker</h3>
+            <form onSubmit={handleAddBroker} className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Broker Name <span className="text-rose-500">*</span></label>
+                <input
+                  required
+                  value={brokerForm.name}
+                  onChange={e => setBrokerForm({ ...brokerForm, name: e.target.value })}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Mobile Number <span className="text-rose-500">*</span></label>
+                <input
+                  required
+                  type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
+                  value={brokerForm.phone}
+                  onChange={e => setBrokerForm({ ...brokerForm, phone: normalizePhone(e.target.value).slice(0, 10) })}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Company</label>
+                <input
+                  value={brokerForm.company}
+                  onChange={e => setBrokerForm({ ...brokerForm, company: e.target.value })}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={brokerForm.email}
+                  onChange={e => setBrokerForm({ ...brokerForm, email: e.target.value })}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setShowAddBroker(false)} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
+                <button type="submit" disabled={loading} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all">
+                  {loading ? 'Adding...' : 'Add Broker'}
                 </button>
               </div>
             </form>

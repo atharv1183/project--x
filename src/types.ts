@@ -26,6 +26,11 @@ export interface Lead {
   siteVisitAt?: any;
   siteVisitVerifiedAt?: any;
   siteVisitVerifiedBy?: string;
+  kycAadhaarUrl?: string;
+  kycAadhaarName?: string;
+  kycPanUrl?: string;
+  kycPanName?: string;
+  kycUploadedAt?: any;
 }
 
 export interface Followup {
@@ -110,9 +115,24 @@ export interface ProjectUnit {
   photos: string[];
 }
 
+export interface Broker {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  company?: string;
+  createdAt: any;
+  updatedAt?: any;
+  createdBy?: string;
+}
+
 export interface InventoryItem {
   id: string;
   title: string;
+  description?: string;
+  brokerId?: string;
+  brokerName?: string;
+  brokerPhone?: string;
   visibilityScope?: InventoryVisibility;
   listingMode?: ListingMode;
   isProject?: boolean;
