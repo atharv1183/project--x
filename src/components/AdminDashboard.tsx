@@ -24,6 +24,7 @@ import { Lead, User, LeadStatus, OperationType, Requirement, Attendance, Broker 
 import { handleFirestoreError } from '../lib/utils';
 import InventoryManagement from './InventoryManagement';
 import SalesPerformanceDashboard from './SalesPerformanceDashboard';
+import MonthlyAttendanceReport from './MonthlyAttendanceReport';
 import { 
   BarChart3,
   Users, 
@@ -121,29 +122,6 @@ const parseTimestamp = (value: any): Date | null => {
   }
   const converted = new Date(value);
   return Number.isNaN(converted.getTime()) ? null : converted;
-};
-
-const formatDuration = (minutes: number) => {
-  if (minutes <= 0) return '0m';
-  const safeMinutes = Math.max(0, Math.round(minutes));
-  const hrs = Math.floor(safeMinutes / 60);
-  const mins = safeMinutes % 60;
-  if (hrs === 0) return `${mins}m`;
-  if (mins === 0) return `${hrs}h`;
-  return `${hrs}h ${mins}m`;
-};
-
-type AttendanceEmployeeSummary = {
-  uid: string;
-  employeeName: string;
-  recordsToday: number;
-  clockInCount: number;
-  clockOutCount: number;
-  firstClockIn: Date | null;
-  lastClockOut: Date | null;
-  lastSeenAt: Date | null;
-  isClockedIn: boolean;
-  totalWorkedMinutes: number;
 };
 
 export default function AdminDashboard({
@@ -691,7 +669,7 @@ export default function AdminDashboard({
       );
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'leads'));
 
-    const qAttendance = query(collection(db, 'attendance'), orderBy('timestamp', 'desc'), limit(100));
+    const qAttendance = query(collection(db, 'attendance'), orderBy('timestamp', 'desc'), limit(2000));
     const unsubscribeAttendance = onSnapshot(qAttendance, (snapshot) => {
       const allLogs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Attendance));
       rawAttendanceRef.current = allLogs;
@@ -928,95 +906,6 @@ export default function AdminDashboard({
     ].filter(Boolean).join(' ').toLowerCase();
     return searchableText.includes(adminLeadSearchTerm);
   });
-
-  const attendanceAnalysis = useMemo(() => {
-    const now = new Date();
-    const dayStart = new Date(now);
-    dayStart.setHours(0, 0, 0, 0);
-
-    const groupedLogs = new Map<string, { employeeName: string; logs: Array<{ at: Date; type: Attendance['type'] }> }>();
-
-    attendance.forEach((log) => {
-      const at = parseTimestamp(log.timestamp);
-      if (!at || at < dayStart || at > now || !log.uid) return;
-      const existing = groupedLogs.get(log.uid) ?? {
-        employeeName: log.employeeName || 'Unknown Employee',
-        logs: [],
-      };
-      existing.employeeName = log.employeeName || existing.employeeName;
-      existing.logs.push({ at, type: log.type });
-      groupedLogs.set(log.uid, existing);
-    });
-
-    const summaries: AttendanceEmployeeSummary[] = attendanceMembers.map((employee) => {
-      const logs = (groupedLogs.get(employee.uid)?.logs ?? []).sort((a, b) => a.at.getTime() - b.at.getTime());
-
-      let clockInCount = 0;
-      let clockOutCount = 0;
-      let firstClockIn: Date | null = null;
-      let lastClockOut: Date | null = null;
-      let totalWorkedMinutes = 0;
-      let openClockIn: Date | null = null;
-
-      logs.forEach((entry) => {
-        if (entry.type === 'clock_in') {
-          clockInCount += 1;
-          if (!firstClockIn) firstClockIn = entry.at;
-          openClockIn = entry.at;
-        } else {
-          clockOutCount += 1;
-          lastClockOut = entry.at;
-          if (openClockIn && entry.at.getTime() >= openClockIn.getTime()) {
-            totalWorkedMinutes += (entry.at.getTime() - openClockIn.getTime()) / 60000;
-          }
-          openClockIn = null;
-        }
-      });
-
-      if (openClockIn) {
-        totalWorkedMinutes += (now.getTime() - openClockIn.getTime()) / 60000;
-      }
-
-      return {
-        uid: employee.uid,
-        employeeName: employee.name,
-        recordsToday: logs.length,
-        clockInCount,
-        clockOutCount,
-        firstClockIn,
-        lastClockOut,
-        lastSeenAt: logs.length ? logs[logs.length - 1].at : null,
-        isClockedIn: Boolean(openClockIn),
-        totalWorkedMinutes,
-      };
-    }).sort((a, b) => {
-      if (a.isClockedIn !== b.isClockedIn) return a.isClockedIn ? -1 : 1;
-      if (a.recordsToday !== b.recordsToday) return b.recordsToday - a.recordsToday;
-      return a.employeeName.localeCompare(b.employeeName);
-    });
-
-    const presentEmployees = summaries.filter((item) => item.recordsToday > 0).length;
-    const clockedInEmployees = summaries.filter((item) => item.isClockedIn).length;
-    const checkedOutEmployees = summaries.filter((item) => item.recordsToday > 0 && !item.isClockedIn).length;
-    const absentEmployees = summaries.filter((item) => item.recordsToday === 0).length;
-    const totalWorkedMinutes = summaries.reduce((sum, item) => sum + item.totalWorkedMinutes, 0);
-    const averageWorkedMinutes = presentEmployees > 0 ? totalWorkedMinutes / presentEmployees : 0;
-    const todayLogsCount = summaries.reduce((sum, item) => sum + item.recordsToday, 0);
-
-    return {
-      summaries,
-      totals: {
-        teamSize: summaries.length,
-        presentEmployees,
-        clockedInEmployees,
-        checkedOutEmployees,
-        absentEmployees,
-        totalWorkedMinutes,
-        averageWorkedMinutes,
-        todayLogsCount,
-      },
-    };
-  }, [attendance, attendanceMembers]);
 
   const managerLastAttendance = useMemo(() => {
     if (!isManager) return null;
@@ -1422,6 +1311,11 @@ export default function AdminDashboard({
           employees={employees}
           attendance={attendance}
           scope={isManager ? 'manager' : 'admin'}
+          onOpenLead={(lead) => {
+            setSelectedLead(lead);
+            setEditForm(lead);
+            setIsEditing(false);
+          }}
         />
       ) : activeView === 'leads' ? (
         <>
@@ -1605,173 +1499,15 @@ export default function AdminDashboard({
       </div>
     </>
     ) : activeView === 'attendance' ? (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900">Live Attendance Logs</h2>
-              <p className="text-sm text-gray-500 font-medium bg-gray-100 px-3 py-1 rounded-full inline-block mt-2">Real-time Location Based tracking</p>
-            </div>
-            {isManager && (
-              <button
-                type="button"
-                disabled={attendanceLoading}
-                onClick={() => handleManagerAttendance(isManagerClockedIn ? 'clock_out' : 'clock_in')}
-                className={cn(
-                  "inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-md active:scale-95",
-                  isManagerClockedIn ? "bg-red-600 hover:bg-red-700 text-white" : "bg-green-600 hover:bg-green-700 text-white",
-                  attendanceLoading && "opacity-60 cursor-not-allowed"
-                )}
-              >
-                {attendanceLoading ? <Loader2 size={16} className="animate-spin" /> : <MapPin size={16} />}
-                {attendanceLoading ? 'Saving...' : isManagerClockedIn ? 'Clock Out' : 'Clock In'}
-              </button>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
-            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-              <p className="text-[10px] uppercase tracking-widest text-gray-400 font-black">Team Size</p>
-              <p className="mt-2 text-2xl font-black text-gray-900">{attendanceAnalysis.totals.teamSize}</p>
-            </div>
-            <div className="bg-white border border-green-100 rounded-2xl p-4 shadow-sm">
-              <p className="text-[10px] uppercase tracking-widest text-green-600 font-black">Present Today</p>
-              <p className="mt-2 text-2xl font-black text-green-700">{attendanceAnalysis.totals.presentEmployees}</p>
-            </div>
-            <div className="bg-white border border-blue-100 rounded-2xl p-4 shadow-sm">
-              <p className="text-[10px] uppercase tracking-widest text-blue-600 font-black">Clocked In Now</p>
-              <p className="mt-2 text-2xl font-black text-blue-700">{attendanceAnalysis.totals.clockedInEmployees}</p>
-            </div>
-            <div className="bg-white border border-amber-100 rounded-2xl p-4 shadow-sm">
-              <p className="text-[10px] uppercase tracking-widest text-amber-600 font-black">Checked Out</p>
-              <p className="mt-2 text-2xl font-black text-amber-700">{attendanceAnalysis.totals.checkedOutEmployees}</p>
-            </div>
-            <div className="bg-white border border-red-100 rounded-2xl p-4 shadow-sm">
-              <p className="text-[10px] uppercase tracking-widest text-red-600 font-black">Not Marked</p>
-              <p className="mt-2 text-2xl font-black text-red-700">{attendanceAnalysis.totals.absentEmployees}</p>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider">Employee Attendance Analysis (Today)</h3>
-                <p className="text-xs text-gray-500">
-                  {attendanceAnalysis.totals.todayLogsCount} logs | Total worked {formatDuration(attendanceAnalysis.totals.totalWorkedMinutes)} | Avg {formatDuration(attendanceAnalysis.totals.averageWorkedMinutes)} per present employee
-                </p>
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-100">
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Employee</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Status</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">First In</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Last Out</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Worked</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Logs</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {attendanceAnalysis.summaries.map((summary) => (
-                    <tr key={summary.uid} className="hover:bg-gray-50/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <p className="font-bold text-gray-900">{summary.employeeName}</p>
-                        <p className="text-xs text-gray-400">{summary.uid.slice(-6)}</p>
-                      </td>
-                      <td className="px-6 py-4">
-                        {summary.recordsToday === 0 ? (
-                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-gray-100 text-gray-500">Not Marked</span>
-                        ) : summary.isClockedIn ? (
-                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-blue-100 text-blue-600">Clocked In</span>
-                        ) : (
-                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-green-100 text-green-600">Checked Out</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-700 font-medium">
-                        {summary.firstClockIn ? format(summary.firstClockIn, 'p') : '-'}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-700 font-medium">
-                        {summary.lastClockOut ? format(summary.lastClockOut, 'p') : '-'}
-                      </td>
-                      <td className="px-6 py-4 text-sm font-bold text-gray-900">
-                        {summary.recordsToday > 0 ? formatDuration(summary.totalWorkedMinutes) : '-'}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-600">
-                        {summary.recordsToday > 0 ? `${summary.clockInCount} in / ${summary.clockOutCount} out` : '-'}
-                      </td>
-                    </tr>
-                  ))}
-                  {attendanceAnalysis.summaries.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center text-gray-400 font-medium italic">
-                        No active employees available for attendance analysis.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-100">
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Employee</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Action</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Timestamp</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Location</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {attendance.map((log) => (
-                    <tr key={log.id} className="hover:bg-gray-50/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <p className="font-bold text-gray-900">{log.employeeName || 'Unknown Employee'}</p>
-                        <p className="text-xs text-gray-400">{log.uid ? log.uid.slice(-6) : 'N/A'}</p>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={cn(
-                          "px-2.5 py-1 rounded-lg text-[10px] font-black uppercase",
-                          log.type === 'clock_in' ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"
-                        )}>
-                          {log.type.replace('_', ' ')}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <p className="text-sm font-medium text-gray-700">{log.timestamp ? format(log.timestamp.toDate(), 'PPP') : 'Just now'}</p>
-                        <p className="text-xs text-gray-500">{log.timestamp ? format(log.timestamp.toDate(), 'p') : ''}</p>
-                      </td>
-                      <td className="px-6 py-4">
-                        {typeof log.location?.latitude === 'number' && typeof log.location?.longitude === 'number' ? (
-                          <a 
-                            href={`https://www.google.com/maps?q=${log.location.latitude},${log.location.longitude}`} 
-                            target="_blank" 
-                            rel="noreferrer"
-                            className="flex items-center gap-2 text-xs font-bold text-blue-600 hover:underline"
-                          >
-                            <History size={14} /> View Location
-                          </a>
-                        ) : (
-                          <span className="text-xs text-gray-400 font-medium">No GPS data</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {attendance.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="px-6 py-12 text-center text-gray-400 font-medium italic">
-                        No attendance records yet today.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+        <MonthlyAttendanceReport
+          user={user}
+          members={attendanceMembers}
+          attendance={attendance}
+          isManager={isManager}
+          attendanceLoading={attendanceLoading}
+          isManagerClockedIn={isManagerClockedIn}
+          onManagerAttendance={handleManagerAttendance}
+        />
       ) : activeView === 'employees' ? (
         <div className="space-y-6">
           <div className="flex items-center justify-between">

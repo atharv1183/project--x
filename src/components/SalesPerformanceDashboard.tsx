@@ -38,6 +38,7 @@ type SalesPerformanceDashboardProps = {
   employees: User[];
   attendance?: Attendance[];
   scope: 'admin' | 'manager' | 'employee';
+  onOpenLead?: (lead: Lead) => void;
 };
 
 type EmployeeMetrics = {
@@ -201,12 +202,16 @@ function normalizeSource(source?: string) {
   return raw || 'Other';
 }
 
-function isPendingLead(lead: Lead) {
+function isOpenLead(lead: Lead) {
   return lead.status !== 'deal_approved' && lead.status !== 'not_interested';
 }
 
 function getFirstActionDate(lead: Lead) {
   return toDate(lead.lastInteractionAt) || toDate(lead.siteVisitAt) || toDate(lead.kycUploadedAt);
+}
+
+function isPendingLead(lead: Lead) {
+  return lead.status === 'pending' && !getFirstActionDate(lead) && !lead.lastRemark;
 }
 
 function formatDuration(ms: number | null) {
@@ -263,7 +268,7 @@ function computeMetrics(leads: Lead[], attendance: Attendance[], employee: Pick<
   const notInterested = assigned.filter((lead) => lead.status === 'not_interested').length;
   const missedFollowups = assigned.filter((lead) => {
     const followup = toDate(lead.nextFollowupAt);
-    return followup && followup.getTime() < now.getTime() && isPendingLead(lead);
+    return followup && followup.getTime() < now.getTime() && isOpenLead(lead);
   }).length;
 
   const sourceMap = new Map<string, { source: string; total: number; interested: number; visits: number; deals: number }>();
@@ -402,6 +407,7 @@ export default function SalesPerformanceDashboard({
   employees,
   attendance = [],
   scope,
+  onOpenLead,
 }: SalesPerformanceDashboardProps) {
   const [employeeIds, setEmployeeIds] = useState<string[]>([]);
   const [sourceValues, setSourceValues] = useState<string[]>([]);
@@ -573,7 +579,7 @@ export default function SalesPerformanceDashboard({
     const followupAlerts = filteredLeads
       .filter((lead) => {
         const followup = toDate(lead.nextFollowupAt);
-        return followup && followup.getTime() < now && isPendingLead(lead);
+        return followup && followup.getTime() < now && isOpenLead(lead);
       })
       .slice(0, 5)
       .map((lead) => ({ title: 'Missed follow-up', detail: `${lead.name} follow-up date crossed.` }));
@@ -640,6 +646,78 @@ export default function SalesPerformanceDashboard({
       setSortDirection(key === 'name' ? 'asc' : 'desc');
     }
   };
+
+  const topPerformerSection = (
+    <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <Trophy size={18} className="text-amber-500" />
+          <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Top Performer Table</h3>
+        </div>
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={employeeSearch}
+            onChange={(event) => {
+              setEmployeeSearch(event.target.value);
+              setPage(1);
+            }}
+            className="w-full sm:w-72 rounded-2xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm font-medium outline-none"
+            placeholder="Search employee..."
+          />
+        </div>
+      </div>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-left">
+          <thead>
+            <tr className="border-b border-slate-100 bg-slate-50">
+              {[
+                ['rank', 'Rank'],
+                ['name', 'Employee Name'],
+                ['score', 'Performance Score'],
+                ['deals', 'Deals Closed'],
+                ['visits', 'Site Visits'],
+                ['interested', 'Interested Leads'],
+              ].map(([key, label]) => (
+                <th key={key} className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                  <button type="button" onClick={() => toggleSort(key as SortKey)}>{label}</button>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-50">
+            {pagedMetrics.map((metric) => {
+              const rank = sortedMetrics.findIndex((item) => item.uid === metric.uid) + 1;
+              return (
+                <tr key={metric.uid} className="hover:bg-slate-50">
+                  <td className="px-4 py-4 text-sm font-black text-slate-900">#{rank}</td>
+                  <td className="px-4 py-4">
+                    <button type="button" onClick={() => setDetailEmployee(metric)} className="text-sm font-black text-blue-600 hover:underline">{metric.name}</button>
+                  </td>
+                  <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.score.toFixed(2)}</td>
+                  <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.deals}</td>
+                  <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.visits}</td>
+                  <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.interested}</td>
+                </tr>
+              );
+            })}
+            {pagedMetrics.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-12 text-center text-sm font-medium text-slate-400">No employee performance data for selected filters.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-4 flex items-center justify-between">
+        <p className="text-xs font-bold text-slate-400">Page {page} of {totalPages}</p>
+        <div className="flex gap-2">
+          <button type="button" disabled={page <= 1} onClick={() => setPage((prev) => Math.max(1, prev - 1))} className="rounded-xl border border-slate-200 p-2 text-slate-600 disabled:opacity-40"><ChevronLeft size={16} /></button>
+          <button type="button" disabled={page >= totalPages} onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))} className="rounded-xl border border-slate-200 p-2 text-slate-600 disabled:opacity-40"><ChevronRight size={16} /></button>
+        </div>
+      </div>
+    </section>
+  );
 
   return (
     <div className="space-y-6 pb-20 print:bg-white">
@@ -741,6 +819,8 @@ export default function SalesPerformanceDashboard({
           </div>
         </div>
       </section>
+
+      {topPerformerSection}
 
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4">
         {(Object.keys(kpiLabels) as KpiKey[]).map((key) => {
@@ -856,76 +936,6 @@ export default function SalesPerformanceDashboard({
                 </div>
               );
             })}
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
-            <Trophy size={18} className="text-amber-500" />
-            <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Top Performer Table</h3>
-          </div>
-          <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              value={employeeSearch}
-              onChange={(event) => {
-                setEmployeeSearch(event.target.value);
-                setPage(1);
-              }}
-              className="w-full sm:w-72 rounded-2xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm font-medium outline-none"
-              placeholder="Search employee..."
-            />
-          </div>
-        </div>
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-slate-100 bg-slate-50">
-                {[
-                  ['rank', 'Rank'],
-                  ['name', 'Employee Name'],
-                  ['score', 'Performance Score'],
-                  ['deals', 'Deals Closed'],
-                  ['visits', 'Site Visits'],
-                  ['interested', 'Interested Leads'],
-                ].map(([key, label]) => (
-                  <th key={key} className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">
-                    <button type="button" onClick={() => toggleSort(key as SortKey)}>{label}</button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {pagedMetrics.map((metric) => {
-                const rank = sortedMetrics.findIndex((item) => item.uid === metric.uid) + 1;
-                return (
-                  <tr key={metric.uid} className="hover:bg-slate-50">
-                    <td className="px-4 py-4 text-sm font-black text-slate-900">#{rank}</td>
-                    <td className="px-4 py-4">
-                      <button type="button" onClick={() => setDetailEmployee(metric)} className="text-sm font-black text-blue-600 hover:underline">{metric.name}</button>
-                    </td>
-                    <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.score.toFixed(2)}</td>
-                    <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.deals}</td>
-                    <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.visits}</td>
-                    <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.interested}</td>
-                  </tr>
-                );
-              })}
-              {pagedMetrics.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-sm font-medium text-slate-400">No employee performance data for selected filters.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <div className="mt-4 flex items-center justify-between">
-          <p className="text-xs font-bold text-slate-400">Page {page} of {totalPages}</p>
-          <div className="flex gap-2">
-            <button type="button" disabled={page <= 1} onClick={() => setPage((prev) => Math.max(1, prev - 1))} className="rounded-xl border border-slate-200 p-2 text-slate-600 disabled:opacity-40"><ChevronLeft size={16} /></button>
-            <button type="button" disabled={page >= totalPages} onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))} className="rounded-xl border border-slate-200 p-2 text-slate-600 disabled:opacity-40"><ChevronRight size={16} /></button>
           </div>
         </div>
       </section>
@@ -1052,7 +1062,20 @@ export default function SalesPerformanceDashboard({
             <div className="max-h-[68vh] overflow-y-auto divide-y divide-slate-50">
               {leadList.leads.map((lead) => (
                 <div key={lead.id} className="p-4">
-                  <p className="font-black text-slate-900">{lead.name}</p>
+                  {onOpenLead ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLeadList(null);
+                        onOpenLead(lead);
+                      }}
+                      className="text-left font-black text-blue-600 hover:underline"
+                    >
+                      {lead.name}
+                    </button>
+                  ) : (
+                    <p className="font-black text-slate-900">{lead.name}</p>
+                  )}
                   <p className="text-sm font-medium text-slate-500">{lead.phone} | {normalizeSource(lead.source)} | {lead.status.replace('_', ' ')}</p>
                 </div>
               ))}

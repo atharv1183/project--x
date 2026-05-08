@@ -256,6 +256,49 @@ function normalizeVideoLink(value: string): string {
   return `https://${trimmed}`;
 }
 
+function normalizeLocationLink(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+function buildGoogleMapsLink(latitude: number, longitude: number) {
+  return `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+}
+
+function getInventoryLocationLink(item: InventoryItem) {
+  return item.locationLink || buildGoogleMapsLink(item.latitude, item.longitude);
+}
+
+function parseCoordinatesFromMapLink(value: string): { latitude: number; longitude: number } | null {
+  const decoded = decodeURIComponent(value);
+  const patterns = [
+    /@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/,
+    /[?&](?:q|query|ll)=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/,
+    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = decoded.match(pattern);
+    if (!match) continue;
+    const latitude = Number(match[1]);
+    const longitude = Number(match[2]);
+    if (
+      Number.isFinite(latitude) &&
+      Number.isFinite(longitude) &&
+      latitude >= -90 &&
+      latitude <= 90 &&
+      longitude >= -180 &&
+      longitude <= 180
+    ) {
+      return { latitude, longitude };
+    }
+  }
+
+  return null;
+}
+
 function isDirectVideoUrl(url: string): boolean {
   return /\.(mp4|webm|ogg|mov|m4v)(\?.*)?(#.*)?$/i.test(url)
     || /res\.cloudinary\.com\/.+\/video\/upload/i.test(url);
@@ -337,6 +380,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     location: '',
     nearbyLocation: '',
     landmark: '',
+    locationLink: '',
     houseType: 'simplex' as HouseType,
     bhk: '' as string | number,
     bathrooms: '' as string | number,
@@ -630,6 +674,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         location: formData.location,
         nearbyLocation: formData.nearbyLocation,
         landmark: formData.landmark,
+        locationLink: normalizeLocationLink(formData.locationLink),
         latitude: formData.latitude,
         longitude: formData.longitude,
         videos: videoUrls,
@@ -783,6 +828,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         location: '',
         nearbyLocation: '',
         landmark: '',
+        locationLink: '',
         houseType: 'simplex',
         bhk: '',
         bathrooms: '',
@@ -882,6 +928,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       location: item.location,
       nearbyLocation: item.nearbyLocation || '',
       landmark: item.landmark || '',
+      locationLink: item.locationLink || '',
       houseType: item.houseType || 'simplex',
       bhk: item.bhk || '',
       bathrooms: item.bathrooms || '',
@@ -1017,7 +1064,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   };
 
   const shareOnWhatsApp = (item: InventoryItem) => {
-    const mapLink = `https://www.google.com/maps?q=${item.latitude},${item.longitude}`;
+    const mapLink = getInventoryLocationLink(item);
     const imageLinks = item.photos?.length
       ? item.photos.map((url, idx) => `- Image ${idx + 1}: ${url}`).join('\n')
       : '- No images available';
@@ -1093,6 +1140,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                 location: '',
                 nearbyLocation: '',
                 landmark: '',
+                locationLink: '',
                 houseType: 'simplex',
                 bhk: '',
                 bathrooms: '',
@@ -1398,6 +1446,16 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                     >
                       <Share2 size={18} />
                     </button>
+                    <a
+                      href={getInventoryLocationLink(item)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-10 h-10 flex items-center justify-center text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-xl transition-all"
+                      title="Open location in Google Maps"
+                      aria-label="Open location in Google Maps"
+                    >
+                      <MapPin size={18} />
+                    </a>
                     <button 
                       onClick={() => startEdit(item)}
                       className="w-10 h-10 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
@@ -1685,6 +1743,39 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                   className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-mono font-bold text-slate-700 transition-all"
                                   placeholder="Longitude"
                                 />
+                              </div>
+                              <div className="rounded-[24px] border border-slate-100 bg-slate-50 p-4 space-y-3">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                  <div>
+                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Google Maps Location Link</p>
+                                    <p className="mt-1 text-xs font-semibold text-slate-500">Open Maps, copy the share link, then paste it here to save with inventory.</p>
+                                  </div>
+                                  <a
+                                    href={buildGoogleMapsLink(formData.latitude, formData.longitude)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all"
+                                  >
+                                    <ExternalLink size={14} /> Open Google Maps
+                                  </a>
+                                </div>
+                                <div className="relative">
+                                  <Link2 size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                                  <input
+                                    value={formData.locationLink}
+                                    onChange={(e) => {
+                                      const nextLink = e.target.value;
+                                      const parsed = parseCoordinatesFromMapLink(nextLink);
+                                      setFormData({
+                                        ...formData,
+                                        locationLink: nextLink,
+                                        ...(parsed ? { latitude: parsed.latitude, longitude: parsed.longitude } : {}),
+                                      });
+                                    }}
+                                    className="w-full pl-11 pr-4 py-3 bg-white border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-medium text-slate-700 transition-all"
+                                    placeholder="Paste Google Maps share link"
+                                  />
+                                </div>
                               </div>
                               <p className="text-[10px] text-slate-400 text-center font-bold">
                                 Latitude: {formData.latitude.toFixed(6)} | Longitude: {formData.longitude.toFixed(6)}

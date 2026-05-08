@@ -155,6 +155,7 @@ export interface InventoryItem {
   location: string;
   nearbyLocation?: string;
   landmark?: string;
+  locationLink?: string;
   latitude: number;
   longitude: number;
   
