@@ -20,7 +20,7 @@ import {
   writeBatch,
   Timestamp
 } from 'firebase/firestore';
-import { Lead, User, LeadStatus, OperationType, Requirement, Attendance, Broker } from '../types';
+import { Lead, User, LeadStatus, OperationType, Requirement, Attendance, AttendanceCorrectionRequest, Broker } from '../types';
 import { handleFirestoreError } from '../lib/utils';
 import InventoryManagement from './InventoryManagement';
 import SalesPerformanceDashboard from './SalesPerformanceDashboard';
@@ -137,6 +137,7 @@ export default function AdminDashboard({
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
+  const [attendanceCorrections, setAttendanceCorrections] = useState<AttendanceCorrectionRequest[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [showAddLead, setShowAddLead] = useState(false);
   const [showAddEmployee, setShowAddEmployee] = useState(false);
@@ -693,11 +694,22 @@ export default function AdminDashboard({
       setRequirements(allRequirements.filter((req) => scopeIds.has(req.employeeId)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'requirements'));
 
+    const qAttendanceCorrections = isManager
+      ? query(collection(db, 'attendanceCorrections'), where('uid', '==', user.uid))
+      : query(collection(db, 'attendanceCorrections'), orderBy('requestedAt', 'desc'));
+    const unsubscribeAttendanceCorrections = onSnapshot(qAttendanceCorrections, (snapshot) => {
+      const requests = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as AttendanceCorrectionRequest))
+        .sort((a, b) => (parseTimestamp(b.requestedAt)?.getTime() ?? 0) - (parseTimestamp(a.requestedAt)?.getTime() ?? 0));
+      setAttendanceCorrections(requests);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendanceCorrections'));
+
     return () => {
       unsubscribeEmployees();
       unsubscribeLeads();
       unsubscribeAttendance();
       unsubscribeReqs();
+      unsubscribeAttendanceCorrections();
     };
   }, [isManager, user.uid]);
 
@@ -938,6 +950,52 @@ export default function AdminDashboard({
       alert('Error fetching location or saving attendance. Please ensure GPS is enabled.');
     } finally {
       setAttendanceLoading(false);
+    }
+  };
+
+  const handleAttendanceCorrectionRequest = async ({
+    row,
+    loginTime,
+    logoutTime,
+    remark,
+  }: {
+    row: { uid: string; employeeName: string; date: Date };
+    loginTime: Date | null;
+    logoutTime: Date | null;
+    remark: string;
+  }) => {
+    if (!auth.currentUser || row.uid !== user.uid) return;
+    const key = `${row.date.getFullYear()}-${String(row.date.getMonth() + 1).padStart(2, '0')}-${String(row.date.getDate()).padStart(2, '0')}`;
+    try {
+      await addDoc(collection(db, 'attendanceCorrections'), {
+        uid: user.uid,
+        employeeName: user.name,
+        dateKey: key,
+        date: Timestamp.fromDate(row.date),
+        requestedLoginTime: loginTime ? Timestamp.fromDate(loginTime) : null,
+        requestedLogoutTime: logoutTime ? Timestamp.fromDate(logoutTime) : null,
+        remark,
+        status: 'pending',
+        requestedBy: user.uid,
+        requestedByName: user.name,
+        requestedAt: serverTimestamp(),
+      });
+      alert('Attendance correction request sent to admin for approval.');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'attendanceCorrections');
+    }
+  };
+
+  const handleReviewAttendanceCorrection = async (request: AttendanceCorrectionRequest, status: 'approved' | 'rejected') => {
+    if (!isSuperAdmin) return;
+    try {
+      await updateDoc(doc(db, 'attendanceCorrections', request.id), {
+        status,
+        reviewedBy: user.name,
+        reviewedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `attendanceCorrections/${request.id}`);
     }
   };
 
@@ -1507,6 +1565,10 @@ export default function AdminDashboard({
           attendanceLoading={attendanceLoading}
           isManagerClockedIn={isManagerClockedIn}
           onManagerAttendance={handleManagerAttendance}
+          scope={isManager ? 'manager' : 'admin'}
+          correctionRequests={attendanceCorrections}
+          onRequestCorrection={isManager ? handleAttendanceCorrectionRequest : undefined}
+          onReviewCorrection={isSuperAdmin ? handleReviewAttendanceCorrection : undefined}
         />
       ) : activeView === 'employees' ? (
         <div className="space-y-6">

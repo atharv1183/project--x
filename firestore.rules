@@ -105,6 +105,21 @@ service cloud.firestore {
         && data.submitterId == request.auth.uid;
     }
 
+    function isValidAttendanceCorrection(data) {
+      return data.keys().hasAll(['uid', 'employeeName', 'dateKey', 'date', 'requestedLoginTime', 'requestedLogoutTime', 'remark', 'status', 'requestedBy', 'requestedByName', 'requestedAt'])
+        && data.uid == request.auth.uid
+        && data.requestedBy == request.auth.uid
+        && data.employeeName is string && data.employeeName.size() > 0 && data.employeeName.size() <= 100
+        && data.dateKey is string && data.dateKey.size() == 10
+        && data.date is timestamp
+        && (data.requestedLoginTime == null || data.requestedLoginTime is timestamp)
+        && (data.requestedLogoutTime == null || data.requestedLogoutTime is timestamp)
+        && data.remark is string && data.remark.size() > 0 && data.remark.size() <= 1000
+        && data.status == 'pending'
+        && data.requestedByName is string && data.requestedByName.size() > 0 && data.requestedByName.size() <= 100
+        && data.requestedAt is timestamp;
+    }
+
     function isValidBroker(data) {
       return data.keys().hasAll(['name', 'phone', 'createdAt'])
         && data.name is string && data.name.size() > 0 && data.name.size() <= 100
@@ -238,6 +253,17 @@ service cloud.firestore {
         && request.resource.data.keys().hasAll(['uid', 'employeeName', 'timestamp', 'type', 'location'])
         && request.resource.data.timestamp == request.time;
       allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+    }
+
+    // Attendance correction requests
+    match /attendanceCorrections/{requestId} {
+      allow list: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow get: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow create: if isSignedIn() && isValidAttendanceCorrection(request.resource.data);
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt', 'reviewRemark'])
+        && request.resource.data.status in ['approved', 'rejected'];
+      allow delete: if isAdmin();
     }
 
     // Notifications

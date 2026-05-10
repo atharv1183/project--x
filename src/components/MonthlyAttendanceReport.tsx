@@ -16,7 +16,7 @@ import {
   Users,
   XCircle,
 } from 'lucide-react';
-import { Attendance, User } from '../types';
+import { Attendance, AttendanceCorrectionRequest, User } from '../types';
 import { cn } from '../lib/utils';
 
 type AttendanceStatus = 'P' | 'A' | 'HD' | 'L' | 'WO' | 'H' | 'OT';
@@ -46,6 +46,15 @@ type MonthlyAttendanceReportProps = {
   attendanceLoading: boolean;
   isManagerClockedIn: boolean;
   onManagerAttendance: (type: 'clock_in' | 'clock_out') => void;
+  scope?: 'admin' | 'manager' | 'employee';
+  correctionRequests?: AttendanceCorrectionRequest[];
+  onRequestCorrection?: (request: {
+    row: DailyRow;
+    loginTime: Date | null;
+    logoutTime: Date | null;
+    remark: string;
+  }) => Promise<void> | void;
+  onReviewCorrection?: (request: AttendanceCorrectionRequest, status: 'approved' | 'rejected') => Promise<void> | void;
 };
 
 const STANDARD_DAY_MINUTES = 8 * 60;
@@ -158,6 +167,10 @@ export default function MonthlyAttendanceReport({
   attendanceLoading,
   isManagerClockedIn,
   onManagerAttendance,
+  scope = isManager ? 'manager' : 'admin',
+  correctionRequests = [],
+  onRequestCorrection,
+  onReviewCorrection,
 }: MonthlyAttendanceReportProps) {
   const now = new Date();
   const [employeeId, setEmployeeId] = useState('all');
@@ -195,6 +208,33 @@ export default function MonthlyAttendanceReport({
 
   const selectedEmployee = employeeId === 'all' ? null : cleanMembers.find((member) => member.uid === employeeId) || null;
 
+  const correctionByRow = useMemo(() => {
+    const map = new Map<string, AttendanceCorrectionRequest>();
+    correctionRequests
+      .slice()
+      .sort((a, b) => (toDate(b.requestedAt)?.getTime() ?? 0) - (toDate(a.requestedAt)?.getTime() ?? 0))
+      .forEach((request) => {
+        if (!request.uid || !request.dateKey) return;
+        const key = `${request.uid}-${request.dateKey}`;
+        if (!map.has(key)) map.set(key, request);
+      });
+    return map;
+  }, [correctionRequests]);
+
+  const approvedCorrectionByRow = useMemo(() => {
+    const map = new Map<string, AttendanceCorrectionRequest>();
+    correctionRequests
+      .filter((request) => request.status === 'approved')
+      .slice()
+      .sort((a, b) => (toDate(b.reviewedAt)?.getTime() ?? toDate(b.requestedAt)?.getTime() ?? 0) - (toDate(a.reviewedAt)?.getTime() ?? toDate(a.requestedAt)?.getTime() ?? 0))
+      .forEach((request) => {
+        if (!request.uid || !request.dateKey) return;
+        const key = `${request.uid}-${request.dateKey}`;
+        if (!map.has(key)) map.set(key, request);
+      });
+    return map;
+  }, [correctionRequests]);
+
   const rows = useMemo(() => {
     const days = getMonthDates(year, month);
     const logsByEmployeeDate = new Map<string, Array<{ at: Date; type: Attendance['type']; remark?: string }>>();
@@ -216,8 +256,15 @@ export default function MonthlyAttendanceReport({
         const key = `${employee.uid}-${dateKey(dayDate)}`;
         const logs = (logsByEmployeeDate.get(key) || []).sort((a, b) => a.at.getTime() - b.at.getTime());
         const override = editOverrides[key];
-        const loginTime = override?.login !== undefined ? override.login : logs.find((log) => log.type === 'clock_in')?.at || null;
-        const logoutTime = override?.logout !== undefined ? override.logout : [...logs].reverse().find((log) => log.type === 'clock_out')?.at || null;
+        const approvedCorrection = approvedCorrectionByRow.get(key);
+        const correctedLogin = approvedCorrection && 'requestedLoginTime' in approvedCorrection ? toDate(approvedCorrection.requestedLoginTime) : undefined;
+        const correctedLogout = approvedCorrection && 'requestedLogoutTime' in approvedCorrection ? toDate(approvedCorrection.requestedLogoutTime) : undefined;
+        const loginTime = correctedLogin !== undefined
+          ? correctedLogin
+          : override?.login !== undefined ? override.login : logs.find((log) => log.type === 'clock_in')?.at || null;
+        const logoutTime = correctedLogout !== undefined
+          ? correctedLogout
+          : override?.logout !== undefined ? override.logout : [...logs].reverse().find((log) => log.type === 'clock_out')?.at || null;
 
         let workingMinutes = 0;
         let openClockIn: Date | null = null;
@@ -232,7 +279,7 @@ export default function MonthlyAttendanceReport({
         if (openClockIn && dateKey(dayDate) === dateKey(now)) {
           workingMinutes += (now.getTime() - openClockIn.getTime()) / 60000;
         }
-        if (override?.login !== undefined || override?.logout !== undefined) {
+        if (override?.login !== undefined || override?.logout !== undefined || approvedCorrection) {
           workingMinutes = loginTime && logoutTime && logoutTime.getTime() >= loginTime.getTime()
             ? (logoutTime.getTime() - loginTime.getTime()) / 60000
             : 0;
@@ -265,11 +312,11 @@ export default function MonthlyAttendanceReport({
           lateMinutes,
           earlyMinutes,
           status: rowStatus,
-          remarks: remarks[key] || logs.find((log) => log.remark)?.remark || '',
+          remarks: approvedCorrection?.remark || remarks[key] || logs.find((log) => log.remark)?.remark || '',
         };
       });
     }).filter((row) => status === 'all' || row.status === status);
-  }, [attendance, editOverrides, filteredMembers, month, now, remarks, status, year]);
+  }, [approvedCorrectionByRow, attendance, editOverrides, filteredMembers, month, now, remarks, status, year]);
 
   const summary = useMemo(() => {
     const totalWorkingDays = rows.filter((row) => row.status !== 'WO' && row.status !== 'H').length;
@@ -391,6 +438,30 @@ export default function MonthlyAttendanceReport({
     if (remark === null) return;
     setRemarks((prev) => ({ ...prev, [row.key]: remark }));
   };
+
+  const handleRequestCorrection = async (row: DailyRow) => {
+    if (!onRequestCorrection) return;
+    const login = prompt('Requested login time (HH:mm). Leave blank for no login time.', row.loginTime ? row.loginTime.toTimeString().slice(0, 5) : '');
+    if (login === null) return;
+    const logout = prompt('Requested logout time (HH:mm). Leave blank for no logout time.', row.logoutTime ? row.logoutTime.toTimeString().slice(0, 5) : '');
+    if (logout === null) return;
+    const remark = prompt('Reason for correction request', row.remarks);
+    if (remark === null) return;
+    if (!remark.trim()) return alert('Please add a reason so admin can approve the correction.');
+    const parseTime = (value: string) => {
+      if (!value.trim()) return null;
+      const [hours, minutes] = value.split(':').map(Number);
+      if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+      const next = new Date(row.date);
+      next.setHours(hours, minutes, 0, 0);
+      return next;
+    };
+    await onRequestCorrection({ row, loginTime: parseTime(login), logoutTime: parseTime(logout), remark: remark.trim() });
+  };
+
+  const pendingCorrectionRequests = correctionRequests.filter((request) => request.status === 'pending');
+  const canApproveCorrections = scope === 'admin' && Boolean(onReviewCorrection);
+  const canRequestCorrections = Boolean(onRequestCorrection) && (scope === 'employee' || scope === 'manager');
 
   const cardData = [
     ['Total Working Days', summary.totalWorkingDays],
@@ -582,18 +653,44 @@ export default function MonthlyAttendanceReport({
         </div>
       </section>
 
+      {(canApproveCorrections || canRequestCorrections) && (
       <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm print:hidden">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Admin Controls</h3>
-            <p className="mt-1 text-xs font-medium text-slate-500">Edit table entries for report corrections, approve corrections, lock the month, and add remarks.</p>
+            <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">{canApproveCorrections ? 'Admin Controls' : 'Attendance Corrections'}</h3>
+            <p className="mt-1 text-xs font-medium text-slate-500">
+              {canApproveCorrections
+                ? 'Review employee correction requests, lock the month, and add admin remarks.'
+                : 'Request login/logout changes here. Admin approval is required before changes affect the report.'}
+            </p>
           </div>
+          {canApproveCorrections && (
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => alert('Selected attendance corrections approved for this report view.')} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black uppercase tracking-widest text-white"><ShieldCheck size={14} /> Approve Corrections</button>
             <button type="button" onClick={() => setLocked((prev) => !prev)} className={cn("inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-black uppercase tracking-widest text-white", locked ? "bg-slate-700" : "bg-amber-600")}><Lock size={14} /> {locked ? 'Unlock Month' : 'Lock Month'}</button>
           </div>
+          )}
         </div>
+        {canApproveCorrections && (
+          <div className="mt-4 space-y-2">
+            {pendingCorrectionRequests.slice(0, 8).map((request) => (
+              <div key={request.id} className="flex flex-col gap-3 rounded-2xl border border-amber-100 bg-amber-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-black text-slate-800">{request.employeeName} - {request.dateKey}</p>
+                  <p className="mt-1 text-xs font-medium text-slate-600">
+                    Login {formatTime(toDate(request.requestedLoginTime))}, Logout {formatTime(toDate(request.requestedLogoutTime))} - {request.remark}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => onReviewCorrection?.(request, 'approved')} className="rounded-xl bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white">Approve</button>
+                  <button type="button" onClick={() => onReviewCorrection?.(request, 'rejected')} className="rounded-xl bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-rose-600 border border-rose-100">Reject</button>
+                </div>
+              </div>
+            ))}
+            {pendingCorrectionRequests.length === 0 && <p className="rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-400">No pending correction requests.</p>}
+          </div>
+        )}
       </section>
+      )}
 
       <section className="rounded-3xl border border-slate-100 bg-white shadow-sm overflow-hidden">
         <div className="border-b border-slate-100 p-5">
@@ -633,8 +730,25 @@ export default function MonthlyAttendanceReport({
                   <td className="px-4 py-3 text-sm font-medium text-slate-500">{row.remarks || '-'}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2 print:hidden">
-                      <button type="button" onClick={() => handleEditRow(row)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50" title="Edit attendance entry"><Edit3 size={14} /></button>
-                      <button type="button" onClick={() => handleRemark(row)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50" title="Add remark"><MessageSquare size={14} /></button>
+                      {scope === 'admin' && (
+                        <>
+                          <button type="button" onClick={() => handleEditRow(row)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50" title="Edit attendance entry"><Edit3 size={14} /></button>
+                          <button type="button" onClick={() => handleRemark(row)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50" title="Add remark"><MessageSquare size={14} /></button>
+                        </>
+                      )}
+                      {canRequestCorrections && row.uid === user.uid && (
+                        <button type="button" onClick={() => handleRequestCorrection(row)} className="rounded-lg border border-blue-100 p-2 text-blue-600 hover:bg-blue-50" title="Request correction"><Edit3 size={14} /></button>
+                      )}
+                      {correctionByRow.get(row.key) && (
+                        <span className={cn(
+                          "inline-flex items-center rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-widest",
+                          correctionByRow.get(row.key)?.status === 'approved' && "bg-emerald-100 text-emerald-700",
+                          correctionByRow.get(row.key)?.status === 'pending' && "bg-amber-100 text-amber-700",
+                          correctionByRow.get(row.key)?.status === 'rejected' && "bg-rose-100 text-rose-700",
+                        )}>
+                          {correctionByRow.get(row.key)?.status}
+                        </span>
+                      )}
                     </div>
                   </td>
                 </tr>

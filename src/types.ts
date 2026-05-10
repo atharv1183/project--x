@@ -53,6 +53,26 @@ export interface Attendance {
   };
 }
 
+export type AttendanceCorrectionStatus = 'pending' | 'approved' | 'rejected';
+
+export interface AttendanceCorrectionRequest {
+  id: string;
+  uid: string;
+  employeeName: string;
+  dateKey: string;
+  date: any;
+  requestedLoginTime?: any;
+  requestedLogoutTime?: any;
+  remark: string;
+  status: AttendanceCorrectionStatus;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: any;
+  reviewedBy?: string;
+  reviewedAt?: any;
+  reviewRemark?: string;
+}
+
 export interface User {
   uid: string;
   name: string;

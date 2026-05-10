@@ -14,10 +14,11 @@ import {
   Timestamp,
   deleteField
 } from 'firebase/firestore';
-import { Lead, User, Followup, Attendance, Notification, OperationType, Location, Requirement } from '../types';
+import { Lead, User, Followup, Attendance, AttendanceCorrectionRequest, Notification, OperationType, Location, Requirement } from '../types';
 import { handleFirestoreError } from '../lib/utils';
 import InventoryManagement from './InventoryManagement';
 import SalesPerformanceDashboard from './SalesPerformanceDashboard';
+import MonthlyAttendanceReport from './MonthlyAttendanceReport';
 import { 
   BarChart3,
   Calendar, 
@@ -116,7 +117,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 }
 
 type LeadQueueTab = 'pending' | 'today' | 'upcoming';
-type EmployeeView = LeadQueueTab | 'performance' | 'requirements' | 'inventory';
+type EmployeeView = LeadQueueTab | 'performance' | 'attendance' | 'requirements' | 'inventory';
 
 type EmployeeDashboardProps = {
   user: User;
@@ -174,6 +175,7 @@ export default function EmployeeDashboard({
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [lastAttendance, setLastAttendance] = useState<Attendance | null>(null);
   const [attendanceRecords, setAttendanceRecords] = useState<Attendance[]>([]);
+  const [attendanceCorrections, setAttendanceCorrections] = useState<AttendanceCorrectionRequest[]>([]);
   const [employees, setEmployees] = useState<User[]>([]);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferSearch, setTransferSearch] = useState('');
@@ -349,6 +351,23 @@ export default function EmployeeDashboard({
       setAttendanceRecords(records);
       setLastAttendance(latestAttendance ?? null);
     }, (error) => handleFirestoreError(error, OperationType.GET, 'attendance'));
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!auth.currentUser) return;
+    const qCorrections = query(
+      collection(db, 'attendanceCorrections'),
+      where('uid', '==', auth.currentUser.uid)
+    );
+
+    const unsubscribe = onSnapshot(qCorrections, (snapshot) => {
+      const records = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as AttendanceCorrectionRequest))
+        .sort((a, b) => toMillis(b.requestedAt) - toMillis(a.requestedAt));
+      setAttendanceCorrections(records);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendanceCorrections'));
 
     return () => unsubscribe();
   }, []);
@@ -579,6 +598,39 @@ export default function EmployeeDashboard({
     }
 
     return result.secure_url;
+  };
+
+  const handleAttendanceCorrectionRequest = async ({
+    row,
+    loginTime,
+    logoutTime,
+    remark,
+  }: {
+    row: { uid: string; employeeName: string; date: Date };
+    loginTime: Date | null;
+    logoutTime: Date | null;
+    remark: string;
+  }) => {
+    if (!auth.currentUser || row.uid !== user.uid) return;
+    const key = `${row.date.getFullYear()}-${String(row.date.getMonth() + 1).padStart(2, '0')}-${String(row.date.getDate()).padStart(2, '0')}`;
+    try {
+      await addDoc(collection(db, 'attendanceCorrections'), {
+        uid: user.uid,
+        employeeName: user.name,
+        dateKey: key,
+        date: Timestamp.fromDate(row.date),
+        requestedLoginTime: loginTime ? Timestamp.fromDate(loginTime) : null,
+        requestedLogoutTime: logoutTime ? Timestamp.fromDate(logoutTime) : null,
+        remark,
+        status: 'pending',
+        requestedBy: user.uid,
+        requestedByName: user.name,
+        requestedAt: serverTimestamp(),
+      });
+      alert('Attendance correction request sent to admin for approval.');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'attendanceCorrections');
+    }
   };
 
   const handleUpdateLead = async (status: Lead['status']) => {
@@ -846,6 +898,7 @@ export default function EmployeeDashboard({
         {[
           { id: 'pending', icon: Clock, label: 'Pending' },
           { id: 'performance', icon: BarChart3, label: 'Dashboard' },
+          { id: 'attendance', icon: History, label: 'Attendance' },
           { id: 'today', icon: Calendar, label: 'Today' },
           { id: 'upcoming', icon: TrendingUp, label: 'Upcoming' },
           { id: 'requirements', icon: FileText, label: 'Needs' },
@@ -891,7 +944,20 @@ export default function EmployeeDashboard({
         </button>
       </div>
 
-      {activeTab === 'performance' ? (
+      {activeTab === 'attendance' ? (
+        <MonthlyAttendanceReport
+          user={user}
+          members={[user]}
+          attendance={attendanceRecords}
+          isManager={false}
+          attendanceLoading={attendanceLoading}
+          isManagerClockedIn={isClockedIn}
+          onManagerAttendance={handleAttendance}
+          scope="employee"
+          correctionRequests={attendanceCorrections}
+          onRequestCorrection={handleAttendanceCorrectionRequest}
+        />
+      ) : activeTab === 'performance' ? (
         <SalesPerformanceDashboard
           user={user}
           leads={leads}

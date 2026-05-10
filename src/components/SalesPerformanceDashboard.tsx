@@ -426,7 +426,12 @@ export default function SalesPerformanceDashboard({
 
   const visibleEmployees = useMemo(() => {
     const baseEmployees = employees.filter((employee) => employee.role === 'employee' || employee.role === 'manager');
-    if (scope === 'employee') return [{ ...user, role: 'employee' as const }];
+    if (scope === 'employee') {
+      const map = new Map<string, User>();
+      baseEmployees.forEach((employee) => map.set(employee.uid, employee));
+      map.set(user.uid, { ...user, role: 'employee' as const });
+      return Array.from(map.values()).filter((employee) => employee.role === 'employee');
+    }
     if (scope === 'manager') {
       const scoped = baseEmployees.filter((employee) => employee.uid === user.uid || employee.managerId === user.uid);
       return scoped.length ? scoped : [{ ...user, role: 'manager' as const }];
@@ -569,6 +574,9 @@ export default function SalesPerformanceDashboard({
 
   const pagedMetrics = sortedMetrics.slice((page - 1) * pageSize, page * pageSize);
   const totalPages = Math.max(1, Math.ceil(sortedMetrics.length / pageSize));
+  const scoreRankedMetrics = useMemo(() => [...employeeMetrics].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)), [employeeMetrics]);
+  const currentUserRank = scoreRankedMetrics.findIndex((metric) => metric.uid === user.uid) + 1;
+  const currentUserMetric = scoreRankedMetrics.find((metric) => metric.uid === user.uid) || null;
 
   const alerts = useMemo(() => {
     const now = Date.now();
@@ -668,6 +676,26 @@ export default function SalesPerformanceDashboard({
         </div>
       </div>
       <div className="mt-4 overflow-x-auto">
+        {scope === 'employee' && currentUserMetric && (
+          <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
+            <div className="rounded-2xl bg-blue-50 p-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">Your Rank</p>
+              <p className="mt-2 text-2xl font-black text-slate-900">#{currentUserRank || '-'}</p>
+            </div>
+            <div className="rounded-2xl bg-slate-50 p-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Score</p>
+              <p className="mt-2 text-2xl font-black text-slate-900">{currentUserMetric.score.toFixed(2)}</p>
+            </div>
+            <div className="rounded-2xl bg-slate-50 p-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Deals</p>
+              <p className="mt-2 text-2xl font-black text-slate-900">{currentUserMetric.deals}</p>
+            </div>
+            <div className="rounded-2xl bg-slate-50 p-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Site Visits</p>
+              <p className="mt-2 text-2xl font-black text-slate-900">{currentUserMetric.visits}</p>
+            </div>
+          </div>
+        )}
         <table className="w-full text-left">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50">

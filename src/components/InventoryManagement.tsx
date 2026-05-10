@@ -12,7 +12,7 @@ import {
   orderBy,
   Timestamp 
 } from 'firebase/firestore';
-import { GoogleMap, useJsApiLoader, MarkerF } from '@react-google-maps/api';
+import { GoogleMap, useJsApiLoader, MarkerF, type Libraries } from '@react-google-maps/api';
 import { db, auth } from '../lib/firebase';
 import { 
   InventoryItem, 
@@ -67,17 +67,29 @@ interface MapPickerProps {
   onPick: (lat: number, lng: number) => void;
 }
 
+const GOOGLE_MAP_LIBRARIES: Libraries = ['places'];
+
 function MapPicker({ apiKey, latitude, longitude, onPick }: MapPickerProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     id: 'google-map-script',
     googleMapsApiKey: apiKey,
-    libraries: ['places'],
+    libraries: GOOGLE_MAP_LIBRARIES,
   });
   const mapRef = useRef<google.maps.Map | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
+  const onPickRef = useRef(onPick);
   const [searchValue, setSearchValue] = useState('');
   const [searchError, setSearchError] = useState('');
+
+  useEffect(() => {
+    onPickRef.current = onPick;
+  }, [onPick]);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    mapRef.current.panTo({ lat: latitude, lng: longitude });
+  }, [latitude, longitude]);
 
   useEffect(() => {
     if (!isLoaded || !searchInputRef.current || !window.google?.maps?.places) return;
@@ -98,7 +110,7 @@ function MapPicker({ apiKey, latitude, longitude, onPick }: MapPickerProps) {
 
       const lat = place.geometry.location.lat();
       const lng = place.geometry.location.lng();
-      onPick(lat, lng);
+      onPickRef.current(lat, lng);
       setSearchValue(place.formatted_address || place.name || `${lat.toFixed(6)}, ${lng.toFixed(6)}`);
       setSearchError('');
 
@@ -111,7 +123,7 @@ function MapPicker({ apiKey, latitude, longitude, onPick }: MapPickerProps) {
     return () => {
       window.google.maps.event.removeListener(listener);
     };
-  }, [isLoaded, onPick]);
+  }, [isLoaded]);
 
   const mapContainerStyle = {
     width: '100%',
@@ -161,7 +173,7 @@ function MapPicker({ apiKey, latitude, longitude, onPick }: MapPickerProps) {
         }}
         onClick={(e) => {
           if (e.latLng) {
-            onPick(e.latLng.lat(), e.latLng.lng());
+            onPickRef.current(e.latLng.lat(), e.latLng.lng());
           }
         }}
         options={{
@@ -272,18 +284,26 @@ function getInventoryLocationLink(item: InventoryItem) {
 }
 
 function parseCoordinatesFromMapLink(value: string): { latitude: number; longitude: number } | null {
-  const decoded = decodeURIComponent(value);
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    decoded = value;
+  }
   const patterns = [
     /@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/,
     /[?&](?:q|query|ll)=(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/,
     /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+    /!4d(-?\d+(?:\.\d+)?)!3d(-?\d+(?:\.\d+)?)/,
+    /^\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*$/,
   ];
 
-  for (const pattern of patterns) {
+  for (let index = 0; index < patterns.length; index += 1) {
+    const pattern = patterns[index];
     const match = decoded.match(pattern);
     if (!match) continue;
-    const latitude = Number(match[1]);
-    const longitude = Number(match[2]);
+    const latitude = Number(index === 3 ? match[2] : match[1]);
+    const longitude = Number(index === 3 ? match[1] : match[2]);
     if (
       Number.isFinite(latitude) &&
       Number.isFinite(longitude) &&
