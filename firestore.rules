@@ -16,7 +16,13 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['super_admin', 'admin', 'client_admin'];
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super_admin';
     }
 
     function isOwner(resourceData) {
@@ -37,7 +43,7 @@ service cloud.firestore {
         && data.name is string && data.name.size() > 0 && data.name.size() <= 100
         && data.email is string && data.email.size() <= 100
         && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15
-        && data.role in ['admin', 'employee', 'suspended', 'deleted']
+        && data.role in ['super_admin', 'admin', 'client_admin', 'manager', 'employee', 'suspended', 'deleted']
         && data.createdAt is timestamp;
     }
 
@@ -244,6 +250,64 @@ service cloud.firestore {
     match /system/{docId} {
       allow read: if isAdmin();
       allow write: if isAdmin();
+    }
+
+    // Platform control plane collections (super admin only)
+    match /platformFeatureToggles/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /platformAnnouncements/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    match /platformConfig/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    match /platformEmailTemplates/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /platformClients/{clientId} {
+      allow read: if isAdmin();
+      allow write: if isSuperAdmin();
+
+      match /internalNotes/{docId} {
+        allow read, write: if isSuperAdmin();
+      }
+    }
+
+    match /platformApiKeys/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /platformDataExportJobs/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /platformQueueJobs/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /platformVersionHistory/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /platformFollowupReminders/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /sessionRevocations/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /auditLogs/{docId} {
+      allow create: if isAdmin();
+      allow read: if isSuperAdmin();
+      allow update, delete: if false;
     }
 
     // Attendance

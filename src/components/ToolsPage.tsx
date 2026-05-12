@@ -58,8 +58,8 @@ type ToolsPageProps = {
 };
 
 export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
-  const isSuperAdmin = user.role === 'admin';
-  const cards = user.role === 'admin' ? adminTools : user.role === 'manager' ? managerTools : employeeTools;
+  const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin';
+  const cards = (user.role === 'super_admin' || user.role === 'admin') ? adminTools : user.role === 'manager' ? managerTools : employeeTools;
   const leadsImportInputRef = useRef<HTMLInputElement | null>(null);
   const inventoryImportInputRef = useRef<HTMLInputElement | null>(null);
   const [dataToolsBusy, setDataToolsBusy] = useState<string | null>(null);

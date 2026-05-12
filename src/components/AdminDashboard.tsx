@@ -130,7 +130,7 @@ export default function AdminDashboard({
   initialView,
   initialViewSignal = 0,
 }: AdminDashboardProps) {
-  const isSuperAdmin = user.role === 'admin';
+  const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin';
   const isManager = user.role === 'manager';
   const [activeView, setActiveView] = useState<AdminView>(initialView ?? 'performance');
   const [employees, setEmployees] = useState<User[]>([]);

@@ -78,10 +78,61 @@ export interface User {
   name: string;
   email: string;
   phone: string;
-  role: 'admin' | 'manager' | 'employee' | 'suspended' | 'deleted';
+  role: 'super_admin' | 'admin' | 'client_admin' | 'manager' | 'employee' | 'suspended' | 'deleted';
   managerId?: string;
   managerName?: string;
   createdAt: any;
+}
+
+export type ClientLifecycleState = 'active' | 'suspended' | 'archived' | 'deleted_permanently';
+
+export interface PlatformClient {
+  id: string;
+  name: string;
+  adminEmail?: string;
+  state: ClientLifecycleState;
+  logoUrl?: string;
+  primaryColor?: string;
+  customDomain?: string;
+  subdomain?: string;
+  whiteLabelEnabled?: boolean;
+  sandboxEnabled?: boolean;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
+export interface FeatureToggle {
+  id: string;
+  label: string;
+  enabled: boolean;
+  description?: string;
+  updatedAt?: any;
+  updatedBy?: string;
+}
+
+export interface PlatformAnnouncement {
+  id: string;
+  title: string;
+  message: string;
+  severity: 'info' | 'warning' | 'critical';
+  targetType: 'all' | 'selected';
+  targetClientIds?: string[];
+  active: boolean;
+  createdAt?: any;
+  createdBy?: string;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  action: string;
+  actorId: string;
+  actorName: string;
+  targetType?: string;
+  targetId?: string;
+  oldValue?: any;
+  newValue?: any;
+  meta?: Record<string, any>;
+  createdAt?: any;
 }
 
 export interface Notification {

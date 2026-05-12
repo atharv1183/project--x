@@ -5,16 +5,19 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { auth, db } from './lib/firebase';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
-import { User } from './types';
+import { onAuthStateChanged, signInWithCustomToken, signOut } from 'firebase/auth';
+import { collection, doc, getDoc, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { PlatformAnnouncement, User } from './types';
 import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import EmployeeDashboard from './components/EmployeeDashboard';
 import ProfilePage from './components/ProfilePage';
 import ToolsPage, { ToolTarget } from './components/ToolsPage';
 import PublicHeroPage from './components/PublicHeroPage';
-import { LogOut, Home, ArrowLeft, UserCircle2, Wrench } from 'lucide-react';
+import SuperAdminControlCenter from './components/SuperAdminControlCenter';
+import { functions } from './lib/firebase';
+import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 type AdminDashboardView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory';
@@ -31,14 +34,17 @@ export default function App() {
   const pathname = window.location.pathname.toLowerCase();
   const isPublicHeroRoute = pathname === '/' || pathname === '/hero' || pathname === '/website';
   const [user, setUser] = useState<User | null>(null);
-  const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile' | 'tools'>('dashboard');
+  const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile' | 'tools' | 'platform'>('dashboard');
+  const [activeAnnouncements, setActiveAnnouncements] = useState<PlatformAnnouncement[]>([]);
+  const [impersonation, setImpersonation] = useState<{ clientId: string; clientName: string; startedAt: string; actorRestoreToken?: string } | null>(null);
   const [dashboardBackSignal, setDashboardBackSignal] = useState(0);
   const [dashboardTarget, setDashboardTarget] = useState<DashboardTarget>(null);
   const [dashboardTargetSignal, setDashboardTargetSignal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loginToastName, setLoginToastName] = useState<string | null>(null);
   const loginToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isAdminLikeUser = user?.role === 'admin' || user?.role === 'manager';
+  const isAdminLikeUser = user?.role === 'super_admin' || user?.role === 'admin' || user?.role === 'client_admin' || user?.role === 'manager';
+  const isSuperAdmin = user?.role === 'super_admin';
 
   const showLoginToast = (name: string) => {
     setLoginToastName(name);
@@ -96,6 +102,30 @@ export default function App() {
   }, [isPublicHeroRoute]);
 
   useEffect(() => {
+    const raw = localStorage.getItem('super_admin_impersonation');
+    if (!raw) return;
+    try {
+      setImpersonation(JSON.parse(raw));
+    } catch {
+      localStorage.removeItem('super_admin_impersonation');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'platformAnnouncements'), orderBy('createdAt', 'desc'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs
+        .map((item) => ({ id: item.id, ...item.data() } as PlatformAnnouncement))
+        .filter((item) => item.active)
+        .filter((item) => item.targetType === 'all' || (item.targetClientIds || []).length > 0)
+        .slice(0, 3);
+      setActiveAnnouncements(data);
+    });
+    return () => unsub();
+  }, [user]);
+
+  useEffect(() => {
     return () => {
       if (loginToastTimerRef.current) {
         clearTimeout(loginToastTimerRef.current);
@@ -108,6 +138,8 @@ export default function App() {
     setUser(null);
     setActiveScreen('dashboard');
     setDashboardTarget(null);
+    localStorage.removeItem('super_admin_impersonation');
+    setImpersonation(null);
   };
 
   const handleBack = () => {
@@ -160,6 +192,15 @@ export default function App() {
             <p className="text-sm font-semibold text-gray-900">{user.name}</p>
             <p className="text-xs text-gray-500">{user.phone}</p>
           </div>
+          {isSuperAdmin && (
+            <button
+              onClick={() => setActiveScreen('platform')}
+              className="p-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
+              title="Super Admin Control Center"
+            >
+              <ShieldCheck className="w-5 h-5" />
+            </button>
+          )}
           <button
             onClick={() => setActiveScreen('tools')}
             className="p-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
@@ -190,6 +231,42 @@ export default function App() {
           </button>
         </div>
       </header>
+      {impersonation && (
+        <div className="bg-amber-100 border-b border-amber-200 px-4 py-2 flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-amber-900">Super Admin Session Active: Acting as {impersonation.clientName}</p>
+          <button
+            onClick={async () => {
+              try {
+                if (!functions) {
+                  localStorage.removeItem('super_admin_impersonation');
+                  setImpersonation(null);
+                  return;
+                }
+                if (impersonation.actorRestoreToken) {
+                  await signInWithCustomToken(auth, impersonation.actorRestoreToken);
+                  const endImpersonation = httpsCallable(functions, 'endImpersonationSession');
+                  await endImpersonation({ clientId: impersonation.clientId });
+                }
+              } catch (error) {
+                console.error('Failed to restore super admin session', error);
+              } finally {
+                localStorage.removeItem('super_admin_impersonation');
+                setImpersonation(null);
+              }
+            }}
+            className="px-3 py-1.5 rounded-lg bg-amber-200 text-amber-900 text-xs font-semibold"
+          >
+            End Session
+          </button>
+        </div>
+      )}
+      {activeAnnouncements.length > 0 && (
+        <div className="border-b border-blue-100 bg-blue-50 px-4 py-2">
+          <p className="text-xs font-semibold text-blue-800">
+            {activeAnnouncements[0].title}: {activeAnnouncements[0].message}
+          </p>
+        </div>
+      )}
 
       <main className="flex-1 w-full max-w-7xl mx-auto p-4 md:p-6">
         <AnimatePresence mode="wait">
@@ -208,6 +285,34 @@ export default function App() {
                 onSelectTool={(tool) => {
                   setDashboardTarget(tool);
                   setDashboardTargetSignal((prev) => prev + 1);
+                  setActiveScreen('dashboard');
+                }}
+              />
+            ) : activeScreen === 'platform' && isSuperAdmin ? (
+              <SuperAdminControlCenter
+                user={user}
+                onStartImpersonation={async ({ clientId, clientName }) => {
+                  if (!functions) {
+                    alert('Firebase Functions is not available. Please deploy/enable Functions first.');
+                    return;
+                  }
+                  const startImpersonation = httpsCallable(functions, 'startImpersonationSession');
+                  const response = await startImpersonation({ clientId });
+                  const data = response.data as {
+                    targetToken: string;
+                    actorRestoreToken: string;
+                    clientId: string;
+                    clientName: string;
+                  };
+                  await signInWithCustomToken(auth, data.targetToken);
+                  const payload = {
+                    clientId: data.clientId || clientId,
+                    clientName: data.clientName || clientName,
+                    startedAt: new Date().toISOString(),
+                    actorRestoreToken: data.actorRestoreToken,
+                  };
+                  localStorage.setItem('super_admin_impersonation', JSON.stringify(payload));
+                  setImpersonation(payload as any);
                   setActiveScreen('dashboard');
                 }}
               />

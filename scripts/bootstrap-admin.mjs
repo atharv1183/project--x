@@ -38,6 +38,15 @@ function requiredEnv(name, fallback) {
   return value;
 }
 
+function resolveAdminRole() {
+  const rawRole = (process.env.ADMIN_ROLE || 'admin').trim().toLowerCase();
+  const allowedRoles = new Set(['admin', 'super_admin']);
+  if (!allowedRoles.has(rawRole)) {
+    throw new Error('ADMIN_ROLE must be either "admin" or "super_admin".');
+  }
+  return rawRole;
+}
+
 async function bootstrapAdmin() {
   await loadLocalEnv();
   const appletConfig = await readAppletConfig();
@@ -48,6 +57,7 @@ async function bootstrapAdmin() {
   const adminName = requiredEnv('ADMIN_NAME', 'Platform Admin');
   const adminPassword = requiredEnv('ADMIN_PASSWORD', null);
   const adminEmail = process.env.ADMIN_EMAIL || `${adminPhone}@estatepulse.com`;
+  const adminRole = resolveAdminRole();
 
   // Keep API quota/billing aligned with the Firebase project when ADC is used.
   if (!process.env.GOOGLE_CLOUD_QUOTA_PROJECT) {
@@ -88,7 +98,7 @@ async function bootstrapAdmin() {
     }
   }
 
-  await auth.setCustomUserClaims(userRecord.uid, { role: 'admin' });
+  await auth.setCustomUserClaims(userRecord.uid, { role: adminRole });
 
   const userRef = db.collection('users').doc(userRecord.uid);
   const userSnap = await userRef.get();
@@ -99,7 +109,7 @@ async function bootstrapAdmin() {
         name: adminName,
         email: adminEmail,
         phone: adminPhone,
-        role: 'admin',
+        role: adminRole,
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
@@ -109,7 +119,7 @@ async function bootstrapAdmin() {
       name: adminName,
       email: adminEmail,
       phone: adminPhone,
-      role: 'admin',
+      role: adminRole,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
@@ -121,6 +131,7 @@ async function bootstrapAdmin() {
   console.log('Admin bootstrap complete.');
   console.log(`Project: ${projectId}`);
   console.log(`Database: ${databaseId}`);
+  console.log(`Role: ${adminRole}`);
   console.log(`Admin UID: ${userRecord.uid}`);
   console.log(`Admin Email: ${adminEmail}`);
 }
