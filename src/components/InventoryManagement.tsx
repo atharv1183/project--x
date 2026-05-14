@@ -12,7 +12,6 @@ import {
   orderBy,
   Timestamp 
 } from 'firebase/firestore';
-import { GoogleMap, useJsApiLoader, MarkerF, type Libraries } from '@react-google-maps/api';
 import { db, auth } from '../lib/firebase';
 import { 
   InventoryItem, 
@@ -37,7 +36,6 @@ import {
   Trash2, 
   Edit2, 
   MapPin, 
-  Maximize2, 
   Home, 
   Landmark,
   Upload,
@@ -58,155 +56,6 @@ import { format } from 'date-fns';
 interface InventoryManagementProps {
   user: User;
   onBack?: () => void;
-}
-
-interface MapPickerProps {
-  apiKey: string;
-  latitude: number;
-  longitude: number;
-  onPick: (lat: number, lng: number) => void;
-}
-
-const GOOGLE_MAP_LIBRARIES: Libraries = ['places'];
-
-function MapPicker({ apiKey, latitude, longitude, onPick }: MapPickerProps) {
-  const { isLoaded, loadError } = useJsApiLoader({
-    id: 'google-map-script',
-    googleMapsApiKey: apiKey,
-    libraries: GOOGLE_MAP_LIBRARIES,
-  });
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
-  const onPickRef = useRef(onPick);
-  const [searchValue, setSearchValue] = useState('');
-  const [searchError, setSearchError] = useState('');
-
-  useEffect(() => {
-    onPickRef.current = onPick;
-  }, [onPick]);
-
-  useEffect(() => {
-    if (!mapRef.current) return;
-    mapRef.current.panTo({ lat: latitude, lng: longitude });
-  }, [latitude, longitude]);
-
-  useEffect(() => {
-    if (!isLoaded || !searchInputRef.current || !window.google?.maps?.places) return;
-
-    if (!autocompleteRef.current) {
-      autocompleteRef.current = new window.google.maps.places.Autocomplete(searchInputRef.current, {
-        fields: ['geometry', 'formatted_address', 'name'],
-      });
-    }
-
-    const autocomplete = autocompleteRef.current;
-    const listener = autocomplete.addListener('place_changed', () => {
-      const place = autocomplete.getPlace();
-      if (!place.geometry || !place.geometry.location) {
-        setSearchError('Could not find that location. Please choose from suggestions.');
-        return;
-      }
-
-      const lat = place.geometry.location.lat();
-      const lng = place.geometry.location.lng();
-      onPickRef.current(lat, lng);
-      setSearchValue(place.formatted_address || place.name || `${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-      setSearchError('');
-
-      if (mapRef.current) {
-        mapRef.current.panTo({ lat, lng });
-        mapRef.current.setZoom(16);
-      }
-    });
-
-    return () => {
-      window.google.maps.event.removeListener(listener);
-    };
-  }, [isLoaded]);
-
-  const mapContainerStyle = {
-    width: '100%',
-    height: '300px',
-    borderRadius: '24px'
-  };
-
-  if (loadError) {
-    return (
-      <div className="w-full h-[300px] bg-slate-100 rounded-[32px] flex items-center justify-center text-slate-500 font-bold text-sm text-center px-6">
-        Could not load Google Map. Please verify your Maps API key.
-      </div>
-    );
-  }
-
-  if (!isLoaded) {
-    return (
-      <div className="w-full h-[300px] bg-slate-100 rounded-[32px] flex items-center justify-center text-slate-400 font-bold text-sm">
-        Loading Map...
-      </div>
-    );
-  }
-
-  return (
-    <div className="border-4 border-slate-50 rounded-[32px] overflow-hidden shadow-inner bg-white">
-      <div className="p-3 sm:p-4 border-b border-slate-100">
-        <input
-          ref={searchInputRef}
-          value={searchValue}
-          onChange={(e) => {
-            setSearchValue(e.target.value);
-            if (searchError) setSearchError('');
-          }}
-          placeholder="Search location or address..."
-          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none text-sm font-medium text-slate-700"
-        />
-        {searchError && (
-          <p className="mt-2 text-[11px] font-bold text-rose-500">{searchError}</p>
-        )}
-      </div>
-      <GoogleMap
-        mapContainerStyle={mapContainerStyle}
-        center={{ lat: latitude, lng: longitude }}
-        zoom={15}
-        onLoad={(map) => {
-          mapRef.current = map;
-        }}
-        onClick={(e) => {
-          if (e.latLng) {
-            onPickRef.current(e.latLng.lat(), e.latLng.lng());
-          }
-        }}
-        options={{
-          disableDefaultUI: true,
-          zoomControl: true,
-          styles: [
-            {
-              featureType: "all",
-              elementType: "labels.text.fill",
-              stylers: [{ color: "#616161" }]
-            },
-            {
-              featureType: "landscape",
-              elementType: "all",
-              stylers: [{ color: "#f5f5f5" }]
-            },
-            {
-              featureType: "water",
-              elementType: "all",
-              stylers: [{ color: "#e9e9e9" }]
-            },
-            {
-              featureType: "road",
-              elementType: "all",
-              stylers: [{ saturation: -100 }]
-            }
-          ]
-        }}
-      >
-        <MarkerF position={{ lat: latitude, lng: longitude }} />
-      </GoogleMap>
-    </div>
-  );
 }
 
 function toMillis(value: unknown): number {
@@ -412,8 +261,6 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     longitude: 78.9629 as number
   });
 
-  const mapsApiKey = String(import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '').trim();
-  const hasMapsApiKey = mapsApiKey.length > 0;
   const cloudinaryCloudName = String(import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || '').trim();
   const cloudinaryUploadPreset = String(import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || '').trim();
   const hasCloudinaryConfig = cloudinaryCloudName.length > 0 && cloudinaryUploadPreset.length > 0;
@@ -1726,26 +1573,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
                             <div className="space-y-3 pt-2">
                               <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1 flex items-center gap-2">
-                                <Maximize2 size={12} className="text-blue-500" /> Pin Exact Location <span className="text-rose-500">*</span>
+                                Exact Coordinates <span className="text-rose-500">*</span>
                               </label>
-                              {hasMapsApiKey ? (
-                                <MapPicker
-                                  apiKey={mapsApiKey}
-                                  latitude={formData.latitude}
-                                  longitude={formData.longitude}
-                                  onPick={(lat, lng) => {
-                                    setFormData({
-                                      ...formData,
-                                      latitude: lat,
-                                      longitude: lng
-                                    });
-                                  }}
-                                />
-                              ) : (
-                                <div className="w-full h-[300px] bg-slate-100 rounded-[32px] flex items-center justify-center text-slate-500 font-bold text-sm text-center px-6">
-                                  Google Map is disabled. Add `VITE_GOOGLE_MAPS_API_KEY` in `.env.local` to enable map pinning.
-                                </div>
-                              )}
                               <div className="grid grid-cols-2 gap-4">
                                 <input
                                   type="number"

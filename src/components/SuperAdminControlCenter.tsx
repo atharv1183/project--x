@@ -9,105 +9,154 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
-  writeBatch,
 } from 'firebase/firestore';
-import { Bell, Database, Gauge, KeyRound, Megaphone, Settings, ShieldCheck, Users } from 'lucide-react';
-import { db } from '../lib/firebase';
-import { AuditLogEntry, FeatureToggle, PlatformAnnouncement, PlatformClient, User } from '../types';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { AlertCircle, Building2, Headset, LayoutDashboard, Settings, ShieldCheck, Users } from 'lucide-react';
+import { auth, db, functions } from '../lib/firebase';
+import { AuditLogEntry, PlatformClient, User } from '../types';
+import { httpsCallable } from 'firebase/functions';
 
 type Props = {
   user: User;
   onStartImpersonation: (payload: { clientId: string; clientName: string }) => Promise<void>;
 };
 
-type Panel = 'security' | 'features' | 'communication' | 'operations';
+type Module = 'dashboard' | 'companies' | 'users' | 'support' | 'settings';
+type CompanyStatus = 'active' | 'trial' | 'suspended' | 'expired' | 'archived' | 'deleted_permanently';
 
-const PANELS: Array<{ id: Panel; label: string; icon: any }> = [
-  { id: 'security', label: 'Security', icon: ShieldCheck },
-  { id: 'features', label: 'Features', icon: Settings },
-  { id: 'communication', label: 'Communication', icon: Megaphone },
-  { id: 'operations', label: 'Operations', icon: Gauge },
+type CompanyRecord = PlatformClient & {
+  contactPerson?: string;
+  mobileNumber?: string;
+  email?: string;
+  address?: string;
+  billingCycle?: 'monthly' | 'quarterly' | 'yearly';
+  subscriptionStartDate?: string;
+  subscriptionExpiryDate?: string;
+  paymentStatus?: 'paid' | 'pending' | 'overdue';
+  paymentMode?: 'bank_transfer' | 'upi' | 'cash' | 'cheque';
+  notes?: string;
+  createdAt?: any;
+};
+
+type SupportTicket = {
+  id: string;
+  companyId?: string;
+  companyName?: string;
+  subject?: string;
+  priority?: 'low' | 'medium' | 'high';
+  status?: 'open' | 'in_progress' | 'waiting' | 'resolved' | 'closed';
+  assignedTo?: string;
+  createdAt?: any;
+};
+
+const MODULES: Array<{ id: Module; label: string; icon: any }> = [
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'companies', label: 'Companies', icon: Building2 },
+  { id: 'users', label: 'Users', icon: Users },
+  { id: 'support', label: 'Support', icon: Headset },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
+const statusClass: Record<string, string> = {
+  active: 'bg-emerald-100 text-emerald-700',
+  trial: 'bg-blue-100 text-blue-700',
+  suspended: 'bg-amber-100 text-amber-700',
+  expired: 'bg-rose-100 text-rose-700',
+  archived: 'bg-slate-100 text-slate-700',
+  deleted_permanently: 'bg-slate-200 text-slate-800',
+};
+
+const toMillis = (value: unknown) => {
+  if (!value) return 0;
+  if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  if (typeof value === 'object' && value !== null) {
+    const maybe = value as { toDate?: () => Date; seconds?: number };
+    if (typeof maybe.toDate === 'function') return maybe.toDate().getTime();
+    if (typeof maybe.seconds === 'number') return maybe.seconds * 1000;
+  }
+  return 0;
+};
+
+const asDateInput = (value?: any) => {
+  const ms = toMillis(value);
+  if (!ms) return '';
+  return new Date(ms).toISOString().slice(0, 10);
+};
+
 export default function SuperAdminControlCenter({ user, onStartImpersonation }: Props) {
-  const [panel, setPanel] = useState<Panel>('security');
-  const [clients, setClients] = useState<PlatformClient[]>([]);
-  const [featureToggles, setFeatureToggles] = useState<FeatureToggle[]>([]);
-  const [announcements, setAnnouncements] = useState<PlatformAnnouncement[]>([]);
+  const [module, setModule] = useState<Module>('dashboard');
+  const [clients, setClients] = useState<CompanyRecord[]>([]);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
-  const [clientNotes, setClientNotes] = useState<Record<string, string>>({});
+  const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [companySearch, setCompanySearch] = useState('');
+  const [userSearch, setUserSearch] = useState('');
+  const [userRoleFilter, setUserRoleFilter] = useState<'all' | User['role']>('all');
+  const [userCompanyFilter, setUserCompanyFilter] = useState<string>('all');
+  const [showAddCompany, setShowAddCompany] = useState(false);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [globalSettings, setGlobalSettings] = useState({
-    companyName: '',
     supportEmail: '',
-    logoUrl: '',
-    smtpHost: '',
-    smtpUser: '',
-    smtpFrom: '',
-    whatsappApiKey: '',
-    razorpayKey: '',
-    stripeKey: '',
-    fileUploadLimitMb: '20',
     loginRateLimitPerMin: '10',
     apiRateLimitPerMin: '120',
-    uploadRateLimitPerHour: '100',
   });
-  const [announcementForm, setAnnouncementForm] = useState({
-    title: '',
-    message: '',
-    severity: 'info' as 'info' | 'warning' | 'critical',
-    targetType: 'all' as 'all' | 'selected',
-    targetClientIds: [] as string[],
-  });
-  const [newTemplate, setNewTemplate] = useState({
-    key: '',
-    subject: '',
-    body: 'Hello {{client_name}}',
+  const [companyForm, setCompanyForm] = useState({
+    companyName: '',
+    contactPerson: '',
+    mobileNumber: '',
+    email: '',
+    address: '',
+    billingCycle: 'monthly' as 'monthly' | 'quarterly' | 'yearly',
+    subscriptionStartDate: '',
+    subscriptionExpiryDate: '',
+    paymentStatus: 'pending' as 'paid' | 'pending' | 'overdue',
+    paymentMode: 'bank_transfer' as 'bank_transfer' | 'upi' | 'cash' | 'cheque',
+    notes: '',
   });
 
   useEffect(() => {
-    const unsubClients = onSnapshot(
-      query(collection(db, 'platformClients'), orderBy('name', 'asc')),
-      (sn) => setClients(sn.docs.map((d) => ({ id: d.id, ...d.data() } as PlatformClient)))
-    );
-    const unsubFeatures = onSnapshot(
-      query(collection(db, 'platformFeatureToggles'), orderBy('label', 'asc')),
-      (sn) => setFeatureToggles(sn.docs.map((d) => ({ id: d.id, ...d.data() } as FeatureToggle)))
-    );
-    const unsubAnnouncements = onSnapshot(
-      query(collection(db, 'platformAnnouncements'), orderBy('createdAt', 'desc')),
-      (sn) => setAnnouncements(sn.docs.map((d) => ({ id: d.id, ...d.data() } as PlatformAnnouncement)))
-    );
-    const unsubLogs = onSnapshot(
-      query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc')),
-      (sn) => setAuditLogs(sn.docs.slice(0, 100).map((d) => ({ id: d.id, ...d.data() } as AuditLogEntry)))
-    );
+    const unsubClients = onSnapshot(query(collection(db, 'platformClients'), orderBy('name', 'asc')), (sn) => {
+      setClients(sn.docs.map((d) => ({ id: d.id, ...d.data() } as CompanyRecord)));
+    });
+    const unsubUsers = onSnapshot(query(collection(db, 'users'), orderBy('createdAt', 'desc')), (sn) => {
+      setAllUsers(sn.docs.map((d) => ({ uid: d.id, ...d.data() } as User)));
+    });
+    const unsubAudit = onSnapshot(query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc')), (sn) => {
+      setAuditLogs(sn.docs.slice(0, 150).map((d) => ({ id: d.id, ...d.data() } as AuditLogEntry)));
+    });
+    const unsubTickets = onSnapshot(query(collection(db, 'supportTickets'), orderBy('createdAt', 'desc')), (sn) => {
+      setTickets(sn.docs.map((d) => ({ id: d.id, ...d.data() } as SupportTicket)));
+    });
     const unsubSettings = onSnapshot(doc(db, 'platformConfig', 'global'), (snap) => {
       if (snap.exists()) setGlobalSettings((prev) => ({ ...prev, ...(snap.data() as any) }));
     });
     return () => {
       unsubClients();
-      unsubFeatures();
-      unsubAnnouncements();
-      unsubLogs();
+      unsubUsers();
+      unsubAudit();
+      unsubTickets();
       unsubSettings();
     };
   }, []);
 
   useEffect(() => {
-    if (!clients.length) return;
-    const unsubs = clients.map((client) =>
-      onSnapshot(doc(db, 'platformClients', client.id, 'internalNotes', 'latest'), (snap) => {
-        if (!snap.exists()) return;
-        setClientNotes((prev) => ({ ...prev, [client.id]: String((snap.data() as any).note || '') }));
-      })
-    );
-    return () => unsubs.forEach((u) => u());
+    const todayMs = Date.now();
+    clients.forEach((client) => {
+      if (client.state === 'suspended' || client.state === 'deleted_permanently') return;
+      const expiryMs = toMillis(client.subscriptionExpiryDate);
+      if (expiryMs && expiryMs < todayMs && client.state !== 'expired') {
+        void updateDoc(doc(db, 'platformClients', client.id), {
+          state: 'expired',
+          updatedAt: serverTimestamp(),
+        });
+      }
+    });
   }, [clients]);
 
-  const selectedClientsCount = announcementForm.targetClientIds.length;
-  const activeClients = useMemo(() => clients.filter((c) => c.state === 'active').length, [clients]);
-
-  const logAudit = async (action: string, payload: Record<string, any>) => {
+  const logAudit = async (action: string, payload: Record<string, unknown>) => {
     await addDoc(collection(db, 'auditLogs'), {
       action,
       actorId: user.uid,
@@ -117,299 +166,423 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
     });
   };
 
-  const handleImpersonate = async (client: PlatformClient) => {
-    await onStartImpersonation({ clientId: client.id, clientName: client.name });
-  };
+  const companies = useMemo(() => {
+    const q = companySearch.trim().toLowerCase();
+    if (!q) return clients;
+    return clients.filter((client) =>
+      [client.id, client.name, client.contactPerson, client.email, client.mobileNumber].some((value) =>
+        String(value || '')
+          .toLowerCase()
+          .includes(q)
+      )
+    );
+  }, [clients, companySearch]);
 
-  const toggleFeature = async (feature: FeatureToggle) => {
-    await updateDoc(doc(db, 'platformFeatureToggles', feature.id), {
-      enabled: !feature.enabled,
-      updatedAt: serverTimestamp(),
-      updatedBy: user.uid,
+  const mappedUsers = useMemo(
+    () =>
+      allUsers.map((member) => {
+        const companyId = (member as any).clientId || 'n/a';
+        const company = clients.find((c) => c.id === companyId);
+        return { ...member, companyId, companyName: company?.name || 'N/A', lastLoginAt: (member as any).lastLoginAt };
+      }),
+    [allUsers, clients]
+  );
+
+  const users = useMemo(() => {
+    const q = userSearch.trim().toLowerCase();
+    return mappedUsers.filter((member) => {
+      const passRole = userRoleFilter === 'all' || member.role === userRoleFilter;
+      const passCompany = userCompanyFilter === 'all' || member.companyId === userCompanyFilter;
+      const passSearch =
+        !q ||
+        [member.name, member.email, member.phone, member.companyName]
+          .join(' ')
+          .toLowerCase()
+          .includes(q);
+      return passRole && passCompany && passSearch;
     });
-    await logAudit('feature_toggle_changed', {
-      targetType: 'feature_toggle',
-      targetId: feature.id,
-      oldValue: { enabled: feature.enabled },
-      newValue: { enabled: !feature.enabled },
+  }, [mappedUsers, userSearch, userRoleFilter, userCompanyFilter]);
+
+  const stats = useMemo(() => {
+    const now = Date.now();
+    const in30Days = now + 30 * 24 * 60 * 60 * 1000;
+    const active = clients.filter((c) => c.state === 'active').length;
+    const expired = clients.filter((c) => c.state === 'expired').length;
+    const renewals = clients.filter((c) => {
+      const expiry = toMillis(c.subscriptionExpiryDate);
+      return expiry >= now && expiry <= in30Days;
+    }).length;
+    return {
+      totalCompanies: clients.length,
+      activeCompanies: active,
+      expiredCompanies: expired,
+      totalUsers: allUsers.length,
+      pendingRenewals: renewals,
+    };
+  }, [clients, allUsers]);
+
+  const selectedCompany = clients.find((c) => c.id === selectedCompanyId) || null;
+
+  const confirmAndUpdateStatus = async (client: CompanyRecord, state: CompanyStatus) => {
+    const actionLabel = state === 'suspended' ? 'Suspend' : state === 'active' ? 'Activate' : 'Update';
+    if (!window.confirm(`${actionLabel} ${client.name}? This action may affect active users.`)) return;
+    await updateDoc(doc(db, 'platformClients', client.id), { state, updatedAt: serverTimestamp() });
+    await logAudit('company_status_changed', {
+      targetType: 'client',
+      targetId: client.id,
+      newValue: { state },
     });
   };
 
-  const saveGlobalSettings = async (e: FormEvent) => {
+  const handleSaveCompany = async (e: FormEvent) => {
     e.preventDefault();
-    await setDoc(doc(db, 'platformConfig', 'global'), {
-      ...globalSettings,
-      updatedAt: serverTimestamp(),
-      updatedBy: user.uid,
-    }, { merge: true });
-    await logAudit('global_settings_updated', { targetType: 'platform_config', targetId: 'global' });
-    alert('Global settings saved.');
-  };
+    const email = companyForm.email.trim().toLowerCase();
+    const phone = companyForm.mobileNumber.trim();
+    if (!companyForm.companyName.trim() || !email) {
+      alert('Company name and email are required.');
+      return;
+    }
+    if (!/^\+?\d{10,15}$/.test(phone)) {
+      alert('Enter a valid mobile number (10-15 digits).');
+      return;
+    }
+    const existingCompanyEmail = clients.some((c) => String(c.email || '').toLowerCase() === email);
+    const existingUserEmail = allUsers.some((u) => String(u.email || '').toLowerCase() === email);
+    if (existingCompanyEmail || existingUserEmail) {
+      alert('Email already exists.');
+      return;
+    }
+    if (companyForm.subscriptionStartDate && companyForm.subscriptionExpiryDate) {
+      const start = new Date(companyForm.subscriptionStartDate).getTime();
+      const end = new Date(companyForm.subscriptionExpiryDate).getTime();
+      if (start >= end) {
+        alert('Expiry date must be greater than start date.');
+        return;
+      }
+    }
 
-  const createAnnouncement = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!announcementForm.title.trim() || !announcementForm.message.trim()) return;
-    await addDoc(collection(db, 'platformAnnouncements'), {
-      ...announcementForm,
-      active: true,
+    const now = Date.now();
+    const expiry = new Date(companyForm.subscriptionExpiryDate).getTime();
+    const state: CompanyStatus = Number.isNaN(expiry) ? 'trial' : expiry < now ? 'expired' : 'active';
+    const clientRef = await addDoc(collection(db, 'platformClients'), {
+      name: companyForm.companyName.trim(),
+      contactPerson: companyForm.contactPerson.trim(),
+      mobileNumber: phone,
+      email,
+      address: companyForm.address.trim(),
+      billingCycle: companyForm.billingCycle,
+      subscriptionStartDate: companyForm.subscriptionStartDate || null,
+      subscriptionExpiryDate: companyForm.subscriptionExpiryDate || null,
+      paymentStatus: companyForm.paymentStatus,
+      paymentMode: companyForm.paymentMode,
+      notes: companyForm.notes.trim(),
+      state,
       createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
       createdBy: user.uid,
     });
-    await logAudit('announcement_created', {
-      targetType: 'announcement',
-      newValue: announcementForm,
-    });
-    setAnnouncementForm({ title: '', message: '', severity: 'info', targetType: 'all', targetClientIds: [] });
-  };
 
-  const updateClientState = async (clientId: string, state: PlatformClient['state']) => {
-    const ref = doc(db, 'platformClients', clientId);
-    await updateDoc(ref, { state, updatedAt: serverTimestamp() });
-    await logAudit('client_state_changed', { targetType: 'client', targetId: clientId, newValue: { state } });
-  };
-
-  const bulkSuspendArchived = async (targetState: PlatformClient['state']) => {
-    const target = clients.filter((c) => c.state === 'active').slice(0, 100);
-    const batch = writeBatch(db);
-    target.forEach((c) => batch.update(doc(db, 'platformClients', c.id), { state: targetState, updatedAt: serverTimestamp() }));
-    await batch.commit();
-    await logAudit('bulk_client_state_change', {
+    const adminRef = doc(collection(db, 'users'));
+    await updateDoc(doc(db, 'platformClients', clientRef.id), { adminUid: adminRef.id });
+    await addDoc(collection(db, 'auditLogs'), {
+      action: 'company_created',
+      actorId: user.uid,
+      actorName: user.name,
       targetType: 'client',
-      newValue: { state: targetState, count: target.length },
+      targetId: clientRef.id,
+      createdAt: serverTimestamp(),
     });
-    alert(`Updated ${target.length} clients to ${targetState}.`);
+    await setDoc(adminRef, {
+      uid: adminRef.id,
+      name: companyForm.contactPerson.trim() || `${companyForm.companyName.trim()} Admin`,
+      email,
+      phone,
+      role: 'client_admin',
+      clientId: clientRef.id,
+      createdAt: serverTimestamp(),
+    });
+
+    setShowAddCompany(false);
+    setCompanyForm({
+      companyName: '',
+      contactPerson: '',
+      mobileNumber: '',
+      email: '',
+      address: '',
+      billingCycle: 'monthly',
+      subscriptionStartDate: '',
+      subscriptionExpiryDate: '',
+      paymentStatus: 'pending',
+      paymentMode: 'bank_transfer',
+      notes: '',
+    });
   };
 
-  const saveInternalNote = async (clientId: string) => {
-    await setDoc(doc(db, 'platformClients', clientId, 'internalNotes', 'latest'), {
-      note: clientNotes[clientId] || '',
-      updatedAt: serverTimestamp(),
-      updatedBy: user.uid,
-    }, { merge: true });
-    await logAudit('internal_note_updated', { targetType: 'client', targetId: clientId });
+  const handleUserRole = async (member: User, role: User['role']) => {
+    if (!window.confirm(`Change ${member.name} role/status to ${role}?`)) return;
+    await updateDoc(doc(db, 'users', member.uid), { role, updatedAt: serverTimestamp() });
+    await logAudit('user_role_changed', { targetType: 'user', targetId: member.uid, newValue: { role } });
   };
 
-  const createTemplate = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!newTemplate.key.trim()) return;
-    await setDoc(doc(db, 'platformEmailTemplates', newTemplate.key.trim()), {
-      ...newTemplate,
-      updatedAt: serverTimestamp(),
-      updatedBy: user.uid,
-    }, { merge: true });
-    await logAudit('email_template_upserted', { targetType: 'email_template', targetId: newTemplate.key.trim() });
-    setNewTemplate({ key: '', subject: '', body: 'Hello {{client_name}}' });
+  const resetPassword = async (email: string, uid: string) => {
+    if (!email) return;
+    await sendPasswordResetEmail(auth, email);
+    await logAudit('user_password_reset_requested', { targetType: 'user', targetId: uid, meta: { email } });
+    alert('Password reset email sent.');
   };
 
-  const renderSecurity = () => (
-    <div className="space-y-6">
-      <section className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-lg font-bold text-gray-900 mb-3 flex items-center gap-2"><Users className="w-5 h-5" /> Impersonation / Login As Client</h3>
-        <div className="grid gap-2">
-          {clients.map((client) => (
-            <div key={client.id} className="flex items-center justify-between rounded-xl border border-gray-100 px-3 py-2">
-              <div>
-                <p className="font-semibold text-sm text-gray-900">{client.name}</p>
-                <p className="text-xs text-gray-500 uppercase">{client.state}</p>
-              </div>
-              <button onClick={() => handleImpersonate(client)} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold">Login As Client Admin</button>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-lg font-bold text-gray-900 mb-3">Session Management / Force Logout</h3>
-        <button
-          onClick={() => addDoc(collection(db, 'sessionRevocations'), { scope: 'all', createdAt: serverTimestamp(), createdBy: user.uid })}
-          className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-semibold"
-        >
-          Force Logout All Sessions
-        </button>
-      </section>
-    </div>
-  );
-
-  const renderFeatures = () => (
-    <div className="space-y-6">
-      <section className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-lg font-bold text-gray-900 mb-3">Global Feature Control</h3>
-        <div className="space-y-2">
-          {featureToggles.map((feature) => (
-            <div key={feature.id} className="flex items-center justify-between border border-gray-100 rounded-xl px-3 py-2">
-              <div>
-                <p className="font-semibold text-sm text-gray-900">{feature.label}</p>
-                <p className="text-xs text-gray-500">{feature.description || 'Platform feature toggle'}</p>
-              </div>
-              <button onClick={() => toggleFeature(feature)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${feature.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                {feature.enabled ? 'ON' : 'OFF'}
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-lg font-bold text-gray-900 mb-3">Global Settings / Rate Limits</h3>
-        <form onSubmit={saveGlobalSettings} className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {Object.entries(globalSettings).map(([key, value]) => (
-            <input key={key} value={value as string} onChange={(e) => setGlobalSettings((prev) => ({ ...prev, [key]: e.target.value }))} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" placeholder={key} />
-          ))}
-          <button type="submit" className="md:col-span-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold">Save Global Settings</button>
-        </form>
-      </section>
-      <section className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-lg font-bold text-gray-900 mb-3">Email Template Management</h3>
-        <form onSubmit={createTemplate} className="space-y-2">
-          <input value={newTemplate.key} onChange={(e) => setNewTemplate((p) => ({ ...p, key: e.target.value }))} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" placeholder="template key (welcome_email)" />
-          <input value={newTemplate.subject} onChange={(e) => setNewTemplate((p) => ({ ...p, subject: e.target.value }))} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" placeholder="Subject" />
-          <textarea value={newTemplate.body} onChange={(e) => setNewTemplate((p) => ({ ...p, body: e.target.value }))} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm min-h-[110px]" />
-          <button type="submit" className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold">Save Template</button>
-        </form>
-      </section>
-    </div>
-  );
-
-  const renderCommunication = () => (
-    <div className="space-y-6">
-      <section className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-lg font-bold text-gray-900 mb-3 flex items-center gap-2"><Bell className="w-5 h-5" /> Announcement System</h3>
-        <form onSubmit={createAnnouncement} className="space-y-2">
-          <input value={announcementForm.title} onChange={(e) => setAnnouncementForm((p) => ({ ...p, title: e.target.value }))} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Title" />
-          <textarea value={announcementForm.message} onChange={(e) => setAnnouncementForm((p) => ({ ...p, message: e.target.value }))} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm min-h-[100px]" placeholder="Message" />
-          <div className="grid grid-cols-2 gap-2">
-            <select value={announcementForm.severity} onChange={(e) => setAnnouncementForm((p) => ({ ...p, severity: e.target.value as any }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm">
-              <option value="info">Info</option>
-              <option value="warning">Warning</option>
-              <option value="critical">Critical</option>
-            </select>
-            <select value={announcementForm.targetType} onChange={(e) => setAnnouncementForm((p) => ({ ...p, targetType: e.target.value as any }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm">
-              <option value="all">All Clients</option>
-              <option value="selected">Selected Clients</option>
-            </select>
-          </div>
-          {announcementForm.targetType === 'selected' && (
-            <div className="border border-gray-100 rounded-xl p-2 max-h-40 overflow-y-auto">
-              {clients.map((client) => {
-                const checked = announcementForm.targetClientIds.includes(client.id);
-                return (
-                  <label key={client.id} className="flex items-center gap-2 text-sm py-1">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) =>
-                        setAnnouncementForm((p) => ({
-                          ...p,
-                          targetClientIds: e.target.checked ? [...p.targetClientIds, client.id] : p.targetClientIds.filter((id) => id !== client.id),
-                        }))
-                      }
-                    />
-                    {client.name}
-                  </label>
-                );
-              })}
-            </div>
-          )}
-          <button type="submit" className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold">
-            Send Announcement {announcementForm.targetType === 'selected' ? `(${selectedClientsCount})` : ''}
-          </button>
-        </form>
-      </section>
-      <section className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-lg font-bold text-gray-900 mb-3">Recent Announcements</h3>
-        <div className="space-y-2">
-          {announcements.slice(0, 10).map((item) => (
-            <div key={item.id} className="border border-gray-100 rounded-xl px-3 py-2">
-              <p className="font-semibold text-sm text-gray-900">{item.title}</p>
-              <p className="text-xs text-gray-600">{item.message}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-    </div>
-  );
-
-  const renderOperations = () => (
-    <div className="space-y-6">
-      <section className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-lg font-bold text-gray-900 mb-3 flex items-center gap-2"><Database className="w-5 h-5" /> Client State / Archive / Export</h3>
-        <div className="mb-3 flex gap-2">
-          <button onClick={() => bulkSuspendArchived('suspended')} className="px-3 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold">Bulk Suspend Active</button>
-          <button onClick={() => bulkSuspendArchived('archived')} className="px-3 py-2 rounded-lg bg-gray-700 text-white text-sm font-semibold">Bulk Archive Active</button>
-        </div>
-        <div className="space-y-2">
-          {clients.map((client) => (
-            <div key={client.id} className="border border-gray-100 rounded-xl p-3">
-              <div className="flex items-center justify-between gap-3">
-                <p className="font-semibold text-sm text-gray-900">{client.name}</p>
-                <div className="flex items-center gap-2">
-                  <select value={client.state} onChange={(e) => updateClientState(client.id, e.target.value as any)} className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs">
-                    <option value="active">Active</option>
-                    <option value="suspended">Suspended</option>
-                    <option value="archived">Archived</option>
-                    <option value="deleted_permanently">Deleted Permanently</option>
-                  </select>
-                  <button
-                    onClick={() => addDoc(collection(db, 'platformDataExportJobs'), { clientId: client.id, format: 'json', createdAt: serverTimestamp(), createdBy: user.uid })}
-                    className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold"
-                  >
-                    Export
-                  </button>
-                </div>
-              </div>
-              <textarea
-                value={clientNotes[client.id] || ''}
-                onChange={(e) => setClientNotes((prev) => ({ ...prev, [client.id]: e.target.value }))}
-                className="w-full mt-2 px-3 py-2 border border-gray-200 rounded-lg text-xs min-h-[68px]"
-                placeholder="Internal notes"
-              />
-              <div className="mt-2 flex justify-end">
-                <button onClick={() => saveInternalNote(client.id)} className="px-3 py-1.5 rounded-lg bg-gray-100 text-gray-700 text-xs font-semibold">Save Note</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-lg font-bold text-gray-900 mb-3">API Key / Domain / Reminders / Queue / Version</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          <button onClick={() => addDoc(collection(db, 'platformApiKeys'), { name: 'generated-key', status: 'active', createdAt: serverTimestamp(), createdBy: user.uid })} className="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-sm font-semibold text-left"><KeyRound className="inline w-4 h-4 mr-2" />Generate API Key</button>
-          <button onClick={() => addDoc(collection(db, 'platformVersionHistory'), { version: `v${Date.now()}`, notes: 'Release note placeholder', createdAt: serverTimestamp(), createdBy: user.uid })} className="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-sm font-semibold text-left">Add Version Entry</button>
-          <button onClick={() => addDoc(collection(db, 'platformQueueJobs'), { type: 'report_generation', status: 'queued', createdAt: serverTimestamp(), createdBy: user.uid })} className="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-sm font-semibold text-left">Queue Report Job</button>
-          <button onClick={() => addDoc(collection(db, 'platformFollowupReminders'), { title: 'Renewal Follow-up', dueAt: serverTimestamp(), createdAt: serverTimestamp(), createdBy: user.uid })} className="px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-sm font-semibold text-left">Create Follow-up Reminder</button>
-        </div>
-      </section>
-      <section className="bg-white border border-gray-200 rounded-2xl p-5">
-        <h3 className="text-lg font-bold text-gray-900 mb-3">System Health / Failed Tasks / Analytics</h3>
-        <p className="text-sm text-gray-600 mb-3">Active Clients: {activeClients} / Total Clients: {clients.length}</p>
-        <div className="space-y-2 max-h-72 overflow-y-auto">
-          {auditLogs.slice(0, 20).map((log) => (
-            <div key={log.id} className="border border-gray-100 rounded-xl px-3 py-2">
-              <p className="text-xs font-semibold text-gray-900">{log.action}</p>
-              <p className="text-[11px] text-gray-500">{log.actorName} · {log.targetType || 'system'} · {log.targetId || '--'}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-    </div>
-  );
+  const forceLogout = async (targetUid: string) => {
+    if (!functions) {
+      alert('Firebase Functions is not available.');
+      return;
+    }
+    const fn = httpsCallable(functions, 'forceLogoutUser');
+    await fn({ targetUid });
+    alert('User logged out.');
+  };
 
   return (
-    <div className="space-y-5">
-      <div className="bg-white border border-gray-200 rounded-2xl p-4">
-        <h2 className="text-xl font-bold text-gray-900 mb-1">Super Admin Control Center</h2>
-        <p className="text-sm text-gray-500">Centralized platform controls for security, releases, compliance, and operations.</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {PANELS.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button key={item.id} onClick={() => setPanel(item.id)} className={`px-3 py-2 rounded-xl text-sm font-semibold border flex items-center gap-2 ${panel === item.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200'}`}>
-              <Icon className="w-4 h-4" />
-              {item.label}
-            </button>
-          );
-        })}
-      </div>
-      {panel === 'security' ? renderSecurity() : panel === 'features' ? renderFeatures() : panel === 'communication' ? renderCommunication() : renderOperations()}
+    <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-5">
+      <aside className="bg-white border border-gray-200 rounded-2xl p-3 h-fit">
+        <h2 className="px-2 pb-3 text-sm font-black text-gray-800 uppercase tracking-wider">Superadmin</h2>
+        <div className="space-y-1">
+          {MODULES.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setModule(item.id)}
+                className={`w-full px-3 py-2 rounded-xl text-sm font-semibold border flex items-center gap-2 ${
+                  module === item.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200'
+                }`}
+              >
+                <Icon className="w-4 h-4" /> {item.label}
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+
+      <section className="space-y-4">
+        {module === 'dashboard' && (
+          <>
+            <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">
+              {[
+                ['Total Companies', stats.totalCompanies],
+                ['Active Companies', stats.activeCompanies],
+                ['Expired Companies', stats.expiredCompanies],
+                ['Total Users', stats.totalUsers],
+                ['Pending Renewals', stats.pendingRenewals],
+              ].map(([label, value]) => (
+                <div key={String(label)} className="bg-white border border-gray-200 rounded-2xl p-4">
+                  <p className="text-xs text-gray-500 font-semibold">{label}</p>
+                  <p className="text-2xl font-black text-gray-900 mt-1">{value}</p>
+                </div>
+              ))}
+            </div>
+            <div className="bg-white border border-gray-200 rounded-2xl p-4">
+              <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-3">Upcoming Renewals (30 Days)</h3>
+              <div className="space-y-2">
+                {clients
+                  .filter((c) => {
+                    const expiry = toMillis(c.subscriptionExpiryDate);
+                    return expiry >= Date.now() && expiry <= Date.now() + 30 * 24 * 60 * 60 * 1000;
+                  })
+                  .slice(0, 10)
+                  .map((client) => (
+                    <div key={client.id} className="border border-gray-100 rounded-xl p-3 flex items-center justify-between">
+                      <div>
+                        <p className="font-semibold text-sm text-gray-900">{client.name}</p>
+                        <p className="text-xs text-gray-500">Expiry: {asDateInput(client.subscriptionExpiryDate) || 'N/A'}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => { setSelectedCompanyId(client.id); setModule('companies'); }} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold">View</button>
+                        <button onClick={() => { setSelectedCompanyId(client.id); setModule('companies'); }} className="px-3 py-1.5 rounded-lg bg-blue-100 text-blue-700 text-xs font-semibold">Renew</button>
+                        <button onClick={() => confirmAndUpdateStatus(client, 'suspended')} className="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-700 text-xs font-semibold">Suspend</button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {module === 'companies' && (
+          <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <input value={companySearch} onChange={(e) => setCompanySearch(e.target.value)} placeholder="Search company" className="w-full sm:w-[320px] px-3 py-2 border border-gray-200 rounded-xl text-sm" />
+              <button onClick={() => setShowAddCompany((v) => !v)} className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold">Add Company</button>
+            </div>
+
+            {showAddCompany && (
+              <form onSubmit={handleSaveCompany} className="grid grid-cols-1 md:grid-cols-2 gap-2 border border-gray-100 rounded-xl p-3">
+                <input required value={companyForm.companyName} onChange={(e) => setCompanyForm((p) => ({ ...p, companyName: e.target.value }))} placeholder="Company Name" className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+                <input value={companyForm.contactPerson} onChange={(e) => setCompanyForm((p) => ({ ...p, contactPerson: e.target.value }))} placeholder="Contact Person" className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+                <input required value={companyForm.mobileNumber} onChange={(e) => setCompanyForm((p) => ({ ...p, mobileNumber: e.target.value }))} placeholder="Mobile Number" className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+                <input required type="email" value={companyForm.email} onChange={(e) => setCompanyForm((p) => ({ ...p, email: e.target.value }))} placeholder="Email" className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+                <input value={companyForm.address} onChange={(e) => setCompanyForm((p) => ({ ...p, address: e.target.value }))} placeholder="Address" className="px-3 py-2 border border-gray-200 rounded-lg text-sm md:col-span-2" />
+                <select value={companyForm.billingCycle} onChange={(e) => setCompanyForm((p) => ({ ...p, billingCycle: e.target.value as any }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm"><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select>
+                <select value={companyForm.paymentMode} onChange={(e) => setCompanyForm((p) => ({ ...p, paymentMode: e.target.value as any }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm"><option value="bank_transfer">Bank Transfer</option><option value="upi">UPI</option><option value="cash">Cash</option><option value="cheque">Cheque</option></select>
+                <select value={companyForm.paymentStatus} onChange={(e) => setCompanyForm((p) => ({ ...p, paymentStatus: e.target.value as any }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm"><option value="paid">Paid</option><option value="pending">Pending</option><option value="overdue">Overdue</option></select>
+                <input type="date" value={companyForm.subscriptionStartDate} onChange={(e) => setCompanyForm((p) => ({ ...p, subscriptionStartDate: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+                <input type="date" value={companyForm.subscriptionExpiryDate} onChange={(e) => setCompanyForm((p) => ({ ...p, subscriptionExpiryDate: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+                <input value={companyForm.notes} onChange={(e) => setCompanyForm((p) => ({ ...p, notes: e.target.value }))} placeholder="Internal Notes" className="px-3 py-2 border border-gray-200 rounded-lg text-sm md:col-span-2" />
+                <button type="submit" className="md:col-span-2 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold">Save Company</button>
+              </form>
+            )}
+
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="text-left text-gray-500">
+                    <th className="px-3 py-2">Company ID</th><th className="px-3 py-2">Company Name</th><th className="px-3 py-2">Contact</th><th className="px-3 py-2">Mobile</th><th className="px-3 py-2">Email</th><th className="px-3 py-2">Billing</th><th className="px-3 py-2">Expiry</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Created</th><th className="px-3 py-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {companies.map((client) => (
+                    <tr key={client.id} className="border-t border-gray-100">
+                      <td className="px-3 py-2 font-mono text-xs">{client.id}</td>
+                      <td className="px-3 py-2 font-semibold">{client.name}</td>
+                      <td className="px-3 py-2">{client.contactPerson || '-'}</td>
+                      <td className="px-3 py-2">{client.mobileNumber || '-'}</td>
+                      <td className="px-3 py-2">{client.email || '-'}</td>
+                      <td className="px-3 py-2 capitalize">{client.billingCycle || '-'}</td>
+                      <td className="px-3 py-2">{asDateInput(client.subscriptionExpiryDate) || '-'}</td>
+                      <td className="px-3 py-2"><span className={`px-2 py-1 rounded-full text-xs font-bold ${statusClass[client.state || 'active'] || statusClass.active}`}>{client.state || 'active'}</span></td>
+                      <td className="px-3 py-2">{asDateInput(client.createdAt) || '-'}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          <button onClick={() => setSelectedCompanyId(client.id)} className="px-2 py-1 rounded bg-slate-100 text-slate-700 text-xs font-semibold">View</button>
+                          <button onClick={() => confirmAndUpdateStatus(client, 'active')} className="px-2 py-1 rounded bg-emerald-100 text-emerald-700 text-xs font-semibold">Activate</button>
+                          <button onClick={() => confirmAndUpdateStatus(client, 'suspended')} className="px-2 py-1 rounded bg-amber-100 text-amber-700 text-xs font-semibold">Suspend</button>
+                          <button onClick={() => onStartImpersonation({ clientId: client.id, clientName: client.name })} className="px-2 py-1 rounded bg-blue-100 text-blue-700 text-xs font-semibold">Login As Admin</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {selectedCompany && (
+              <div className="border border-gray-100 rounded-xl p-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs text-gray-500">Overview</p>
+                  <p className="font-bold text-gray-900">{selectedCompany.name}</p>
+                  <p className="text-sm text-gray-600">{selectedCompany.address || '-'}</p>
+                  <p className="text-sm text-gray-600">Owner: {selectedCompany.contactPerson || '-'}</p>
+                  <p className="text-sm text-gray-600">Email: {selectedCompany.email || '-'}</p>
+                  <p className="text-sm text-gray-600">Phone: {selectedCompany.mobileNumber || '-'}</p>
+                  <p className="text-sm text-gray-600 mt-2">Notes: {selectedCompany.notes || '-'}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Subscription</p>
+                  <p className="text-sm text-gray-700 capitalize">Billing: {selectedCompany.billingCycle || '-'}</p>
+                  <p className="text-sm text-gray-700">Start: {asDateInput(selectedCompany.subscriptionStartDate) || '-'}</p>
+                  <p className="text-sm text-gray-700">Expiry: {asDateInput(selectedCompany.subscriptionExpiryDate) || '-'}</p>
+                  <p className="text-sm text-gray-700 capitalize">Payment: {selectedCompany.paymentStatus || '-'}</p>
+                  <p className="text-sm text-gray-700 capitalize">Mode: {(selectedCompany.paymentMode || '-').replace('_', ' ')}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {module === 'users' && (
+          <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+              <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search user" className="px-3 py-2 border border-gray-200 rounded-xl text-sm md:col-span-2" />
+              <select value={userCompanyFilter} onChange={(e) => setUserCompanyFilter(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-xl text-sm">
+                <option value="all">All Companies</option>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <select value={userRoleFilter} onChange={(e) => setUserRoleFilter(e.target.value as any)} className="px-3 py-2 border border-gray-200 rounded-xl text-sm">
+                <option value="all">All Roles</option><option value="super_admin">Super Admin</option><option value="admin">Admin</option><option value="client_admin">Company Admin</option><option value="manager">Manager</option><option value="employee">Employee</option><option value="suspended">Suspended</option><option value="deleted">Deleted</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              {users.map((member: any) => (
+                <div key={member.uid} className="border border-gray-100 rounded-xl p-3 flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-semibold text-sm text-gray-900">{member.name} <span className="text-xs text-gray-500">({member.role})</span></p>
+                      <p className="text-xs text-gray-500">{member.email} · {member.phone || '-'} · {member.companyName}</p>
+                      <p className="text-xs text-gray-400">Last Login: {asDateInput(member.lastLoginAt) || 'N/A'}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      <button onClick={() => resetPassword(member.email, member.uid)} className="px-2 py-1 rounded bg-blue-100 text-blue-700 text-xs font-semibold">Reset Password</button>
+                      <button onClick={() => forceLogout(member.uid)} className="px-2 py-1 rounded bg-amber-100 text-amber-700 text-xs font-semibold">Force Logout</button>
+                      <button onClick={() => handleUserRole(member, member.role === 'suspended' ? 'employee' : 'suspended')} className="px-2 py-1 rounded bg-rose-100 text-rose-700 text-xs font-semibold">{member.role === 'suspended' ? 'Unblock' : 'Block User'}</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {module === 'support' && (
+          <div className="bg-white border border-gray-200 rounded-2xl p-4">
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider mb-3">Support Tickets</h3>
+            <div className="space-y-2">
+              {tickets.length === 0 && <p className="text-sm text-gray-500">No tickets found in `supportTickets` collection.</p>}
+              {tickets.map((ticket) => (
+                <div key={ticket.id} className="border border-gray-100 rounded-xl p-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-sm text-gray-900">{ticket.subject || `Ticket ${ticket.id}`}</p>
+                    <p className="text-xs text-gray-500">{ticket.companyName || ticket.companyId || 'N/A'} · {(ticket.priority || 'medium').toUpperCase()} · {(ticket.status || 'open').replace('_', ' ')}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button className="px-2 py-1 rounded bg-slate-100 text-slate-700 text-xs font-semibold">Open</button>
+                    <button className="px-2 py-1 rounded bg-blue-100 text-blue-700 text-xs font-semibold">Reply</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {module === 'settings' && (
+          <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-3">
+            <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider">Global Settings</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <input value={globalSettings.supportEmail} onChange={(e) => setGlobalSettings((p) => ({ ...p, supportEmail: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Support Email" />
+              <input value={globalSettings.loginRateLimitPerMin} onChange={(e) => setGlobalSettings((p) => ({ ...p, loginRateLimitPerMin: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Login Rate/Min" />
+              <input value={globalSettings.apiRateLimitPerMin} onChange={(e) => setGlobalSettings((p) => ({ ...p, apiRateLimitPerMin: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="API Rate/Min" />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={async () => {
+                  await updateDoc(doc(db, 'platformConfig', 'global'), { ...globalSettings, updatedAt: serverTimestamp(), updatedBy: user.uid });
+                  await logAudit('global_settings_updated', { targetType: 'platform_config', targetId: 'global' });
+                  alert('Settings saved.');
+                }}
+                className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold"
+              >
+                Save Settings
+              </button>
+              <button className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold">Create Backup</button>
+              <button className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold">Download Backup</button>
+              <button
+                onClick={() => window.confirm('Are you sure? This action may affect active users.')}
+                className="px-4 py-2 rounded-xl bg-amber-100 text-amber-700 text-sm font-semibold flex items-center gap-2"
+              >
+                <AlertCircle size={14} /> Restore Backup
+              </button>
+            </div>
+            <div className="border border-gray-100 rounded-xl p-3">
+              <p className="text-xs text-gray-500 mb-2 flex items-center gap-2"><ShieldCheck size={14} /> Recent Activity Logs</p>
+              <div className="space-y-1 max-h-64 overflow-y-auto">
+                {auditLogs.slice(0, 20).map((log) => (
+                  <p key={log.id} className="text-xs text-gray-700">
+                    <span className="font-semibold">{log.action}</span> · {log.actorName} · {String(log.targetType || 'system')}
+                  </p>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
