@@ -81,7 +81,27 @@ export default function App() {
         if (firebaseUser) {
           const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
           if (userDoc.exists()) {
-            setUser({ uid: firebaseUser.uid, ...userDoc.data() } as User);
+            const nextUser = { uid: firebaseUser.uid, ...userDoc.data() } as User;
+            if ((nextUser as any).clientId) {
+              const clientDoc = await getDoc(doc(db, 'platformClients', String((nextUser as any).clientId)));
+              if (clientDoc.exists()) {
+                const clientData = clientDoc.data() as any;
+                const expiryMs = clientData?.subscriptionExpiryDate
+                  ? new Date(clientData.subscriptionExpiryDate).getTime()
+                  : 0;
+                const isExpired = Number.isFinite(expiryMs) && expiryMs > 0 && expiryMs < Date.now();
+                const blockedByState = ['expired', 'suspended', 'deleted_permanently', 'archived'].includes(String(clientData?.state || ''));
+                if (isExpired || blockedByState) {
+                  await signOut(auth);
+                  setUser(null);
+                  setActiveScreen('dashboard');
+                  alert('Your company subscription is expired or suspended. Please contact platform admin.');
+                  setLoading(false);
+                  return;
+                }
+              }
+            }
+            setUser(nextUser);
             setActiveScreen('dashboard');
           } else {
             // If user exists in Auth but not in Firestore (shouldn't happen with our logic)
@@ -278,7 +298,11 @@ export default function App() {
             transition={{ duration: 0.2 }}
           >
             {activeScreen === 'profile' ? (
-              <ProfilePage user={user} onClose={() => setActiveScreen('dashboard')} />
+              <ProfilePage
+                user={user}
+                onClose={() => setActiveScreen('dashboard')}
+                onUserUpdate={(patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev))}
+              />
             ) : activeScreen === 'tools' ? (
               <ToolsPage
                 user={user}

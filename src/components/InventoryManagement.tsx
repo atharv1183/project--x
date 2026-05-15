@@ -932,30 +932,36 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
   const shareOnWhatsApp = (item: InventoryItem) => {
     const mapLink = getInventoryLocationLink(item);
-    const imageLinks = item.photos?.length
-      ? item.photos.map((url, idx) => `- Image ${idx + 1}: ${url}`).join('\n')
-      : '- No images available';
-    const videoLinks = item.videos?.length
-      ? item.videos.map((url, idx) => `- Video ${idx + 1}: ${url}`).join('\n')
-      : '- No videos available';
+    const isProject = item.listingMode === 'project' || item.isProject;
+    const imageLinks = item.photos?.length ? item.photos.join('\n') : 'N/A';
+    const videoLinks = item.videos?.length ? item.videos.join('\n') : 'N/A';
+    const projectSummary = isProject && item.projectUnits?.length
+      ? item.projectUnits
+          .slice(0, 8)
+          .map((unit, idx) => `${idx + 1}. ${unit.title || `Unit ${idx + 1}`} | ${unit.type}${unit.subType ? ` (${unit.subType})` : ''} | ${unit.areaValue || '-'} ${unit.areaUnit || ''} | ₹${Number(unit.rate || 0).toLocaleString()}`)
+          .join('\n')
+      : '';
 
     const message = [
       `*${item.title}*`,
       '',
-      '1. Property Images:',
+      `Type: ${isProject ? 'Project' : 'Individual Property'}`,
+      `Category: ${getTypeWithSubType(item)}`,
+      `Location: ${item.location || 'N/A'}`,
+      `Map: ${mapLink}`,
+      !isProject ? `Area: ${getPrimarySizeText(item)}` : `Units: ${item.projectUnitCount || item.projectUnits?.length || 0}`,
+      !isProject ? `Rate: ₹${Number(item.rate || 0).toLocaleString()} ${item.rateUnit ? `(${item.rateUnit})` : ''}` : '',
+      item.description ? `Description: ${item.description}` : '',
+      '',
+      isProject ? '*Project Unit Details*' : '',
+      isProject ? projectSummary : '',
+      '',
+      '*Photos*',
       imageLinks,
       '',
-      '2. Property Videos:',
+      '*Videos*',
       videoLinks,
-      '',
-      `3. Location: ${item.location}`,
-      mapLink,
-      '',
-      `4. Type: ${getTypeWithSubType(item)}`,
-      '',
-      `5. Size: ${getPrimarySizeText(item)}`,
-      item.description ? `\n6. Description: ${item.description}` : ''
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 
     const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
@@ -1144,7 +1150,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="group bg-white rounded-[32px] border border-slate-100 overflow-hidden hover:shadow-2xl hover:shadow-slate-200/50 transition-all duration-500 flex flex-col h-full"
+              onClick={() => startEdit(item)}
+              className="group bg-white rounded-[32px] border border-slate-100 overflow-hidden hover:shadow-2xl hover:shadow-slate-200/50 transition-all duration-500 flex flex-col h-full cursor-pointer"
             >
               <div className="relative aspect-[4/3] overflow-hidden bg-slate-50">
                 {item.photos?.[0] ? (
@@ -1177,47 +1184,12 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                   )}
                 </div>
 
-                {/* Admin Quick Actions */}
                 {isAdmin && item.status === 'pending_approval' && (
-                  <>
-                    <div className="absolute top-3 right-3 z-20 flex items-center gap-2 sm:hidden">
-                      <button
-                        onClick={() => handleApprove(item.id, 'approved')}
-                        className="w-12 h-12 rounded-full bg-white text-emerald-600 flex items-center justify-center shadow-xl border border-emerald-100 active:scale-95 transition-all"
-                        aria-label="Approve listing"
-                        title="Approve listing"
-                      >
-                        <Check size={24} strokeWidth={3} />
-                      </button>
-                      <button
-                        onClick={() => handleApprove(item.id, 'rejected')}
-                        className="w-12 h-12 rounded-full bg-white text-rose-600 flex items-center justify-center shadow-xl border border-rose-100 active:scale-95 transition-all"
-                        aria-label="Reject listing"
-                        title="Reject listing"
-                      >
-                        <X size={24} strokeWidth={3} />
-                      </button>
-                    </div>
-
-                    <div className="hidden sm:flex absolute inset-0 bg-slate-900/40 backdrop-blur-[2px] opacity-0 group-hover:opacity-100 transition-opacity items-center justify-center gap-4">
-                      <button 
-                        onClick={() => handleApprove(item.id, 'approved')}
-                        className="w-14 h-14 rounded-full bg-white text-emerald-600 flex items-center justify-center hover:scale-110 transition-all shadow-2xl"
-                        aria-label="Approve listing"
-                        title="Approve listing"
-                      >
-                        <Check size={28} strokeWidth={3} />
-                      </button>
-                      <button 
-                        onClick={() => handleApprove(item.id, 'rejected')}
-                        className="w-14 h-14 rounded-full bg-white text-rose-600 flex items-center justify-center hover:scale-110 transition-all shadow-2xl"
-                        aria-label="Reject listing"
-                        title="Reject listing"
-                      >
-                        <X size={28} strokeWidth={3} />
-                      </button>
-                    </div>
-                  </>
+                  <div className="hidden sm:flex absolute inset-0 bg-slate-900/35 backdrop-blur-[1px] opacity-0 group-hover:opacity-100 transition-opacity items-center justify-center">
+                    <span className="px-4 py-2 rounded-full bg-white text-slate-800 text-[10px] font-black uppercase tracking-widest shadow-xl">
+                      Open to Review & Approve
+                    </span>
+                  </div>
                 )}
               </div>
 
@@ -1248,7 +1220,10 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                 </div>
 
                 {!!item.videos?.[0] && (
-                  <div className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-50">
+                  <div
+                    className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-50"
+                    onClick={(event) => event.stopPropagation()}
+                  >
                     {isDirectVideoUrl(item.videos[0]) ? (
                       <video
                         src={item.videos[0]}
@@ -1261,6 +1236,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                         href={item.videos[0]}
                         target="_blank"
                         rel="noreferrer"
+                        onClick={(event) => event.stopPropagation()}
                         className="flex h-40 flex-col items-center justify-center gap-3 text-indigo-600 hover:bg-indigo-50 transition-colors"
                       >
                         <ExternalLink size={24} />
@@ -1306,7 +1282,10 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                   </div>
                   <div className="flex gap-1.5">
                     <button
-                      onClick={() => shareOnWhatsApp(item)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        shareOnWhatsApp(item);
+                      }}
                       className="w-10 h-10 flex items-center justify-center text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-all"
                       title="Share on WhatsApp"
                       aria-label="Share on WhatsApp"
@@ -1317,6 +1296,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                       href={getInventoryLocationLink(item)}
                       target="_blank"
                       rel="noreferrer"
+                      onClick={(event) => event.stopPropagation()}
                       className="w-10 h-10 flex items-center justify-center text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-xl transition-all"
                       title="Open location in Google Maps"
                       aria-label="Open location in Google Maps"
@@ -1324,14 +1304,20 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                       <MapPin size={18} />
                     </a>
                     <button 
-                      onClick={() => startEdit(item)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        startEdit(item);
+                      }}
                       className="w-10 h-10 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
                     >
                       <Edit2 size={18} />
                     </button>
                     {(isAdmin || (item.submitterId === user.uid && item.status === 'draft')) && (
                       <button 
-                        onClick={() => handleDelete(item.id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleDelete(item.id);
+                        }}
                         className="w-10 h-10 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all"
                       >
                         <Trash2 size={18} />
@@ -2165,6 +2151,26 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                       Draft
                     </button>
                   </div>
+                  {isAdmin && editingItem?.status === 'pending_approval' && (
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => handleApprove(editingItem.id, 'rejected')}
+                        className="px-6 py-3 bg-rose-50 border border-rose-200 text-rose-700 font-black text-xs uppercase tracking-[0.15em] rounded-2xl hover:bg-rose-100 transition-all disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => handleApprove(editingItem.id, 'approved')}
+                        className="px-6 py-3 bg-emerald-600 text-white font-black text-xs uppercase tracking-[0.15em] rounded-2xl shadow-xl shadow-emerald-200 hover:bg-emerald-700 transition-all disabled:opacity-50"
+                      >
+                        Approve
+                      </button>
+                    </div>
+                  )}
                   <button 
                     type="submit"
                     disabled={loading}

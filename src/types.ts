@@ -78,6 +78,7 @@ export interface User {
   name: string;
   email: string;
   phone: string;
+  profileImageUrl?: string;
   role: 'super_admin' | 'admin' | 'client_admin' | 'manager' | 'employee' | 'suspended' | 'deleted';
   managerId?: string;
   managerName?: string;
@@ -156,6 +157,20 @@ export interface Requirement {
   remark: string;
   employeeId: string;
   employeeName: string;
+  createdAt: any;
+}
+
+export interface LeadTransfer {
+  id: string;
+  leadId: string;
+  leadName: string;
+  fromUid: string;
+  fromName: string;
+  toUid: string;
+  toName: string;
+  transferredByUid: string;
+  transferredByName: string;
+  transferredByRole?: User['role'];
   createdAt: any;
 }
 

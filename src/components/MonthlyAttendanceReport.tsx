@@ -34,6 +34,8 @@ type DailyRow = {
   overtimeMinutes: number;
   lateMinutes: number;
   earlyMinutes: number;
+  loginLocation?: Attendance['location'] | null;
+  logoutLocation?: Attendance['location'] | null;
   status: AttendanceStatus;
   remarks: string;
 };
@@ -237,7 +239,7 @@ export default function MonthlyAttendanceReport({
 
   const rows = useMemo(() => {
     const days = getMonthDates(year, month);
-    const logsByEmployeeDate = new Map<string, Array<{ at: Date; type: Attendance['type']; remark?: string }>>();
+    const logsByEmployeeDate = new Map<string, Array<{ at: Date; type: Attendance['type']; remark?: string; location?: Attendance['location'] }>>();
 
     attendance.forEach((record) => {
       const at = toDate(record.timestamp);
@@ -247,6 +249,7 @@ export default function MonthlyAttendanceReport({
         at,
         type: record.type,
         remark: (record as Attendance & { remark?: string }).remark,
+        location: record.location,
       };
       logsByEmployeeDate.set(key, [...(logsByEmployeeDate.get(key) || []), entry]);
     });
@@ -313,6 +316,8 @@ export default function MonthlyAttendanceReport({
           earlyMinutes,
           status: rowStatus,
           remarks: approvedCorrection?.remark || remarks[key] || logs.find((log) => log.remark)?.remark || '',
+          loginLocation: logs.find((log) => log.type === 'clock_in')?.location || null,
+          logoutLocation: [...logs].reverse().find((log) => log.type === 'clock_out')?.location || null,
         };
       });
     }).filter((row) => status === 'all' || row.status === status);
@@ -700,7 +705,7 @@ export default function MonthlyAttendanceReport({
           <table className="w-full text-left">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
-                {['Date', 'Day', employeeId === 'all' ? 'Employee' : '', 'Login Time', 'Logout Time', 'Working Hours', 'Late By', 'Status', 'Remarks', 'Actions'].filter(Boolean).map((header) => (
+                {['Date', 'Day', employeeId === 'all' ? 'Employee' : '', 'Login Time', 'Login Location', 'Logout Time', 'Logout Location', 'Working Hours', 'Late By', 'Status', 'Remarks', 'Actions'].filter(Boolean).map((header) => (
                   <th key={header} className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">{header}</th>
                 ))}
               </tr>
@@ -712,7 +717,31 @@ export default function MonthlyAttendanceReport({
                   <td className="px-4 py-3 text-sm font-bold text-slate-500">{row.day}</td>
                   {employeeId === 'all' && <td className="px-4 py-3 text-sm font-black text-slate-800">{row.employeeName}</td>}
                   <td className="px-4 py-3 text-sm font-bold text-slate-700">{formatTime(row.loginTime)}</td>
+                  <td className="px-4 py-3 text-xs font-bold text-slate-600">
+                    {row.loginLocation ? (
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${row.loginLocation.latitude},${row.loginLocation.longitude}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700"
+                      >
+                        <MapPin size={12} /> {row.loginLocation.address || `${row.loginLocation.latitude.toFixed(5)}, ${row.loginLocation.longitude.toFixed(5)}`}
+                      </a>
+                    ) : '-'}
+                  </td>
                   <td className="px-4 py-3 text-sm font-bold text-slate-700">{formatTime(row.logoutTime)}</td>
+                  <td className="px-4 py-3 text-xs font-bold text-slate-600">
+                    {row.logoutLocation ? (
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${row.logoutLocation.latitude},${row.logoutLocation.longitude}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700"
+                      >
+                        <MapPin size={12} /> {row.logoutLocation.address || `${row.logoutLocation.latitude.toFixed(5)}, ${row.logoutLocation.longitude.toFixed(5)}`}
+                      </a>
+                    ) : '-'}
+                  </td>
                   <td className="px-4 py-3 text-sm font-bold text-slate-700">{formatHours(row.workingMinutes)}</td>
                   <td className="px-4 py-3 text-sm font-bold text-slate-700">{row.lateMinutes > 0 ? formatHours(row.lateMinutes) : '-'}</td>
                   <td className="px-4 py-3">
@@ -755,7 +784,7 @@ export default function MonthlyAttendanceReport({
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={employeeId === 'all' ? 10 : 9} className="px-4 py-12 text-center text-sm font-medium text-slate-400">No attendance rows for the selected filters.</td>
+                  <td colSpan={employeeId === 'all' ? 12 : 11} className="px-4 py-12 text-center text-sm font-medium text-slate-400">No attendance rows for the selected filters.</td>
                 </tr>
               )}
             </tbody>

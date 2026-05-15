@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, FormEvent, useMemo } from 'react';
-import { db, auth } from '../lib/firebase';
+import { db, auth, functions } from '../lib/firebase';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { createUserWithEmailAndPassword, getAuth, signOut } from 'firebase/auth';
 import { 
@@ -20,7 +20,7 @@ import {
   writeBatch,
   Timestamp
 } from 'firebase/firestore';
-import { Lead, User, LeadStatus, OperationType, Requirement, Attendance, AttendanceCorrectionRequest, Broker } from '../types';
+import { Lead, User, LeadStatus, OperationType, Requirement, Attendance, AttendanceCorrectionRequest, Broker, LeadTransfer } from '../types';
 import { handleFirestoreError } from '../lib/utils';
 import InventoryManagement from './InventoryManagement';
 import SalesPerformanceDashboard from './SalesPerformanceDashboard';
@@ -46,6 +46,8 @@ import {
   Loader2,
   FileText,
   MapPin,
+  Edit2,
+  Clock3,
   Trash2,
   LayoutGrid,
   Download,
@@ -58,12 +60,13 @@ import { twMerge } from 'tailwind-merge';
 import { format } from 'date-fns';
 import { Followup } from '../types';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { httpsCallable } from 'firebase/functions';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-type AdminView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'brokers';
+type AdminView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'brokers' | 'transfer_register';
 
 type AdminDashboardProps = {
   user: User;
@@ -136,12 +139,14 @@ export default function AdminDashboard({
   const [employees, setEmployees] = useState<User[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
+  const [leadTransfers, setLeadTransfers] = useState<LeadTransfer[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [attendanceCorrections, setAttendanceCorrections] = useState<AttendanceCorrectionRequest[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [showAddLead, setShowAddLead] = useState(false);
   const [showAddEmployee, setShowAddEmployee] = useState(false);
   const [showAddBroker, setShowAddBroker] = useState(false);
+  const [showReqModal, setShowReqModal] = useState(false);
   const [showEditEmployee, setShowEditEmployee] = useState<User | null>(null);
   const [leadForm, setLeadForm] = useState({ name: '', phone: '', source: '' });
   const [leadAllocationMode, setLeadAllocationMode] = useState<'auto' | 'manual'>('auto');
@@ -153,6 +158,17 @@ export default function AdminDashboard({
     managerId: isManager ? user.uid : '',
   });
   const [brokerForm, setBrokerForm] = useState({ name: '', phone: '', email: '', company: '' });
+  const [editingBrokerId, setEditingBrokerId] = useState<string | null>(null);
+  const [editingRequirementId, setEditingRequirementId] = useState<string | null>(null);
+  const [reqForm, setReqForm] = useState({
+    name: '',
+    phone: '',
+    type: 'zeemen',
+    area: '',
+    budget: '',
+    location: '',
+    remark: ''
+  });
   const [loading, setLoading] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferSearch, setTransferSearch] = useState('');
@@ -180,6 +196,7 @@ export default function AdminDashboard({
   const rawLeadsRef = useRef<Lead[]>([]);
   const rawAttendanceRef = useRef<Attendance[]>([]);
   const rawRequirementsRef = useRef<Requirement[]>([]);
+  const rawLeadTransfersRef = useRef<LeadTransfer[]>([]);
   const actorLabel = isManager ? 'Manager' : 'Admin';
 
   const normalizePhone = (value: string) => value.replace(/\D/g, '');
@@ -500,7 +517,12 @@ export default function AdminDashboard({
 
       // Finally apply member status action.
       if (pendingRole === 'deleted') {
-        batch.delete(doc(db, 'users', reallocateEmployee.uid));
+        batch.update(doc(db, 'users', reallocateEmployee.uid), {
+          role: 'deleted',
+          managerId: null,
+          managerName: null,
+          updatedAt: serverTimestamp(),
+        });
       } else {
         batch.update(doc(db, 'users', reallocateEmployee.uid), { 
           role: pendingRole,
@@ -548,6 +570,18 @@ export default function AdminDashboard({
         date: serverTimestamp(),
         remark: `${actorLabel} transferred lead from ${employees.find(e => e.uid === selectedLead.assignedTo)?.name || 'Unknown'} to ${targetEmployee.name}`,
         employeeId: user.uid
+      });
+      await addDoc(collection(db, 'leadTransfers'), {
+        leadId: selectedLead.id,
+        leadName: selectedLead.name,
+        fromUid: selectedLead.assignedTo,
+        fromName: employees.find(e => e.uid === selectedLead.assignedTo)?.name || 'Unknown',
+        toUid: targetEmployee.uid,
+        toName: targetEmployee.name,
+        transferredByUid: user.uid,
+        transferredByName: user.name,
+        transferredByRole: user.role,
+        createdAt: serverTimestamp(),
       });
 
       // Notify new assignee
@@ -653,6 +687,11 @@ export default function AdminDashboard({
         setLeads(rawLeadsRef.current.filter((lead) => scopedIds.has(lead.assignedTo) || lead.addedById === user.uid));
         setAttendance(rawAttendanceRef.current.filter((log) => scopedIds.has(log.uid)));
         setRequirements(rawRequirementsRef.current.filter((req) => scopedIds.has(req.employeeId)));
+        setLeadTransfers(
+          rawLeadTransfersRef.current.filter((entry) =>
+            scopedIds.has(entry.fromUid) || scopedIds.has(entry.toUid) || scopedIds.has(entry.transferredByUid)
+          )
+        );
       }
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
 
@@ -694,6 +733,22 @@ export default function AdminDashboard({
       setRequirements(allRequirements.filter((req) => scopeIds.has(req.employeeId)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'requirements'));
 
+    const qTransfers = query(collection(db, 'leadTransfers'), orderBy('createdAt', 'desc'), limit(2000));
+    const unsubscribeTransfers = onSnapshot(qTransfers, (snapshot) => {
+      const allTransfers = snapshot.docs.map((transferDoc) => ({ id: transferDoc.id, ...transferDoc.data() } as LeadTransfer));
+      rawLeadTransfersRef.current = allTransfers;
+      if (!isManager) {
+        setLeadTransfers(allTransfers);
+        return;
+      }
+      const scopeIds = managerScopeUserIdsRef.current;
+      setLeadTransfers(
+        allTransfers.filter((entry) =>
+          scopeIds.has(entry.fromUid) || scopeIds.has(entry.toUid) || scopeIds.has(entry.transferredByUid)
+        )
+      );
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'leadTransfers'));
+
     const qAttendanceCorrections = isManager
       ? query(collection(db, 'attendanceCorrections'), where('uid', '==', user.uid))
       : query(collection(db, 'attendanceCorrections'), orderBy('requestedAt', 'desc'));
@@ -709,6 +764,7 @@ export default function AdminDashboard({
       unsubscribeLeads();
       unsubscribeAttendance();
       unsubscribeReqs();
+      unsubscribeTransfers();
       unsubscribeAttendanceCorrections();
     };
   }, [isManager, user.uid]);
@@ -847,7 +903,12 @@ export default function AdminDashboard({
     try {
       if (showEditEmployee.role === 'deleted') {
         const batch = writeBatch(db);
-        batch.delete(doc(db, 'users', showEditEmployee.uid));
+        batch.update(doc(db, 'users', showEditEmployee.uid), {
+          role: 'deleted',
+          managerId: null,
+          managerName: null,
+          updatedAt: serverTimestamp(),
+        });
         batch.delete(doc(db, 'employeeDirectory', showEditEmployee.uid));
         await batch.commit();
         setShowEditEmployee(null);
@@ -953,6 +1014,43 @@ export default function AdminDashboard({
     }
   };
 
+  const startEditRequirement = (req: Requirement) => {
+    setReqForm({
+      name: req.name || '',
+      phone: (req.phone || '').replace(/\D/g, '').slice(0, 10),
+      type: req.type || 'zeemen',
+      area: req.area || '',
+      budget: req.budget || '',
+      location: req.location || '',
+      remark: req.remark || '',
+    });
+    setEditingRequirementId(req.id);
+    setShowReqModal(true);
+  };
+
+  const handleSaveRequirement = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingRequirementId) return;
+    if (!reqForm.name || !reqForm.phone || !reqForm.type) return alert('Name, Phone and Type are mandatory');
+    const normalizedPhone = normalizePhone(reqForm.phone);
+    if (normalizedPhone.length !== 10) return alert('Phone number must be exactly 10 digits.');
+    setLoading(true);
+    try {
+      await updateDoc(doc(db, 'requirements', editingRequirementId), {
+        ...reqForm,
+        phone: normalizedPhone,
+        updatedAt: serverTimestamp(),
+      });
+      setShowReqModal(false);
+      setEditingRequirementId(null);
+      showSaveToast('Requirement updated', `${reqForm.name} details saved`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `requirements/${editingRequirementId}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleAttendanceCorrectionRequest = async ({
     row,
     loginTime,
@@ -1009,11 +1107,38 @@ export default function AdminDashboard({
 
     try {
       const batch = writeBatch(db);
-      batch.delete(doc(db, 'users', empId));
+      batch.update(doc(db, 'users', empId), {
+        role: 'deleted',
+        managerId: null,
+        managerName: null,
+        updatedAt: serverTimestamp(),
+      });
       batch.delete(doc(db, 'employeeDirectory', empId));
       await batch.commit();
     } catch (error) {
        handleFirestoreError(error, OperationType.DELETE, `users/${empId}`);
+    }
+  };
+
+  const resetEmployeePassword = async (emp: User) => {
+    if (emp.role === 'deleted') return alert('Cannot reset password for deleted users.');
+    if (!functions) return alert('Firebase Functions is not available.');
+    const suggested = normalizePhone(emp.phone);
+    const entered = prompt(`Enter a temporary password for ${emp.name}.\nLeave empty to use mobile number.`, suggested);
+    if (entered === null) return;
+    const nextPassword = entered.trim() || suggested;
+    if (nextPassword.length < 8) return alert('Password must be at least 8 characters.');
+    if (!confirm(`Reset password for ${emp.name}?`)) return;
+
+    setLoading(true);
+    try {
+      const fn = httpsCallable(functions, 'resetUserPassword');
+      await fn({ targetUid: emp.uid, targetPhone: suggested, newPassword: nextPassword });
+      alert(`Password reset successful.\nTemporary password: ${nextPassword}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${emp.uid}/password-reset`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1023,8 +1148,9 @@ export default function AdminDashboard({
     if (!normalizedLeadPhone || !leadForm.source) return alert('Phone and Source are mandatory');
     if (normalizedLeadPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
 
-    const existingLead = leads.find((lead) => normalizePhone(lead.phone || '') === normalizedLeadPhone);
-    if (existingLead) {
+    const duplicateSnapshot = await getDocs(query(collection(db, 'leads'), where('phone', '==', normalizedLeadPhone), limit(1)));
+    if (!duplicateSnapshot.empty) {
+      const existingLead = duplicateSnapshot.docs[0].data() as Lead;
       return alert(`Lead with mobile ${normalizedLeadPhone} already exists (${existingLead.name || 'Unknown'}).`);
     }
 
@@ -1137,6 +1263,45 @@ export default function AdminDashboard({
     let provisionAuth: ReturnType<typeof getAuth> | null = null;
     let provisionedUser: { delete: () => Promise<void> } | null = null;
     try {
+      const existingUsersSnapshot = await getDocs(query(collection(db, 'users'), where('phone', '==', normalizedPhone), limit(1)));
+      if (!existingUsersSnapshot.empty) {
+        const existingUserDoc = existingUsersSnapshot.docs[0];
+        const existingUser = existingUserDoc.data() as User;
+        if (existingUser.role !== 'deleted' && existingUser.role !== 'suspended') {
+          alert('A member account with this mobile number already exists.');
+          return;
+        }
+
+        const batch = writeBatch(db);
+        batch.update(existingUserDoc.ref, {
+          name,
+          email,
+          role: memberRole,
+          phone: normalizedPhone,
+          managerId: memberRole === 'employee' ? (selectedManager?.uid || null) : null,
+          managerName: memberRole === 'employee' ? (selectedManager?.name || null) : null,
+          updatedAt: serverTimestamp(),
+        });
+        if (memberRole === 'employee') {
+          batch.set(doc(db, 'employeeDirectory', existingUserDoc.id), {
+            name,
+            phone: normalizedPhone,
+            role: 'employee',
+            managerId: selectedManager?.uid || null,
+            managerName: selectedManager?.name || null,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          batch.delete(doc(db, 'employeeDirectory', existingUserDoc.id));
+        }
+        await batch.commit();
+
+        showSaveToast(`${name} restored successfully`, `${memberRole === 'manager' ? 'Manager' : 'Employee'} account reactivated`);
+        setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: isManager ? user.uid : '' });
+        setShowAddEmployee(false);
+        return;
+      }
+
       // Use a secondary auth instance so the admin session is not replaced.
       provisionApp = initializeApp(firebaseConfig, `employee-provisioner-${Date.now()}`);
       provisionAuth = getAuth(provisionApp);
@@ -1176,7 +1341,7 @@ export default function AdminDashboard({
       handleFirestoreError(error, OperationType.CREATE, 'users');
       const code = typeof error === 'object' && error && 'code' in error ? String((error as any).code) : '';
       if (code === 'auth/email-already-in-use') {
-        alert('A member account with this mobile number already exists.');
+        alert('This mobile number is tied to an old login account. Restore that member from Team if visible, or contact super admin to reset/unblock the existing account.');
       } else if (code === 'auth/weak-password') {
         alert('Unable to set initial password. Please use a valid mobile number.');
       } else if (error instanceof Error) {
@@ -1210,22 +1375,67 @@ export default function AdminDashboard({
 
     setLoading(true);
     try {
-      await addDoc(collection(db, 'brokers'), {
-        name,
-        phone,
-        email: brokerForm.email.trim(),
-        company: brokerForm.company.trim(),
-        createdBy: user.uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      if (editingBrokerId) {
+        await updateDoc(doc(db, 'brokers', editingBrokerId), {
+          name,
+          phone,
+          email: brokerForm.email.trim(),
+          company: brokerForm.company.trim(),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await addDoc(collection(db, 'brokers'), {
+          name,
+          phone,
+          email: brokerForm.email.trim(),
+          company: brokerForm.company.trim(),
+          createdBy: user.uid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
       setBrokerForm({ name: '', phone: '', email: '', company: '' });
+      setEditingBrokerId(null);
       setShowAddBroker(false);
-      showSaveToast('Broker added', `${name} is available for inventory assignment`);
+      showSaveToast(editingBrokerId ? 'Broker updated' : 'Broker added', `${name} is available for inventory assignment`);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'brokers');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const deleteAssignedLeadsForTestingUsers = async () => {
+    const targetNames = ['tester for ee', 'testing manager'];
+    const targetUsers = employees.filter((emp) => targetNames.includes((emp.name || '').trim().toLowerCase()));
+    if (targetUsers.length === 0) {
+      alert('No users named "Tester for EE" or "Testing Manager" were found.');
+      return;
+    }
+
+    const targetIds = new Set(targetUsers.map((userItem) => userItem.uid));
+    const leadsToDelete = leads.filter((lead) => targetIds.has(lead.assignedTo));
+    if (leadsToDelete.length === 0) {
+      alert('No leads are currently assigned to Tester for EE or Testing Manager.');
+      return;
+    }
+
+    if (!confirm(`Delete ${leadsToDelete.length} leads assigned to Tester for EE / Testing Manager? This cannot be undone.`)) return;
+    if (!confirm('Please confirm again: permanently delete those assigned leads and their follow-ups now?')) return;
+
+    setDataToolsBusy('clear_testing_assigned_leads');
+    try {
+      let deletedCount = 0;
+      for (const lead of leadsToDelete) {
+        await deleteAllFollowupsForLead(lead.id);
+        await deleteDoc(doc(db, 'leads', lead.id));
+        deletedCount += 1;
+      }
+      alert(`Deleted ${deletedCount} assigned leads for Tester for EE / Testing Manager.`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'leads');
+    } finally {
+      setDataToolsBusy(null);
     }
   };
 
@@ -1238,6 +1448,17 @@ export default function AdminDashboard({
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `brokers/${brokerId}`);
     }
+  };
+
+  const editBroker = (broker: Broker) => {
+    setBrokerForm({
+      name: broker.name || '',
+      phone: broker.phone || '',
+      email: broker.email || '',
+      company: broker.company || '',
+    });
+    setEditingBrokerId(broker.id);
+    setShowAddBroker(true);
   };
 
   const handleUpdateLead = async (e: FormEvent) => {
@@ -1320,6 +1541,7 @@ export default function AdminDashboard({
           { id: 'attendance', icon: Clock, label: 'Attendance' },
           { id: 'requirements', icon: FileText, label: 'Needs' },
           { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
+          { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
           ...(isSuperAdmin ? [{ id: 'brokers', icon: ClipboardList, label: 'Brokers' }] : [])
         ].map(tab => (
           <button 
@@ -1413,6 +1635,20 @@ export default function AdminDashboard({
               <span className="text-sm font-normal text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{filteredLeads.length}</span>
             </h2>
             <div className="flex gap-2">
+              <button
+                onClick={deleteAssignedLeadsForTestingUsers}
+                disabled={dataToolsBusy === 'clear_testing_assigned_leads'}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-md active:scale-95",
+                  dataToolsBusy === 'clear_testing_assigned_leads'
+                    ? "bg-gray-300 text-gray-600 cursor-not-allowed"
+                    : "bg-rose-600 hover:bg-rose-700 text-white"
+                )}
+                title="Delete leads assigned to Tester for EE and Testing Manager"
+              >
+                <Trash2 size={16} />
+                {dataToolsBusy === 'clear_testing_assigned_leads' ? 'Deleting...' : 'Delete Tester Leads'}
+              </button>
               <button 
                 onClick={() => {
                   if (leadAssignableMembers.length === 0) {
@@ -1457,6 +1693,7 @@ export default function AdminDashboard({
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Added By</th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Assigned To</th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Last Follow-up</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Upcoming Follow-up</th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Status</th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">Actions</th>
                   </tr>
@@ -1504,6 +1741,18 @@ export default function AdminDashboard({
                           </div>
                         ) : (
                           <span className="text-[10px] font-bold text-gray-300 uppercase italic">Never</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        {lead.nextFollowupAt ? (
+                          <div className="flex items-center gap-1.5">
+                            <Clock3 size={12} className="text-indigo-400" />
+                            <p className="text-[10px] font-bold text-gray-600 uppercase tracking-tighter">
+                              {formatLeadDate(lead.nextFollowupAt)}
+                            </p>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] font-bold text-gray-300 uppercase italic">Not set</span>
                         )}
                       </td>
                       <td className="px-6 py-4">
@@ -1640,6 +1889,12 @@ export default function AdminDashboard({
                         >
                           Edit Profile
                         </button>
+                        <button
+                          onClick={() => resetEmployeePassword(emp)}
+                          className="flex-1 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl text-xs font-bold border border-blue-100 transition-colors"
+                        >
+                          Reset Password
+                        </button>
                         {emp.role !== 'deleted' ? (
                           <button 
                             onClick={() => deleteEmployee(emp.uid)}
@@ -1738,6 +1993,13 @@ export default function AdminDashboard({
                       </td>
                       <td className="px-8 py-6 text-right">
                         <button 
+                          onClick={() => startEditRequirement(req)}
+                          className="w-10 h-10 rounded-xl bg-blue-50 text-blue-500 hover:bg-blue-100 hover:text-blue-700 transition-all flex items-center justify-center shadow-inner mr-2"
+                          title="Edit requirement"
+                        >
+                          <Edit2 size={18} />
+                        </button>
+                        <button 
                           onClick={() => deleteRequirement(req.id)}
                           className="w-10 h-10 rounded-xl bg-slate-50 text-slate-300 hover:bg-rose-50 hover:text-rose-600 transition-all flex items-center justify-center shadow-inner"
                         >
@@ -1753,6 +2015,51 @@ export default function AdminDashboard({
                           <FileText size={40} />
                         </div>
                         <p className="text-slate-400 font-black text-xs uppercase tracking-[0.2em]">No Requirements Recorded</p>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : activeView === 'transfer_register' ? (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
+              <ArrowLeftRight className="text-blue-600" size={28} /> Lead Transfer Register
+            </h2>
+            <p className="text-[10px] font-black text-slate-400 capitalize px-4 py-1.5 bg-slate-100 rounded-full tracking-widest">
+              Total Records: {leadTransfers.length}
+            </p>
+          </div>
+
+          <div className="bg-white rounded-[32px] border border-slate-100 shadow-xl shadow-slate-200/20 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100">
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">When</th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">Lead</th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">From</th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">To</th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">Transferred By</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {leadTransfers.map((entry) => (
+                    <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-8 py-5 text-xs font-bold text-slate-500">{formatLeadDate(entry.createdAt)}</td>
+                      <td className="px-8 py-5 text-sm font-black text-slate-800">{entry.leadName || entry.leadId}</td>
+                      <td className="px-8 py-5 text-sm font-bold text-slate-600">{entry.fromName || '-'}</td>
+                      <td className="px-8 py-5 text-sm font-bold text-slate-600">{entry.toName || '-'}</td>
+                      <td className="px-8 py-5 text-sm font-bold text-slate-600">{entry.transferredByName || '-'}</td>
+                    </tr>
+                  ))}
+                  {leadTransfers.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-8 py-20 text-center text-slate-400 font-black text-xs uppercase tracking-[0.2em]">
+                        No Transfer Records
                       </td>
                     </tr>
                   )}
@@ -1797,6 +2104,15 @@ export default function AdminDashboard({
                       <td className="px-6 py-4 text-sm font-medium text-gray-600">{broker.company || '-'}</td>
                       <td className="px-6 py-4 text-sm font-medium text-gray-600">{broker.email || '-'}</td>
                       <td className="px-6 py-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => editBroker(broker)}
+                          className="inline-flex w-10 h-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors mr-2"
+                          title="Edit broker"
+                          aria-label="Edit broker"
+                        >
+                          <Edit2 size={16} />
+                        </button>
                         <button
                           type="button"
                           onClick={() => deleteBroker(broker.id)}
@@ -2464,7 +2780,7 @@ export default function AdminDashboard({
       {showAddBroker && isSuperAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
-            <h3 className="text-2xl font-bold mb-6 text-gray-900">Add Broker</h3>
+            <h3 className="text-2xl font-bold mb-6 text-gray-900">{editingBrokerId ? 'Edit Broker' : 'Add Broker'}</h3>
             <form onSubmit={handleAddBroker} className="space-y-4">
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-1">Broker Name <span className="text-rose-500">*</span></label>
@@ -2505,9 +2821,31 @@ export default function AdminDashboard({
                 />
               </div>
               <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => setShowAddBroker(false)} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
+                <button type="button" onClick={() => { setShowAddBroker(false); setEditingBrokerId(null); setBrokerForm({ name: '', phone: '', email: '', company: '' }); }} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
                 <button type="submit" disabled={loading} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all">
-                  {loading ? 'Adding...' : 'Add Broker'}
+                  {loading ? (editingBrokerId ? 'Updating...' : 'Adding...') : (editingBrokerId ? 'Update Broker' : 'Add Broker')}
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+      {showReqModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+            <h3 className="text-2xl font-bold mb-6 text-gray-900">Edit Requirement</h3>
+            <form onSubmit={handleSaveRequirement} className="space-y-4">
+              <input required value={reqForm.name} onChange={e => setReqForm({ ...reqForm, name: e.target.value })} placeholder="Client Name" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              <input required type="tel" inputMode="numeric" maxLength={10} value={reqForm.phone} onChange={e => setReqForm({ ...reqForm, phone: normalizePhone(e.target.value).slice(0, 10) })} placeholder="Phone" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              <input required value={reqForm.type} onChange={e => setReqForm({ ...reqForm, type: e.target.value })} placeholder="Type" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              <input value={reqForm.budget} onChange={e => setReqForm({ ...reqForm, budget: e.target.value })} placeholder="Budget" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              <input value={reqForm.area} onChange={e => setReqForm({ ...reqForm, area: e.target.value })} placeholder="Area" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              <input value={reqForm.location} onChange={e => setReqForm({ ...reqForm, location: e.target.value })} placeholder="Location" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              <textarea value={reqForm.remark} onChange={e => setReqForm({ ...reqForm, remark: e.target.value })} placeholder="Remark / Requirement" className="w-full h-24 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none resize-none" />
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => { setShowReqModal(false); setEditingRequirementId(null); }} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
+                <button type="submit" disabled={loading} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all">
+                  {loading ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </form>

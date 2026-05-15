@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { auth, db } from '../lib/firebase';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { User } from '../types';
 import { LogIn, Building2, Phone, Lock, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -53,6 +53,9 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           await auth.signOut();
           throw new Error('Your account is not active. Please contact admin.');
         }
+        await updateDoc(doc(db, 'users', userCredential.user.uid), {
+          lastLoginAt: serverTimestamp(),
+        }).catch(() => {});
         onLoginSuccess({ uid: userCredential.user.uid, ...userData } as User);
       } else {
         await auth.signOut();

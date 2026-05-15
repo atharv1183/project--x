@@ -1,18 +1,20 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
-  serverTimestamp,
   setDoc,
+  serverTimestamp,
   updateDoc,
+  writeBatch,
 } from 'firebase/firestore';
-import { sendPasswordResetEmail } from 'firebase/auth';
 import { AlertCircle, Building2, Headset, LayoutDashboard, Settings, ShieldCheck, Users } from 'lucide-react';
-import { auth, db, functions } from '../lib/firebase';
+import { db, functions } from '../lib/firebase';
 import { AuditLogEntry, PlatformClient, User } from '../types';
 import { httpsCallable } from 'firebase/functions';
 
@@ -86,6 +88,12 @@ const asDateInput = (value?: any) => {
   return new Date(ms).toISOString().slice(0, 10);
 };
 
+const asDateTime = (value?: any) => {
+  const ms = toMillis(value);
+  if (!ms) return 'N/A';
+  return new Date(ms).toLocaleString();
+};
+
 export default function SuperAdminControlCenter({ user, onStartImpersonation }: Props) {
   const [module, setModule] = useState<Module>('dashboard');
   const [clients, setClients] = useState<CompanyRecord[]>([]);
@@ -115,7 +123,10 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
     paymentStatus: 'pending' as 'paid' | 'pending' | 'overdue',
     paymentMode: 'bank_transfer' as 'bank_transfer' | 'upi' | 'cash' | 'cheque',
     notes: '',
+    trialDays: '0',
   });
+  const [backupPayload, setBackupPayload] = useState<any | null>(null);
+  const backupRestoreInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const unsubClients = onSnapshot(query(collection(db, 'platformClients'), orderBy('name', 'asc')), (sn) => {
@@ -260,10 +271,21 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
         return;
       }
     }
-
+    const trialDays = Number(companyForm.trialDays || '0');
+    const hasTrial = Number.isFinite(trialDays) && trialDays > 0;
     const now = Date.now();
-    const expiry = new Date(companyForm.subscriptionExpiryDate).getTime();
-    const state: CompanyStatus = Number.isNaN(expiry) ? 'trial' : expiry < now ? 'expired' : 'active';
+    let subscriptionStartDate = companyForm.subscriptionStartDate || null;
+    let subscriptionExpiryDate = companyForm.subscriptionExpiryDate || null;
+    if (hasTrial) {
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      const expiry = new Date(start);
+      expiry.setDate(expiry.getDate() + trialDays);
+      subscriptionStartDate = start.toISOString().slice(0, 10);
+      subscriptionExpiryDate = expiry.toISOString().slice(0, 10);
+    }
+    const expiryMs = subscriptionExpiryDate ? new Date(subscriptionExpiryDate).getTime() : NaN;
+    const state: CompanyStatus = hasTrial ? 'trial' : Number.isNaN(expiryMs) ? 'active' : expiryMs < now ? 'expired' : 'active';
     const clientRef = await addDoc(collection(db, 'platformClients'), {
       name: companyForm.companyName.trim(),
       contactPerson: companyForm.contactPerson.trim(),
@@ -271,11 +293,12 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
       email,
       address: companyForm.address.trim(),
       billingCycle: companyForm.billingCycle,
-      subscriptionStartDate: companyForm.subscriptionStartDate || null,
-      subscriptionExpiryDate: companyForm.subscriptionExpiryDate || null,
+      subscriptionStartDate,
+      subscriptionExpiryDate,
       paymentStatus: companyForm.paymentStatus,
       paymentMode: companyForm.paymentMode,
       notes: companyForm.notes.trim(),
+      trialDays: hasTrial ? trialDays : 0,
       state,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -315,20 +338,28 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
       paymentStatus: 'pending',
       paymentMode: 'bank_transfer',
       notes: '',
+      trialDays: '0',
     });
   };
 
-  const handleUserRole = async (member: User, role: User['role']) => {
-    if (!window.confirm(`Change ${member.name} role/status to ${role}?`)) return;
-    await updateDoc(doc(db, 'users', member.uid), { role, updatedAt: serverTimestamp() });
-    await logAudit('user_role_changed', { targetType: 'user', targetId: member.uid, newValue: { role } });
-  };
+  const resetPassword = async (member: User) => {
+    if (!functions) {
+      alert('Firebase Functions is not available.');
+      return;
+    }
+    const suggested = String(member.phone || '').replace(/\D/g, '');
+    const entered = window.prompt(`Enter temporary password for ${member.name}. Leave empty to use mobile number.`, suggested);
+    if (entered === null) return;
+    const nextPassword = entered.trim() || suggested;
+    if (nextPassword.length < 8) {
+      alert('Password must be at least 8 characters.');
+      return;
+    }
 
-  const resetPassword = async (email: string, uid: string) => {
-    if (!email) return;
-    await sendPasswordResetEmail(auth, email);
-    await logAudit('user_password_reset_requested', { targetType: 'user', targetId: uid, meta: { email } });
-    alert('Password reset email sent.');
+    const fn = httpsCallable(functions, 'resetUserPassword');
+    await fn({ targetUid: member.uid, targetPhone: suggested, newPassword: nextPassword });
+    await logAudit('user_password_reset_requested', { targetType: 'user', targetId: member.uid, meta: { by: user.uid } });
+    alert(`Password reset successful.\nTemporary password: ${nextPassword}`);
   };
 
   const forceLogout = async (targetUid: string) => {
@@ -338,7 +369,115 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
     }
     const fn = httpsCallable(functions, 'forceLogoutUser');
     await fn({ targetUid });
+    await updateDoc(doc(db, 'users', targetUid), { lastForcedLogoutAt: serverTimestamp() }).catch(() => {});
     alert('User logged out.');
+  };
+
+  const toggleBlockUser = async (member: User) => {
+    if (member.role === 'super_admin' || member.role === 'admin') {
+      alert('Cannot block super admin/admin accounts from this panel.');
+      return;
+    }
+    if (member.role === 'suspended') {
+      const previousRole = ((member as any).previousRole as User['role'] | undefined) || 'employee';
+      await updateDoc(doc(db, 'users', member.uid), {
+        role: previousRole,
+        previousRole: null,
+        updatedAt: serverTimestamp(),
+      });
+      await logAudit('user_unblocked', { targetType: 'user', targetId: member.uid, newValue: { role: previousRole } });
+      return;
+    }
+
+    await updateDoc(doc(db, 'users', member.uid), {
+      previousRole: member.role,
+      role: 'suspended',
+      updatedAt: serverTimestamp(),
+    });
+    await logAudit('user_blocked', { targetType: 'user', targetId: member.uid, oldValue: { role: member.role }, newValue: { role: 'suspended' } });
+  };
+
+  const serializeValue = (value: any): any => {
+    if (value && typeof value === 'object') {
+      if (typeof value.toDate === 'function') {
+        return { __type: 'date', value: value.toDate().toISOString() };
+      }
+      if (Array.isArray(value)) {
+        return value.map(serializeValue);
+      }
+      const output: Record<string, any> = {};
+      Object.keys(value).forEach((key) => {
+        output[key] = serializeValue(value[key]);
+      });
+      return output;
+    }
+    return value;
+  };
+
+  const deserializeValue = (value: any): any => {
+    if (!value || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(deserializeValue);
+    if (value.__type === 'date' && value.value) return new Date(value.value);
+    const output: Record<string, any> = {};
+    Object.keys(value).forEach((key) => {
+      output[key] = deserializeValue(value[key]);
+    });
+    return output;
+  };
+
+  const createBackup = async () => {
+    const collectionsToBackup = ['platformClients', 'users', 'platformConfig', 'supportTickets', 'auditLogs'];
+    const payload: any = {
+      version: 1,
+      createdAt: new Date().toISOString(),
+      createdBy: user.uid,
+      collections: {},
+    };
+    for (const collectionName of collectionsToBackup) {
+      const snapshot = await getDocs(query(collection(db, collectionName)));
+      payload.collections[collectionName] = snapshot.docs.map((item) => ({
+        id: item.id,
+        data: serializeValue(item.data()),
+      }));
+    }
+    setBackupPayload(payload);
+    await logAudit('backup_created', { targetType: 'system', targetId: 'platform_backup', meta: { collections: collectionsToBackup } });
+    return payload;
+  };
+
+  const downloadBackup = async () => {
+    const payload = backupPayload || await createBackup();
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const anchor = document.createElement('a');
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `platform-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    anchor.click();
+    URL.revokeObjectURL(anchor.href);
+    await logAudit('backup_downloaded', { targetType: 'system', targetId: 'platform_backup' });
+  };
+
+  const restoreBackupFromFile = async (file: File) => {
+    const raw = await file.text();
+    const parsed = JSON.parse(raw);
+    if (!parsed?.collections || typeof parsed.collections !== 'object') {
+      throw new Error('Invalid backup format.');
+    }
+    if (!window.confirm('Restore this backup now? Existing records in included collections may be overwritten.')) return;
+
+    const collections = Object.entries(parsed.collections) as Array<[string, Array<{ id: string; data: any }>]>;
+    for (const [collectionName, records] of collections) {
+      if (!Array.isArray(records)) continue;
+      for (let i = 0; i < records.length; i += 400) {
+        const chunk = records.slice(i, i + 400);
+        const batch = writeBatch(db);
+        chunk.forEach((record) => {
+          if (!record?.id) return;
+          batch.set(doc(db, collectionName, record.id), deserializeValue(record.data), { merge: true });
+        });
+        await batch.commit();
+      }
+    }
+    await logAudit('backup_restored', { targetType: 'system', targetId: 'platform_backup', meta: { sourceFile: file.name } });
   };
 
   return (
@@ -424,6 +563,7 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
                 <select value={companyForm.billingCycle} onChange={(e) => setCompanyForm((p) => ({ ...p, billingCycle: e.target.value as any }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm"><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select>
                 <select value={companyForm.paymentMode} onChange={(e) => setCompanyForm((p) => ({ ...p, paymentMode: e.target.value as any }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm"><option value="bank_transfer">Bank Transfer</option><option value="upi">UPI</option><option value="cash">Cash</option><option value="cheque">Cheque</option></select>
                 <select value={companyForm.paymentStatus} onChange={(e) => setCompanyForm((p) => ({ ...p, paymentStatus: e.target.value as any }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm"><option value="paid">Paid</option><option value="pending">Pending</option><option value="overdue">Overdue</option></select>
+                <input type="number" min={0} value={companyForm.trialDays} onChange={(e) => setCompanyForm((p) => ({ ...p, trialDays: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Trial days (0 for none)" />
                 <input type="date" value={companyForm.subscriptionStartDate} onChange={(e) => setCompanyForm((p) => ({ ...p, subscriptionStartDate: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
                 <input type="date" value={companyForm.subscriptionExpiryDate} onChange={(e) => setCompanyForm((p) => ({ ...p, subscriptionExpiryDate: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
                 <input value={companyForm.notes} onChange={(e) => setCompanyForm((p) => ({ ...p, notes: e.target.value }))} placeholder="Internal Notes" className="px-3 py-2 border border-gray-200 rounded-lg text-sm md:col-span-2" />
@@ -507,12 +647,12 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
                     <div>
                       <p className="font-semibold text-sm text-gray-900">{member.name} <span className="text-xs text-gray-500">({member.role})</span></p>
                       <p className="text-xs text-gray-500">{member.email} · {member.phone || '-'} · {member.companyName}</p>
-                      <p className="text-xs text-gray-400">Last Login: {asDateInput(member.lastLoginAt) || 'N/A'}</p>
+                      <p className="text-xs text-gray-400">Last Login: {asDateTime(member.lastLoginAt)}</p>
                     </div>
                     <div className="flex flex-wrap gap-1">
-                      <button onClick={() => resetPassword(member.email, member.uid)} className="px-2 py-1 rounded bg-blue-100 text-blue-700 text-xs font-semibold">Reset Password</button>
+                      <button onClick={() => resetPassword(member)} className="px-2 py-1 rounded bg-blue-100 text-blue-700 text-xs font-semibold">Reset Password</button>
                       <button onClick={() => forceLogout(member.uid)} className="px-2 py-1 rounded bg-amber-100 text-amber-700 text-xs font-semibold">Force Logout</button>
-                      <button onClick={() => handleUserRole(member, member.role === 'suspended' ? 'employee' : 'suspended')} className="px-2 py-1 rounded bg-rose-100 text-rose-700 text-xs font-semibold">{member.role === 'suspended' ? 'Unblock' : 'Block User'}</button>
+                      <button onClick={() => toggleBlockUser(member)} className="px-2 py-1 rounded bg-rose-100 text-rose-700 text-xs font-semibold">{member.role === 'suspended' ? 'Unblock' : 'Block User'}</button>
                     </div>
                   </div>
                 </div>
@@ -547,9 +687,12 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
             <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider">Global Settings</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
               <input value={globalSettings.supportEmail} onChange={(e) => setGlobalSettings((p) => ({ ...p, supportEmail: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Support Email" />
-              <input value={globalSettings.loginRateLimitPerMin} onChange={(e) => setGlobalSettings((p) => ({ ...p, loginRateLimitPerMin: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Login Rate/Min" />
-              <input value={globalSettings.apiRateLimitPerMin} onChange={(e) => setGlobalSettings((p) => ({ ...p, apiRateLimitPerMin: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="API Rate/Min" />
+              <input value={globalSettings.loginRateLimitPerMin} onChange={(e) => setGlobalSettings((p) => ({ ...p, loginRateLimitPerMin: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Login requests/min (10)" title="Max login attempts allowed per minute per IP/user." />
+              <input value={globalSettings.apiRateLimitPerMin} onChange={(e) => setGlobalSettings((p) => ({ ...p, apiRateLimitPerMin: e.target.value }))} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="API requests/min (120)" title="Max API requests allowed per minute per IP/user." />
             </div>
+            <p className="text-xs text-gray-500">
+              `10` = login rate-limit per minute. `120` = API request rate-limit per minute.
+            </p>
             <div className="flex gap-2">
               <button
                 onClick={async () => {
@@ -561,14 +704,32 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
               >
                 Save Settings
               </button>
-              <button className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold">Create Backup</button>
-              <button className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold">Download Backup</button>
+              <button onClick={async () => { await createBackup(); alert('Backup snapshot created in memory. You can download it now.'); }} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold">Create Backup</button>
+              <button onClick={downloadBackup} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold">Download Backup</button>
               <button
-                onClick={() => window.confirm('Are you sure? This action may affect active users.')}
+                onClick={() => backupRestoreInputRef.current?.click()}
                 className="px-4 py-2 rounded-xl bg-amber-100 text-amber-700 text-sm font-semibold flex items-center gap-2"
               >
                 <AlertCircle size={14} /> Restore Backup
               </button>
+              <input
+                ref={backupRestoreInputRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    await restoreBackupFromFile(file);
+                    alert('Backup restored successfully.');
+                  } catch (error: any) {
+                    alert(error?.message || 'Failed to restore backup.');
+                  } finally {
+                    e.target.value = '';
+                  }
+                }}
+              />
             </div>
             <div className="border border-gray-100 rounded-xl p-3">
               <p className="text-xs text-gray-500 mb-2 flex items-center gap-2"><ShieldCheck size={14} /> Recent Activity Logs</p>

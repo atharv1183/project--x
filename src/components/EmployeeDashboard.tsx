@@ -4,6 +4,8 @@ import {
   collection, 
   query, 
   where, 
+  getDocs,
+  limit,
   onSnapshot, 
   doc, 
   updateDoc, 
@@ -14,7 +16,7 @@ import {
   Timestamp,
   deleteField
 } from 'firebase/firestore';
-import { Lead, User, Followup, Attendance, AttendanceCorrectionRequest, Notification, OperationType, Location, Requirement } from '../types';
+import { Lead, User, Followup, Attendance, AttendanceCorrectionRequest, Notification, OperationType, Location, Requirement, LeadTransfer } from '../types';
 import { handleFirestoreError } from '../lib/utils';
 import InventoryManagement from './InventoryManagement';
 import SalesPerformanceDashboard from './SalesPerformanceDashboard';
@@ -45,6 +47,7 @@ import {
   Bell,
   Trash2,
   PlusCircle,
+  Edit2,
   FileText,
   LayoutGrid,
   X
@@ -117,7 +120,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 }
 
 type LeadQueueTab = 'pending' | 'today' | 'upcoming';
-type EmployeeView = LeadQueueTab | 'performance' | 'attendance' | 'requirements' | 'inventory';
+type EmployeeView = LeadQueueTab | 'performance' | 'attendance' | 'requirements' | 'inventory' | 'transfer_register';
 
 type EmployeeDashboardProps = {
   user: User;
@@ -145,6 +148,7 @@ export default function EmployeeDashboard({
   const [activeTab, setActiveTab] = useState<EmployeeView>(initialView ?? 'today');
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
+  const [leadTransfers, setLeadTransfers] = useState<LeadTransfer[]>([]);
   const [selectedLeadIndex, setSelectedLeadIndex] = useState<number | null>(null);
   const [followups, setFollowups] = useState<Followup[]>([]);
   const [loading, setLoading] = useState(false);
@@ -153,6 +157,7 @@ export default function EmployeeDashboard({
   const [showAddLead, setShowAddLead] = useState(false);
   const [leadForm, setLeadForm] = useState({ name: '', phone: '', source: 'Employee Added' });
   const [showReqModal, setShowReqModal] = useState(false);
+  const [editingRequirementId, setEditingRequirementId] = useState<string | null>(null);
   const [reqForm, setReqForm] = useState({
     name: '',
     phone: '',
@@ -442,6 +447,37 @@ export default function EmployeeDashboard({
   }, [user.uid]);
 
   useEffect(() => {
+    const qFrom = query(collection(db, 'leadTransfers'), where('fromUid', '==', user.uid));
+    const qTo = query(collection(db, 'leadTransfers'), where('toUid', '==', user.uid));
+    const fromTransfers: LeadTransfer[] = [];
+    const toTransfers: LeadTransfer[] = [];
+
+    const syncTransfers = () => {
+      const merged = [...fromTransfers, ...toTransfers]
+        .filter((item, index, arr) => index === arr.findIndex((candidate) => candidate.id === item.id))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      setLeadTransfers(merged);
+    };
+
+    const unsubFrom = onSnapshot(qFrom, (snapshot) => {
+      fromTransfers.length = 0;
+      snapshot.docs.forEach((item) => fromTransfers.push({ id: item.id, ...item.data() } as LeadTransfer));
+      syncTransfers();
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'leadTransfers'));
+
+    const unsubTo = onSnapshot(qTo, (snapshot) => {
+      toTransfers.length = 0;
+      snapshot.docs.forEach((item) => toTransfers.push({ id: item.id, ...item.data() } as LeadTransfer));
+      syncTransfers();
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'leadTransfers'));
+
+    return () => {
+      unsubFrom();
+      unsubTo();
+    };
+  }, [user.uid]);
+
+  useEffect(() => {
     if (!auth.currentUser) return;
     const qReqs = query(
       collection(db, 'requirements'),
@@ -466,14 +502,23 @@ export default function EmployeeDashboard({
     setLoading(true);
 
     try {
-      await addDoc(collection(db, 'requirements'), {
-        ...reqForm,
-        phone: normalizedPhone,
-        employeeId: user.uid,
-        employeeName: user.name,
-        createdAt: serverTimestamp()
-      });
+      if (editingRequirementId) {
+        await updateDoc(doc(db, 'requirements', editingRequirementId), {
+          ...reqForm,
+          phone: normalizedPhone,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await addDoc(collection(db, 'requirements'), {
+          ...reqForm,
+          phone: normalizedPhone,
+          employeeId: user.uid,
+          employeeName: user.name,
+          createdAt: serverTimestamp()
+        });
+      }
       setShowReqModal(false);
+      setEditingRequirementId(null);
       setReqForm({
         name: '',
         phone: '',
@@ -483,12 +528,26 @@ export default function EmployeeDashboard({
         location: '',
         remark: ''
       });
-      alert('Requirement added successfully!');
+      alert(editingRequirementId ? 'Requirement updated successfully!' : 'Requirement added successfully!');
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'requirements');
+      handleFirestoreError(error, editingRequirementId ? OperationType.UPDATE : OperationType.CREATE, 'requirements');
     } finally {
       setLoading(false);
     }
+  };
+
+  const startEditRequirement = (req: Requirement) => {
+    setReqForm({
+      name: req.name || '',
+      phone: (req.phone || '').replace(/\D/g, '').slice(0, 10),
+      type: req.type || 'zeemen',
+      area: req.area || '',
+      budget: req.budget || '',
+      location: req.location || '',
+      remark: req.remark || '',
+    });
+    setEditingRequirementId(req.id);
+    setShowReqModal(true);
   };
 
   const handleAddLead = async (e: FormEvent) => {
@@ -497,8 +556,9 @@ export default function EmployeeDashboard({
 
     if (!normalizedPhone) return alert('Mobile number is mandatory.');
     if (normalizedPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
-    const existingLead = leads.find((lead) => normalizePhone(lead.phone || '') === normalizedPhone);
-    if (existingLead) {
+    const duplicateSnapshot = await getDocs(query(collection(db, 'leads'), where('phone', '==', normalizedPhone), limit(1)));
+    if (!duplicateSnapshot.empty) {
+      const existingLead = duplicateSnapshot.docs[0].data() as Lead;
       return alert(`Lead with mobile ${normalizedPhone} already exists (${existingLead.name || 'Unknown'}).`);
     }
 
@@ -799,6 +859,18 @@ export default function EmployeeDashboard({
         remark: `Lead transferred from ${user.name} to ${targetEmployee.name}`,
         employeeId: user.uid
       });
+      await addDoc(collection(db, 'leadTransfers'), {
+        leadId: currentLead.id,
+        leadName: currentLead.name,
+        fromUid: user.uid,
+        fromName: user.name,
+        toUid: targetEmployee.uid,
+        toName: targetEmployee.name,
+        transferredByUid: user.uid,
+        transferredByName: user.name,
+        transferredByRole: user.role,
+        createdAt: serverTimestamp(),
+      });
 
       setShowTransferModal(false);
       setSelectedLeadIndex(null);
@@ -869,13 +941,12 @@ export default function EmployeeDashboard({
       </div>
 
       {/* Branded Statistics Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 sm:gap-5">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 sm:gap-5">
         {[
           { label: 'Assigned', value: stats.total, icon: ClipboardList, color: 'text-blue-600', bg: 'bg-blue-50' },
           { label: 'Interests', value: stats.interested, icon: CheckCircle2, color: 'text-green-600', bg: 'bg-green-50' },
           { label: 'Declined', value: stats.notInterested, icon: XCircle, color: 'text-rose-500', bg: 'bg-rose-50' },
           { label: 'Followups', value: stats.pending, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-50' },
-          { label: 'Visits', value: leads.filter(l => l.siteVisitAt).length, icon: MapPin, color: 'text-violet-600', bg: 'bg-violet-50' },
           { label: 'Closed', value: stats.dealsApproved, icon: ShieldCheck, color: 'text-indigo-600', bg: 'bg-indigo-50' }
         ].map((item, i) => (
           <div key={i} className="bg-white p-4 sm:p-6 rounded-[28px] sm:rounded-[36px] border border-slate-100 shadow-xl shadow-slate-200/20 flex flex-col items-center justify-center text-center group hover:bg-slate-50 transition-all">
@@ -896,13 +967,14 @@ export default function EmployeeDashboard({
           className="flex bg-white/90 backdrop-blur p-1.5 rounded-[24px] border border-slate-100 overflow-x-auto no-scrollbar whitespace-nowrap"
         >
         {[
-          { id: 'pending', icon: Clock, label: 'Pending' },
           { id: 'performance', icon: BarChart3, label: 'Dashboard' },
-          { id: 'attendance', icon: History, label: 'Attendance' },
+          { id: 'pending', icon: Clock, label: 'Pending' },
           { id: 'today', icon: Calendar, label: 'Today' },
           { id: 'upcoming', icon: TrendingUp, label: 'Upcoming' },
           { id: 'requirements', icon: FileText, label: 'Needs' },
-          { id: 'inventory', icon: LayoutGrid, label: 'Inventory' }
+          { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
+          { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
+          { id: 'attendance', icon: History, label: 'Attendance' }
         ].map(tab => (
           <button
             key={tab.id}
@@ -1023,6 +1095,15 @@ export default function EmployeeDashboard({
                     <p className="text-xs text-slate-600 leading-relaxed font-medium line-clamp-2">{req.remark}</p>
                   </div>
                 )}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => startEditRequirement(req)}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-2.5 text-[10px] font-black uppercase tracking-widest text-blue-700 hover:bg-blue-100 transition-colors"
+                  >
+                    <Edit2 size={14} /> Edit Requirement
+                  </button>
+                </div>
               </motion.div>
             ))}
             {requirements.length === 0 && (
@@ -1033,6 +1114,41 @@ export default function EmployeeDashboard({
                 <p className="text-slate-400 font-black text-xs uppercase tracking-[0.2em]">No Requirements Listed</p>
               </div>
             )}
+          </div>
+        </div>
+      ) : activeTab === 'transfer_register' ? (
+        <div className="space-y-6 pt-3 sm:pt-4">
+          <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">Lead Transfer Register</h2>
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-200/20 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100">
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">When</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Lead</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">From</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">To</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Transferred By</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {leadTransfers.map((entry) => (
+                    <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4 text-xs font-bold text-slate-500">{formatDateValue(entry.createdAt, 'MMM dd, yyyy hh:mm a', 'N/A')}</td>
+                      <td className="px-6 py-4 text-sm font-black text-slate-800">{entry.leadName || entry.leadId}</td>
+                      <td className="px-6 py-4 text-sm font-bold text-slate-600">{entry.fromName || '-'}</td>
+                      <td className="px-6 py-4 text-sm font-bold text-slate-600">{entry.toName || '-'}</td>
+                      <td className="px-6 py-4 text-sm font-bold text-slate-600">{entry.transferredByName || '-'}</td>
+                    </tr>
+                  ))}
+                  {leadTransfers.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-16 text-center text-sm font-bold text-slate-400">No lead transfer records found.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       ) : activeTab === 'inventory' ? (
@@ -1841,7 +1957,7 @@ export default function EmployeeDashboard({
                         <PlusCircle size={32} className="hidden sm:block" />
                       </div>
                       <div>
-                        <h3 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Add Requirement</h3>
+                        <h3 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">{editingRequirementId ? 'Edit Requirement' : 'Add Requirement'}</h3>
                         <p className="text-slate-400 font-bold text-[10px] sm:text-xs uppercase tracking-widest mt-1">Log a new client inquiry</p>
                       </div>
                     </div>
@@ -1932,9 +2048,12 @@ export default function EmployeeDashboard({
                 </div>
 
                 <div className="shrink-0 p-3 sm:p-10 pb-4 sm:pb-10 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-3 sm:gap-4">
-                  <button 
-                    type="button" 
-                    onClick={() => setShowReqModal(false)}
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        setShowReqModal(false);
+                        setEditingRequirementId(null);
+                      }}
                     className="py-3 sm:py-5 font-black text-xs uppercase tracking-widest text-slate-400 bg-white rounded-3xl border border-slate-200 hover:bg-slate-100 transition-all"
                   >
                     Cancel
@@ -1944,7 +2063,7 @@ export default function EmployeeDashboard({
                     disabled={loading}
                     className="py-3 sm:py-5 bg-blue-600 text-white font-black text-xs uppercase tracking-widest rounded-3xl shadow-2xl shadow-blue-200 hover:bg-blue-700 transition-all active:scale-95 disabled:opacity-50"
                   >
-                    {loading ? 'Adding...' : 'Save Requirement'}
+                    {loading ? (editingRequirementId ? 'Saving...' : 'Adding...') : (editingRequirementId ? 'Save Changes' : 'Save Requirement')}
                   </button>
                 </div>
               </form>

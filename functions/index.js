@@ -21,7 +21,7 @@ exports.startImpersonationSession = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
   const actorUid = request.auth.uid;
   const actorRole = await getUserRole(actorUid);
-  if (actorRole !== 'super_admin') throw new HttpsError('permission-denied', 'Super admin only.');
+  if (!['super_admin', 'admin'].includes(actorRole || '')) throw new HttpsError('permission-denied', 'Super admin only.');
 
   const clientId = String(request.data?.clientId || '').trim();
   if (!clientId) throw new HttpsError('invalid-argument', 'clientId is required.');
@@ -70,7 +70,7 @@ exports.endImpersonationSession = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
   const actorUid = request.auth.uid;
   const actorRole = await getUserRole(actorUid);
-  if (actorRole !== 'super_admin') throw new HttpsError('permission-denied', 'Super admin only.');
+  if (!['super_admin', 'admin'].includes(actorRole || '')) throw new HttpsError('permission-denied', 'Super admin only.');
 
   const clientId = String(request.data?.clientId || '').trim();
   await writeAuditLog({
@@ -88,7 +88,7 @@ exports.forceLogoutUser = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
   const actorUid = request.auth.uid;
   const actorRole = await getUserRole(actorUid);
-  if (actorRole !== 'super_admin') throw new HttpsError('permission-denied', 'Super admin only.');
+  if (!['super_admin', 'admin'].includes(actorRole || '')) throw new HttpsError('permission-denied', 'Super admin only.');
 
   const targetUid = String(request.data?.targetUid || '').trim();
   if (!targetUid) throw new HttpsError('invalid-argument', 'targetUid is required.');
@@ -105,6 +105,40 @@ exports.forceLogoutUser = onCall(async (request) => {
     actorName: request.auth.token.name || request.auth.token.email || actorUid,
     targetType: 'user',
     targetId: targetUid,
+  });
+
+  return { ok: true };
+});
+
+exports.resetUserPassword = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
+  const actorUid = request.auth.uid;
+  const actorRole = await getUserRole(actorUid);
+  if (!['super_admin', 'admin', 'manager'].includes(actorRole || '')) {
+    throw new HttpsError('permission-denied', 'Only admin/manager can reset passwords.');
+  }
+
+  const targetUid = String(request.data?.targetUid || '').trim();
+  const targetPhone = String(request.data?.targetPhone || '').replace(/\D/g, '');
+  const requestedPassword = String(request.data?.newPassword || '').trim();
+  if (!targetUid) throw new HttpsError('invalid-argument', 'targetUid is required.');
+
+  const fallbackPassword = targetPhone || '';
+  const newPassword = requestedPassword || fallbackPassword;
+  if (!newPassword || newPassword.length < 8) {
+    throw new HttpsError('invalid-argument', 'Password must be at least 8 characters.');
+  }
+
+  await admin.auth().updateUser(targetUid, { password: newPassword });
+  await writeAuditLog({
+    action: 'user_password_reset',
+    actorId: actorUid,
+    actorName: request.auth.token.name || request.auth.token.email || actorUid,
+    targetType: 'user',
+    targetId: targetUid,
+    meta: {
+      mode: requestedPassword ? 'manual' : 'mobile_fallback',
+    },
   });
 
   return { ok: true };
