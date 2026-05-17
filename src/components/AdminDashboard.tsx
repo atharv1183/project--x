@@ -956,6 +956,33 @@ export default function AdminDashboard({
     dealsApproved: leads.filter(l => l.status === 'deal_approved').length
   };
 
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date();
+  todayEnd.setHours(23, 59, 59, 999);
+  const upcomingCount = leads.filter((lead) => {
+    const d = parseTimestamp((lead as any).nextFollowupAt);
+    return Boolean(d && d > todayEnd);
+  }).length;
+  const overdueCount = leads.filter((lead) => {
+    const d = parseTimestamp((lead as any).nextFollowupAt);
+    return Boolean(d && d < todayStart && lead.status !== 'deal_approved' && lead.status !== 'not_interested');
+  }).length;
+  const todayFollowupsCount = leads.filter((lead) => {
+    const d = parseTimestamp((lead as any).nextFollowupAt);
+    return Boolean(d && d >= todayStart && d <= todayEnd);
+  }).length;
+  const weekStart = new Date(todayStart);
+  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  const weekSiteVisits = leads.filter((lead) => {
+    const d = parseTimestamp((lead as any).siteVisitAt);
+    return Boolean(d && d >= weekStart);
+  }).length;
+  const weekDeals = leads.filter((lead) => {
+    const d = parseTimestamp((lead as any).updatedAt || (lead as any).createdAt);
+    return Boolean(lead.status === 'deal_approved' && d && d >= weekStart);
+  }).length;
+
   const statusFilteredLeads = filter === 'total' 
     ? leads 
     : leads.filter(l => {
@@ -1140,6 +1167,14 @@ export default function AdminDashboard({
     } finally {
       setLoading(false);
     }
+  };
+
+  const showPasswordRecoveryHelp = (emp: User) => {
+    alert(
+      `Current password for ${emp.name} cannot be viewed.\n\n` +
+      `Reason: passwords are securely hashed in Firebase Auth and are not retrievable.\n\n` +
+      `Use "Reset Password" to set a temporary password and share it with the employee.`
+    );
   };
 
   const handleAddLead = async (e: FormEvent) => {
@@ -1527,12 +1562,12 @@ export default function AdminDashboard({
   };
 
   return (
-    <div className="space-y-8 pb-20">
+    <div className="space-y-5 pb-12">
       {/* Top Navigation / Tabs */}
-      <div className="relative mb-8">
+      <div className="relative mb-4">
         <div
           ref={tabsScrollRef}
-          className="flex bg-white/50 p-1.5 rounded-[24px] border border-slate-100 overflow-x-auto no-scrollbar whitespace-nowrap"
+          className="flex bg-white/50 p-1 rounded-[20px] border border-slate-100 overflow-x-auto no-scrollbar whitespace-nowrap"
         >
         {[
           { id: 'performance', icon: BarChart3, label: 'Dashboard' },
@@ -1548,7 +1583,7 @@ export default function AdminDashboard({
             key={tab.id}
             onClick={() => setActiveView(tab.id as any)}
             className={cn(
-              "min-w-[140px] md:min-w-0 md:flex-1 flex items-center justify-center gap-3 py-3.5 px-6 rounded-2xl text-xs font-black uppercase tracking-widest transition-all",
+              "min-w-[120px] md:min-w-0 md:flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all",
               activeView === tab.id 
                 ? "bg-slate-900 text-white shadow-xl shadow-slate-200" 
                 : "text-slate-400 hover:text-slate-600 hover:bg-white"
@@ -1599,8 +1634,44 @@ export default function AdminDashboard({
         />
       ) : activeView === 'leads' ? (
         <>
-          {/* Stats Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+          <div className="rounded-2xl border border-slate-100 bg-white p-3 sm:p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-black text-slate-900">Leads Dashboard</h3>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Condensed View</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Total Leads</p>
+                <p className="mt-1 text-2xl font-black text-slate-900">{stats.total}</p>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-white p-3">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Leads</p>
+                <div className="mt-1 grid grid-cols-3 gap-2 text-xs font-bold">
+                  <p className="text-emerald-600">Interested: {stats.interested}</p>
+                  <p className="text-rose-500">Not Int: {stats.notInterested}</p>
+                  <p className="text-amber-600">Pending: {stats.pending}</p>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-white p-3">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Follow-ups</p>
+                <div className="mt-1 grid grid-cols-3 gap-2 text-xs font-bold">
+                  <p className="text-rose-600">Overdue: {overdueCount}</p>
+                  <p className="text-blue-600">Today: {todayFollowupsCount}</p>
+                  <p className="text-violet-600">Upcoming: {upcomingCount}</p>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-white p-3">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Outcome</p>
+                <div className="mt-1 grid grid-cols-2 gap-2 text-xs font-bold">
+                  <p className="text-green-600">Visits: {weekSiteVisits}</p>
+                  <p className="text-indigo-600">Deals: {weekDeals}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Status Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         {[
           { label: 'Total Leads', id: 'total', value: stats.total, icon: ClipboardList, color: 'bg-blue-500' },
           { label: 'Interested', id: 'interested', value: stats.interested, icon: CheckCircle2, color: 'bg-green-500' },
@@ -1888,6 +1959,13 @@ export default function AdminDashboard({
                           className="flex-1 py-2 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-xl text-xs font-bold border border-gray-200 transition-colors"
                         >
                           Edit Profile
+                        </button>
+                        <button
+                          onClick={() => showPasswordRecoveryHelp(emp)}
+                          className="flex-1 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl text-xs font-bold border border-amber-100 transition-colors"
+                          title="Current password cannot be viewed; use reset flow"
+                        >
+                          Password Help
                         </button>
                         <button
                           onClick={() => resetEmployeePassword(emp)}

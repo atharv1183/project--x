@@ -119,8 +119,8 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   }
 }
 
-type LeadQueueTab = 'pending' | 'today' | 'upcoming';
-type EmployeeView = LeadQueueTab | 'performance' | 'attendance' | 'requirements' | 'inventory' | 'transfer_register';
+type LeadQueueTab = 'overdue' | 'today' | 'upcoming';
+type EmployeeView = LeadQueueTab | 'followups' | 'performance' | 'attendance' | 'requirements' | 'inventory' | 'transfer_register' | 'pending';
 
 type EmployeeDashboardProps = {
   user: User;
@@ -134,7 +134,7 @@ function getLeadQueueTab(lead: Lead): LeadQueueTab | null {
 
   const nextDateObj = toDateValue(lead.nextFollowupAt);
   if (nextDateObj && isToday(nextDateObj)) return 'today';
-  if (!nextDateObj || (isPast(nextDateObj) && !isToday(nextDateObj))) return 'pending';
+  if (!nextDateObj || (isPast(nextDateObj) && !isToday(nextDateObj))) return 'overdue';
   if (nextDateObj && isFuture(nextDateObj) && !isToday(nextDateObj)) return 'upcoming';
   return null;
 }
@@ -146,6 +146,7 @@ export default function EmployeeDashboard({
   initialViewSignal = 0,
 }: EmployeeDashboardProps) {
   const [activeTab, setActiveTab] = useState<EmployeeView>(initialView ?? 'today');
+  const [followupSubTab, setFollowupSubTab] = useState<LeadQueueTab>('today');
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [leadTransfers, setLeadTransfers] = useState<LeadTransfer[]>([]);
@@ -238,7 +239,15 @@ export default function EmployeeDashboard({
 
   useEffect(() => {
     if (!initialView) return;
-    setActiveTab(initialView);
+    if (initialView === 'pending') {
+      setActiveTab('followups');
+      setFollowupSubTab('overdue');
+    } else if (initialView === 'today' || initialView === 'upcoming' || initialView === 'overdue') {
+      setActiveTab('followups');
+      setFollowupSubTab(initialView as LeadQueueTab);
+    } else {
+      setActiveTab(initialView);
+    }
     setSelectedLeadIndex(null);
   }, [initialView, initialViewSignal]);
 
@@ -308,7 +317,8 @@ export default function EmployeeDashboard({
           return;
         }
 
-        setActiveTab(targetTab);
+        setActiveTab('followups');
+        setFollowupSubTab(targetTab);
         setLeadSearchQuery('');
         setSelectedLeadIndex(leadIndex);
         setShowNotifications(false);
@@ -588,7 +598,11 @@ export default function EmployeeDashboard({
     }
   };
 
-  const queueLeads = leads.filter(l => getLeadQueueTab(l) === activeTab);
+  const effectiveQueueTab: LeadQueueTab =
+    activeTab === 'today' || activeTab === 'upcoming' || activeTab === 'overdue'
+      ? activeTab
+      : followupSubTab;
+  const queueLeads = leads.filter(l => getLeadQueueTab(l) === effectiveQueueTab);
   const searchTerm = leadSearchQuery.trim().toLowerCase();
   const filteredLeads = queueLeads.filter(l => {
     if (!searchTerm) return true;
@@ -887,9 +901,20 @@ export default function EmployeeDashboard({
       {/* Professional Header & Attendance */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6 bg-white/40 backdrop-blur-2xl p-4 sm:p-8 rounded-[32px] sm:rounded-[48px] border border-white/40 shadow-2xl shadow-blue-900/5 ring-1 ring-black/[0.02]">
         <div className="flex items-center gap-4 sm:gap-6 px-1">
-          <div className="w-14 h-14 sm:w-20 sm:h-20 rounded-2xl sm:rounded-[32px] bg-gradient-to-tr from-blue-600 to-blue-500 flex items-center justify-center text-white shadow-2xl shadow-blue-600/40 transform hover:rotate-3 transition-transform">
-            <UserIcon size={26} className="sm:hidden" />
-            <UserIcon size={40} className="hidden sm:block" />
+          <div className="w-14 h-14 sm:w-20 sm:h-20 rounded-2xl sm:rounded-[32px] bg-gradient-to-tr from-blue-600 to-blue-500 flex items-center justify-center text-white shadow-2xl shadow-blue-600/40 transform hover:rotate-3 transition-transform overflow-hidden">
+            {user.profileImageUrl ? (
+              <img
+                src={user.profileImageUrl}
+                alt={user.name}
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <>
+                <UserIcon size={26} className="sm:hidden" />
+                <UserIcon size={40} className="hidden sm:block" />
+              </>
+            )}
           </div>
           <div>
             <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight leading-none mb-1.5 sm:mb-2">Hey, {user.name.split(' ')[0]}</h1>
@@ -940,48 +965,26 @@ export default function EmployeeDashboard({
         </div>
       </div>
 
-      {/* Branded Statistics Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 sm:gap-5">
-        {[
-          { label: 'Assigned', value: stats.total, icon: ClipboardList, color: 'text-blue-600', bg: 'bg-blue-50' },
-          { label: 'Interests', value: stats.interested, icon: CheckCircle2, color: 'text-green-600', bg: 'bg-green-50' },
-          { label: 'Declined', value: stats.notInterested, icon: XCircle, color: 'text-rose-500', bg: 'bg-rose-50' },
-          { label: 'Followups', value: stats.pending, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-50' },
-          { label: 'Closed', value: stats.dealsApproved, icon: ShieldCheck, color: 'text-indigo-600', bg: 'bg-indigo-50' }
-        ].map((item, i) => (
-          <div key={i} className="bg-white p-4 sm:p-6 rounded-[28px] sm:rounded-[36px] border border-slate-100 shadow-xl shadow-slate-200/20 flex flex-col items-center justify-center text-center group hover:bg-slate-50 transition-all">
-            <div className={cn("w-11 h-11 sm:w-14 sm:h-14 rounded-2xl sm:rounded-3xl flex items-center justify-center mb-3 sm:mb-4 transition-all duration-500 group-hover:scale-110 shadow-inner", item.bg, item.color)}>
-              <item.icon size={20} className="sm:hidden" />
-              <item.icon size={26} className="hidden sm:block" />
-            </div>
-            <p className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tighter">{item.value}</p>
-            <p className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-1">{item.label}</p>
-          </div>
-        ))}
-      </div>
-
       {/* Tab Navigation */}
       <div className="relative mb-6 md:mb-8 md:sticky md:top-20 z-30">
         <div
           ref={tabsScrollRef}
           className="flex bg-white/90 backdrop-blur p-1.5 rounded-[24px] border border-slate-100 overflow-x-auto no-scrollbar whitespace-nowrap"
         >
-        {[
+        {[ 
           { id: 'performance', icon: BarChart3, label: 'Dashboard' },
-          { id: 'pending', icon: Clock, label: 'Pending' },
-          { id: 'today', icon: Calendar, label: 'Today' },
-          { id: 'upcoming', icon: TrendingUp, label: 'Upcoming' },
+          { id: 'followups', icon: Clock, label: 'Followups' },
           { id: 'requirements', icon: FileText, label: 'Needs' },
           { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
-          { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
-          { id: 'attendance', icon: History, label: 'Attendance' }
+          { id: 'attendance', icon: History, label: 'Attendance' },
+          { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' }
         ].map(tab => (
           <button
             key={tab.id}
             onClick={() => { setActiveTab(tab.id as any); setSelectedLeadIndex(null); }}
             className={cn(
               "min-w-[130px] md:min-w-0 md:flex-1 flex items-center justify-center gap-3 py-3.5 px-6 rounded-2xl text-xs font-black uppercase tracking-widest transition-all",
-              activeTab === tab.id 
+              activeTab === tab.id || (tab.id === 'followups' && (activeTab === 'today' || activeTab === 'upcoming' || activeTab === 'overdue'))
                 ? "bg-slate-900 text-white shadow-xl shadow-slate-200" 
                 : "text-slate-400 hover:text-slate-600 hover:bg-white"
             )}
@@ -1157,9 +1160,30 @@ export default function EmployeeDashboard({
         <div className="flex flex-col lg:flex-row gap-5 md:gap-6">
         {/* Leads List Side */}
         <div className={cn("w-full lg:w-[400px] space-y-4", selectedLeadIndex !== null && "hidden lg:block")}>
+          <div className="px-4">
+            <div className="inline-flex items-center rounded-2xl bg-white border border-slate-100 p-1.5 gap-1.5 shadow-sm">
+              {[
+                { id: 'overdue', label: 'Overdue' },
+                { id: 'today', label: 'Today' },
+                { id: 'upcoming', label: 'Upcoming' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => { setActiveTab('followups'); setFollowupSubTab(tab.id as LeadQueueTab); setSelectedLeadIndex(null); }}
+                  className={cn(
+                    "px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                    effectiveQueueTab === tab.id ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50"
+                  )}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="flex items-center justify-between px-4">
             <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-mono">
-              {activeTab} Queue ({filteredLeads.length})
+              {effectiveQueueTab} Queue ({filteredLeads.length})
             </h3>
             <button
               onClick={() => setShowAddLead(true)}
@@ -1221,12 +1245,47 @@ export default function EmployeeDashboard({
                       </p>
                     </div>
                   )}
+                  {lead.nextFollowupAt && (
+                    <div className="flex items-center gap-1 mt-1">
+                      <Clock size={10} className="text-indigo-400" />
+                      <p className="text-[9px] text-indigo-500 font-black uppercase tracking-tighter">
+                        Next: {formatDateValue(lead.nextFollowupAt, 'MMM dd')}
+                      </p>
+                    </div>
+                  )}
                 </div>
-                <div className={cn(
-                  "w-8 h-8 rounded-full flex items-center justify-center transition-all",
-                  selectedLeadIndex === idx ? "bg-blue-100 text-blue-600" : "bg-slate-50 text-slate-300 group-hover:bg-blue-50 group-hover:text-blue-400"
-                )}>
-                  <ChevronRight size={16} className={cn("transition-transform", selectedLeadIndex === idx && "translate-x-0.5")} />
+                <div className="flex flex-col items-end gap-1.5">
+                  {effectiveQueueTab === 'overdue' && (
+                    <span className="px-2 py-1 rounded-lg bg-rose-50 text-rose-600 text-[9px] font-black uppercase tracking-wider whitespace-nowrap">
+                      {(() => {
+                        const nextDateValue = toDateValue(lead.nextFollowupAt);
+                        if (!nextDateValue) return 'No date';
+                        const delayDays = Math.max(1, Math.floor((startOfDay(new Date()).getTime() - startOfDay(nextDateValue).getTime()) / (24 * 60 * 60 * 1000)));
+                        return `${delayDays}d overdue`;
+                      })()}
+                    </span>
+                  )}
+                  {effectiveQueueTab === 'today' && (
+                    <span className={cn(
+                      "px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider whitespace-nowrap",
+                      toDateValue(lead.createdAt) && isToday(toDateValue(lead.createdAt) as Date)
+                        ? "bg-emerald-50 text-emerald-600"
+                        : "bg-indigo-50 text-indigo-600"
+                    )}>
+                      {toDateValue(lead.createdAt) && isToday(toDateValue(lead.createdAt) as Date) ? 'New' : 'Today'}
+                    </span>
+                  )}
+                  {effectiveQueueTab === 'upcoming' && lead.nextFollowupAt && (
+                    <span className="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-600 text-[9px] font-black uppercase tracking-wider whitespace-nowrap">
+                      {formatDateValue(lead.nextFollowupAt, 'dd MMM')}
+                    </span>
+                  )}
+                  <div className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center transition-all",
+                    selectedLeadIndex === idx ? "bg-blue-100 text-blue-600" : "bg-slate-50 text-slate-300 group-hover:bg-blue-50 group-hover:text-blue-400"
+                  )}>
+                    <ChevronRight size={16} className={cn("transition-transform", selectedLeadIndex === idx && "translate-x-0.5")} />
+                  </div>
                 </div>
               </motion.button>
             ))}

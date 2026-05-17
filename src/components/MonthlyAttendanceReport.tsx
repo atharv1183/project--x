@@ -3,15 +3,12 @@ import {
   AlertTriangle,
   CalendarDays,
   CheckCircle2,
-  Download,
   Edit3,
   FileSpreadsheet,
-  FileText,
   Loader2,
   Lock,
   MapPin,
   MessageSquare,
-  Printer,
   ShieldCheck,
   Users,
   XCircle,
@@ -412,13 +409,23 @@ export default function MonthlyAttendanceReport({
     Remarks: row.remarks || '-',
   }));
 
-  const exportReport = (kind: 'csv' | 'excel' | 'pdf' | 'print') => {
-    if (kind === 'pdf' || kind === 'print') {
-      window.print();
+  const exportReport = (kind: 'excel') => {
+    if (employeeId === 'all') {
+      alert('Please select a specific employee before exporting Excel.');
+      return;
+    }
+    if (!Number.isFinite(month) || !Number.isFinite(year)) {
+      alert('Please select month and year before exporting Excel.');
+      return;
+    }
+    if (rows.length === 0) {
+      alert('No attendance rows found for the selected employee, month and year.');
       return;
     }
     const csv = toCsv(exportRows);
-    downloadText(`monthly-attendance-${MONTHS[month]}-${year}.${kind === 'excel' ? 'xls' : 'csv'}`, csv, kind === 'excel' ? 'application/vnd.ms-excel' : 'text/csv;charset=utf-8');
+    const employeeName = cleanMembers.find((member) => member.uid === employeeId)?.name || 'employee';
+    const safeEmployeeName = employeeName.replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '').toLowerCase();
+    downloadText(`attendance-${safeEmployeeName}-${MONTHS[month]}-${year}.xls`, csv, 'application/vnd.ms-excel');
   };
 
   const handleEditRow = (row: DailyRow) => {
@@ -508,10 +515,7 @@ export default function MonthlyAttendanceReport({
               {attendanceLoading ? 'Saving' : isManagerClockedIn ? 'Clock Out' : 'Clock In'}
             </button>
           )}
-          <button onClick={() => exportReport('csv')} className="inline-flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-3 py-2 text-xs font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50"><Download size={14} /> CSV</button>
           <button onClick={() => exportReport('excel')} className="inline-flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-3 py-2 text-xs font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50"><FileSpreadsheet size={14} /> Excel</button>
-          <button onClick={() => exportReport('pdf')} className="inline-flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-3 py-2 text-xs font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50"><FileText size={14} /> PDF</button>
-          <button onClick={() => exportReport('print')} className="inline-flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-3 py-2 text-xs font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50"><Printer size={14} /> Print</button>
         </div>
       </div>
 

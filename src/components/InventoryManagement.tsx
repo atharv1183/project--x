@@ -181,6 +181,18 @@ function getVideoLinkLabel(url: string): string {
   }
 }
 
+function compactUrl(url: string, maxLength = 52): string {
+  try {
+    const parsed = new URL(url);
+    const compact = `${parsed.hostname.replace(/^www\./, '')}${parsed.pathname}${parsed.search}`;
+    if (compact.length <= maxLength) return compact;
+    return `${compact.slice(0, maxLength - 3)}...`;
+  } catch {
+    if (url.length <= maxLength) return url;
+    return `${url.slice(0, maxLength - 3)}...`;
+  }
+}
+
 export default function InventoryManagement({ user, onBack }: InventoryManagementProps) {
   const isAdmin = user.role === 'admin' || user.role === 'manager';
   const isSuperAdmin = user.role === 'admin';
@@ -933,24 +945,38 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   const shareOnWhatsApp = (item: InventoryItem) => {
     const mapLink = getInventoryLocationLink(item);
     const isProject = item.listingMode === 'project' || item.isProject;
-    const imageLinks = item.photos?.length ? item.photos.join('\n') : 'N/A';
-    const videoLinks = item.videos?.length ? item.videos.join('\n') : 'N/A';
+    const imageLinks = item.photos?.length
+      ? item.photos.slice(0, 10).map((link, index) => `${index + 1}. ${compactUrl(link)}\n${link}`).join('\n')
+      : 'N/A';
+    const videoLinks = item.videos?.length
+      ? item.videos.slice(0, 6).map((link, index) => `${index + 1}. ${compactUrl(link)}\n${link}`).join('\n')
+      : 'N/A';
     const projectSummary = isProject && item.projectUnits?.length
       ? item.projectUnits
           .slice(0, 8)
-          .map((unit, idx) => `${idx + 1}. ${unit.title || `Unit ${idx + 1}`} | ${unit.type}${unit.subType ? ` (${unit.subType})` : ''} | ${unit.areaValue || '-'} ${unit.areaUnit || ''} | ₹${Number(unit.rate || 0).toLocaleString()}`)
+          .map((unit, idx) => `${idx + 1}. ${unit.title || `Unit ${idx + 1}`} | ${unit.type}${unit.subType ? ` (${unit.subType})` : ''} | ${unit.areaValue || '-'} ${unit.areaUnit || ''} | Rs ${Number(unit.rate || 0).toLocaleString()}`)
           .join('\n')
       : '';
+    const unitImageLinks = isProject && item.projectUnits?.length
+      ? item.projectUnits
+          .flatMap((unit, unitIndex) =>
+            (unit.photos || []).slice(0, 2).map((link, photoIndex) =>
+              `U${unitIndex + 1}-P${photoIndex + 1}. ${compactUrl(link)}\n${link}`
+            )
+          )
+          .slice(0, 16)
+      : [];
 
     const message = [
       `*${item.title}*`,
       '',
-      `Type: ${isProject ? 'Project' : 'Individual Property'}`,
+      `Listing: ${isProject ? 'Project' : 'Individual Property'}`,
       `Category: ${getTypeWithSubType(item)}`,
       `Location: ${item.location || 'N/A'}`,
-      `Map: ${mapLink}`,
+      `Map: ${compactUrl(mapLink)}`,
+      mapLink,
       !isProject ? `Area: ${getPrimarySizeText(item)}` : `Units: ${item.projectUnitCount || item.projectUnits?.length || 0}`,
-      !isProject ? `Rate: ₹${Number(item.rate || 0).toLocaleString()} ${item.rateUnit ? `(${item.rateUnit})` : ''}` : '',
+      !isProject ? `Rate: Rs ${Number(item.rate || 0).toLocaleString()} ${item.rateUnit ? `(${item.rateUnit})` : ''}` : '',
       item.description ? `Description: ${item.description}` : '',
       '',
       isProject ? '*Project Unit Details*' : '',
@@ -958,6 +984,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       '',
       '*Photos*',
       imageLinks,
+      ...(unitImageLinks.length > 0 ? ['', '*Project Unit Photos*', ...unitImageLinks] : []),
       '',
       '*Videos*',
       videoLinks,
@@ -965,7 +992,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
     const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
-  };
+  }; 
 
   return (
     <div className="space-y-8 pb-24 max-w-[1600px] mx-auto">
@@ -2196,5 +2223,6 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     </div>
   );
 }
+
 
 
