@@ -45,6 +45,7 @@ import {
   Phone,
   Loader2,
   FileText,
+  Home,
   MapPin,
   Edit2,
   Clock3,
@@ -1561,27 +1562,60 @@ export default function AdminDashboard({
     }
   };
 
+  const adminTabs: Array<{ id: AdminView; icon: any; label: string }> = [
+    { id: 'performance', icon: BarChart3, label: 'Dashboard' },
+    { id: 'leads', icon: Users, label: 'Leads' },
+    { id: 'employees', icon: UserPlus, label: 'Team' },
+    { id: 'attendance', icon: Clock, label: 'Attendance' },
+    { id: 'requirements', icon: FileText, label: 'Needs' },
+    { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
+    { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
+    ...(isSuperAdmin ? [{ id: 'brokers' as AdminView, icon: ClipboardList, label: 'Brokers' }] : []),
+  ];
+
   return (
-    <div className="space-y-5 pb-12">
-      {/* Top Navigation / Tabs */}
-      <div className="relative mb-4">
+    <div className="lg:h-[calc(100vh-72px)] lg:overflow-hidden">
+      <div className="grid gap-0 lg:grid-cols-[236px_minmax(0,1fr)] lg:h-full">
+        <aside className="hidden lg:flex lg:flex-col bg-gradient-to-b from-[#03143d] to-[#010f30] text-white p-3">
+          <div className="px-3 py-2 border-b border-white/10">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white">
+                <Home size={16} />
+              </span>
+              <p className="text-lg font-black tracking-tight">EstatePulse</p>
+            </div>
+            <p className="text-[10px] uppercase tracking-widest text-white/70">{isManager ? 'Manager' : 'Admin'}</p>
+          </div>
+          <nav className="mt-3 flex-1 space-y-1">
+            {adminTabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveView(tab.id)}
+                className={cn(
+                  "w-full flex items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold transition-all",
+                  activeView === tab.id ? "bg-blue-600/30 text-white border border-blue-300/30" : "text-white/80 hover:text-white hover:bg-white/10"
+                )}
+              >
+                <tab.icon size={16} />
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+          <div className="rounded-xl bg-white/10 px-3 py-2 text-xs">
+            <p className="font-black">{user.name}</p>
+            <p className="text-white/70">{user.phone}</p>
+          </div>
+        </aside>
+        <div className="min-w-0 lg:h-full lg:overflow-auto space-y-3 px-4 py-3">
+      <div className="relative mb-1 lg:hidden">
         <div
           ref={tabsScrollRef}
           className="flex bg-white/50 p-1 rounded-[20px] border border-slate-100 overflow-x-auto no-scrollbar whitespace-nowrap"
         >
-        {[
-          { id: 'performance', icon: BarChart3, label: 'Dashboard' },
-          { id: 'leads', icon: Users, label: 'Leads' },
-          { id: 'employees', icon: UserPlus, label: 'Team' },
-          { id: 'attendance', icon: Clock, label: 'Attendance' },
-          { id: 'requirements', icon: FileText, label: 'Needs' },
-          { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
-          { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
-          ...(isSuperAdmin ? [{ id: 'brokers', icon: ClipboardList, label: 'Brokers' }] : [])
-        ].map(tab => (
+        {adminTabs.map(tab => (
           <button 
             key={tab.id}
-            onClick={() => setActiveView(tab.id as any)}
+            onClick={() => setActiveView(tab.id)}
             className={cn(
               "min-w-[120px] md:min-w-0 md:flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all",
               activeView === tab.id 
@@ -1634,68 +1668,38 @@ export default function AdminDashboard({
         />
       ) : activeView === 'leads' ? (
         <>
-          <div className="rounded-2xl border border-slate-100 bg-white p-3 sm:p-4">
+          <div className="rounded-2xl border border-slate-100 bg-white p-3">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-black text-slate-900">Leads Dashboard</h3>
               <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Condensed View</span>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-              <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Total Leads</p>
-                <p className="mt-1 text-2xl font-black text-slate-900">{stats.total}</p>
-              </div>
-              <div className="rounded-xl border border-slate-100 bg-white p-3">
-                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Leads</p>
-                <div className="mt-1 grid grid-cols-3 gap-2 text-xs font-bold">
-                  <p className="text-emerald-600">Interested: {stats.interested}</p>
-                  <p className="text-rose-500">Not Int: {stats.notInterested}</p>
-                  <p className="text-amber-600">Pending: {stats.pending}</p>
-                </div>
-              </div>
-              <div className="rounded-xl border border-slate-100 bg-white p-3">
-                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Follow-ups</p>
-                <div className="mt-1 grid grid-cols-3 gap-2 text-xs font-bold">
-                  <p className="text-rose-600">Overdue: {overdueCount}</p>
-                  <p className="text-blue-600">Today: {todayFollowupsCount}</p>
-                  <p className="text-violet-600">Upcoming: {upcomingCount}</p>
-                </div>
-              </div>
-              <div className="rounded-xl border border-slate-100 bg-white p-3">
-                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Outcome</p>
-                <div className="mt-1 grid grid-cols-2 gap-2 text-xs font-bold">
-                  <p className="text-green-600">Visits: {weekSiteVisits}</p>
-                  <p className="text-indigo-600">Deals: {weekDeals}</p>
-                </div>
-              </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
+              {[
+                { label: 'Total Leads', id: 'total', value: stats.total, tone: 'bg-slate-50 border-slate-200 text-slate-900' },
+                { label: 'Interested', id: 'interested', value: stats.interested, tone: 'bg-emerald-50 border-emerald-200 text-emerald-800' },
+                { label: 'Not Interested', id: 'not_interested', value: stats.notInterested, tone: 'bg-rose-50 border-rose-200 text-rose-800' },
+                { label: 'Pending', id: 'pending', value: stats.pending, tone: 'bg-amber-50 border-amber-200 text-amber-800' },
+                { label: 'Overdue', id: 'total', value: overdueCount, tone: 'bg-red-50 border-red-200 text-red-800' },
+                { label: 'Today', id: 'total', value: todayFollowupsCount, tone: 'bg-blue-50 border-blue-200 text-blue-800' },
+                { label: 'Site Visits', id: 'interested', value: weekSiteVisits, tone: 'bg-cyan-50 border-cyan-200 text-cyan-800' },
+                { label: 'Deals', id: 'deal_approved', value: weekDeals, tone: 'bg-violet-50 border-violet-200 text-violet-800' },
+              ].map((card) => (
+                <button
+                  key={card.label}
+                  type="button"
+                  onClick={() => setFilter(card.id as any)}
+                  className={cn(
+                    "rounded-xl border px-2 py-2 text-left transition-all",
+                    card.tone,
+                    filter === card.id ? "ring-2 ring-blue-300" : "hover:shadow-sm"
+                  )}
+                >
+                  <p className="text-[9px] font-black uppercase tracking-wider opacity-80">{card.label}</p>
+                  <p className="mt-1 text-lg leading-none font-black">{card.value}</p>
+                </button>
+              ))}
             </div>
           </div>
-
-          {/* Quick Status Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        {[
-          { label: 'Total Leads', id: 'total', value: stats.total, icon: ClipboardList, color: 'bg-blue-500' },
-          { label: 'Interested', id: 'interested', value: stats.interested, icon: CheckCircle2, color: 'bg-green-500' },
-          { label: 'Not Interested', id: 'not_interested', value: stats.notInterested, icon: XCircle, color: 'bg-red-500' },
-          { label: 'Pending', id: 'pending', value: stats.pending, icon: Clock, color: 'bg-orange-500' },
-          { label: 'Deals Pending', id: 'deal_pending', value: stats.dealPending, icon: ShieldCheck, color: 'bg-purple-500' },
-          { label: 'Deals Approved', id: 'deal_approved', value: stats.dealsApproved, icon: CheckCircle2, color: 'bg-indigo-600' }
-        ].map((stat, i) => (
-          <button 
-            key={i} 
-            onClick={() => setFilter(stat.id as any)}
-            className={cn(
-              "bg-white p-4 rounded-2xl shadow-sm border transition-all text-left group",
-              filter === stat.id ? "border-blue-500 ring-4 ring-blue-50" : "border-gray-100 hover:border-blue-200"
-            )}
-          >
-            <div className={cn("w-10 h-10 rounded-xl mb-3 flex items-center justify-center text-white", stat.color)}>
-              <stat.icon size={20} />
-            </div>
-            <p className="text-[10px] font-black uppercase text-gray-400 tracking-tighter">{stat.label}</p>
-            <p className="text-2xl font-bold text-gray-900 group-hover:scale-110 origin-left transition-transform">{stat.value}</p>
-          </button>
-        ))}
-      </div>
 
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Leads List */}
@@ -2706,6 +2710,9 @@ export default function AdminDashboard({
           </motion.div>
         </div>
       )}
+
+      </div>
+      </div>
 
       {showAddLead && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/50 backdrop-blur-sm">

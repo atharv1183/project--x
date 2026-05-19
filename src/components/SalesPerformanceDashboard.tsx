@@ -5,7 +5,6 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
-  Download,
   FileSpreadsheet,
   FileText,
   Filter,
@@ -312,7 +311,7 @@ function computeMetrics(leads: Lead[], attendance: Attendance[], employee: Pick<
   };
 }
 
-function downloadText(filename: string, content: string, type = 'text/csv;charset=utf-8') {
+function downloadText(filename: string, content: string, type = 'text/plain;charset=utf-8') {
   const blob = new Blob([content], { type });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
@@ -321,11 +320,28 @@ function downloadText(filename: string, content: string, type = 'text/csv;charse
   URL.revokeObjectURL(link.href);
 }
 
-function toCsv(rows: Array<Record<string, string | number>>) {
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function toExcelHtml(rows: Array<Record<string, string | number>>) {
   if (rows.length === 0) return '';
   const headers = Object.keys(rows[0]);
-  const escape = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
-  return [headers.join(','), ...rows.map((row) => headers.map((header) => escape(row[header])).join(','))].join('\n');
+  const headerCells = headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('');
+  const bodyRows = rows
+    .map((row) => {
+      const cells = headers
+        .map((header) => `<td style="mso-number-format:'\\@';">${escapeHtml(String(row[header] ?? ''))}</td>`)
+        .join('');
+      return `<tr>${cells}</tr>`;
+    })
+    .join('');
+  return `<!doctype html><html><head><meta charset="utf-8" /></head><body><table border="1"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table></body></html>`;
 }
 
 function MultiSelectDropdown({
@@ -609,13 +625,13 @@ export default function SalesPerformanceDashboard({
     LeadToDealPercent: metric.leadToDeal.toFixed(2),
   }));
 
-  const exportDashboard = (kind: 'csv' | 'excel' | 'pdf') => {
+  const exportDashboard = (kind: 'excel' | 'pdf') => {
     if (kind === 'pdf') {
       window.print();
       return;
     }
-    const csv = toCsv(exportRows);
-    downloadText(`sales-performance-${formatInputDate(new Date())}.${kind === 'excel' ? 'xls' : 'csv'}`, csv, kind === 'excel' ? 'application/vnd.ms-excel' : 'text/csv;charset=utf-8');
+    const excelHtml = toExcelHtml(exportRows);
+    downloadText(`sales-performance-${formatInputDate(new Date())}.xls`, excelHtml, 'application/vnd.ms-excel;charset=utf-8');
   };
 
   const linePoints = conversionTrend.length
@@ -656,7 +672,7 @@ export default function SalesPerformanceDashboard({
   };
 
   const topPerformerSection = (
-    <section className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+    <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
           <Trophy size={18} className="text-amber-500" />
@@ -748,21 +764,18 @@ export default function SalesPerformanceDashboard({
   );
 
   return (
-    <div className="space-y-6 pb-20 print:bg-white">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+    <div className="space-y-3 pb-3 print:bg-white">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-blue-700">
             <BarChart3 size={13} /> Sales Performance
           </div>
-          <h2 className="mt-2 text-2xl sm:text-3xl font-black tracking-tight text-slate-900">Performance Dashboard</h2>
-          <p className="mt-1 text-sm font-medium text-slate-500">
+          <h2 className="mt-1 text-xl sm:text-2xl font-black tracking-tight text-slate-900">Performance Dashboard</h2>
+          <p className="mt-0.5 text-xs font-medium text-slate-500">
             Real-time sales KPIs, conversion analytics, employee ranking, and follow-up alerts.
           </p>
         </div>
         <div className="flex flex-wrap gap-2 print:hidden">
-          <button onClick={() => exportDashboard('csv')} className="inline-flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-3 py-2 text-xs font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50">
-            <Download size={14} /> CSV
-          </button>
           <button onClick={() => exportDashboard('excel')} className="inline-flex items-center gap-2 rounded-xl bg-white border border-slate-200 px-3 py-2 text-xs font-black uppercase tracking-widest text-slate-700 hover:bg-slate-50">
             <FileSpreadsheet size={14} /> Excel
           </button>
@@ -772,12 +785,12 @@ export default function SalesPerformanceDashboard({
         </div>
       </div>
 
-      <section className="rounded-3xl border border-slate-100 bg-white p-4 sm:p-5 shadow-sm print:hidden">
-        <div className="mb-4 flex items-center gap-2">
+      <section className="rounded-2xl border border-slate-100 bg-white p-3 sm:p-4 shadow-sm print:hidden">
+        <div className="mb-2 flex items-center gap-2">
           <Filter size={16} className="text-blue-600" />
           <h3 className="text-xs font-black uppercase tracking-widest text-slate-700">Global Filters</h3>
         </div>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-4">
           <div className="space-y-3">
             <MultiSelectDropdown
               label="Employees"

@@ -45,6 +45,7 @@ export default function App() {
   const loginToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAdminLikeUser = user?.role === 'super_admin' || user?.role === 'admin' || user?.role === 'client_admin' || user?.role === 'manager';
   const isSuperAdmin = user?.role === 'super_admin';
+  const useFullHeightAdminShell = isAdminLikeUser && activeScreen === 'dashboard';
 
   const showLoginToast = (name: string) => {
     setLoginToastName(name);
@@ -197,6 +198,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
+      {!useFullHeightAdminShell && (
       <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="bg-blue-600 p-2 rounded-lg">
@@ -251,6 +253,7 @@ export default function App() {
           </button>
         </div>
       </header>
+      )}
       {impersonation && (
         <div className="bg-amber-100 border-b border-amber-200 px-4 py-2 flex items-center justify-between gap-3">
           <p className="text-sm font-semibold text-amber-900">Super Admin Session Active: Acting as {impersonation.clientName}</p>
@@ -288,7 +291,7 @@ export default function App() {
         </div>
       )}
 
-      <main className="flex-1 w-full max-w-7xl mx-auto p-4 md:p-6">
+      <main className={useFullHeightAdminShell ? "flex-1 w-full p-0" : "flex-1 w-full max-w-7xl mx-auto p-4 md:p-6"}>
         <AnimatePresence mode="wait">
           <motion.div
             key={`${user.role}-${activeScreen}`}

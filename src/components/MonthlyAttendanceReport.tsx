@@ -142,7 +142,7 @@ function getMonthDates(year: number, month: number) {
   return days;
 }
 
-function downloadText(filename: string, content: string, type = 'text/csv;charset=utf-8') {
+function downloadText(filename: string, content: string, type = 'text/plain;charset=utf-8') {
   const blob = new Blob([content], { type });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
@@ -151,11 +151,28 @@ function downloadText(filename: string, content: string, type = 'text/csv;charse
   URL.revokeObjectURL(link.href);
 }
 
-function toCsv(rows: Array<Record<string, string | number>>) {
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function toExcelHtml(rows: Array<Record<string, string | number>>) {
   if (rows.length === 0) return '';
   const headers = Object.keys(rows[0]);
-  const escape = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
-  return [headers.join(','), ...rows.map((row) => headers.map((header) => escape(row[header])).join(','))].join('\n');
+  const headerCells = headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('');
+  const bodyRows = rows
+    .map((row) => {
+      const cells = headers
+        .map((header) => `<td style="mso-number-format:'\\@';">${escapeHtml(String(row[header] ?? ''))}</td>`)
+        .join('');
+      return `<tr>${cells}</tr>`;
+    })
+    .join('');
+  return `<!doctype html><html><head><meta charset="utf-8" /></head><body><table border="1"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table></body></html>`;
 }
 
 export default function MonthlyAttendanceReport({
@@ -422,10 +439,10 @@ export default function MonthlyAttendanceReport({
       alert('No attendance rows found for the selected employee, month and year.');
       return;
     }
-    const csv = toCsv(exportRows);
+    const excelHtml = toExcelHtml(exportRows);
     const employeeName = cleanMembers.find((member) => member.uid === employeeId)?.name || 'employee';
     const safeEmployeeName = employeeName.replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '').toLowerCase();
-    downloadText(`attendance-${safeEmployeeName}-${MONTHS[month]}-${year}.xls`, csv, 'application/vnd.ms-excel');
+    downloadText(`attendance-${safeEmployeeName}-${MONTHS[month]}-${year}.xls`, excelHtml, 'application/vnd.ms-excel;charset=utf-8');
   };
 
   const handleEditRow = (row: DailyRow) => {
