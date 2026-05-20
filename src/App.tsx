@@ -279,7 +279,7 @@ export default function App() {
   }
 
   return (
-    <div className={useFullHeightDashboardShell ? "h-screen bg-gray-50 flex flex-col overflow-hidden" : "min-h-screen bg-gray-50 flex flex-col"}>
+    <div className={useFullHeightDashboardShell ? "h-screen bg-gray-50 flex flex-col overflow-y-auto overflow-x-hidden" : "min-h-screen bg-gray-50 flex flex-col"}>
       {isAdminLikeUser && (
         <div className="fixed right-4 top-4 z-[130]">
           <div className="relative">
