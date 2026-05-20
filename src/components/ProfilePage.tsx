@@ -3,7 +3,7 @@ import { auth, db } from '../lib/firebase';
 import { EmailAuthProvider, reauthenticateWithCredential, updateEmail, updatePassword } from 'firebase/auth';
 import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { User } from '../types';
-import { Camera, Lock, Mail, Phone, Shield, UserCircle2 } from 'lucide-react';
+import { ArrowLeft, Camera, Lock, Mail, Phone, Shield, UserCircle2 } from 'lucide-react';
 
 interface ProfilePageProps {
   user: User;
@@ -221,7 +221,17 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
-        <h2 className="text-2xl font-bold text-gray-900">Profile</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-2xl font-bold text-gray-900">Profile</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            <ArrowLeft size={16} />
+            Back
+          </button>
+        </div>
         <p className="text-sm text-gray-500 mt-1">Manage your account details and password.</p>
 
         <form onSubmit={handleUpdateProfile} className="mt-5 space-y-4">
