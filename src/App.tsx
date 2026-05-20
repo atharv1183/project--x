@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, signInWithCustomToken, signOut } from 'firebase/auth';
-import { collection, doc, getDoc, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, onSnapshot, orderBy, query, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { PlatformAnnouncement, User } from './types';
 import Login from './components/Login';
@@ -17,7 +17,7 @@ import ToolsPage, { ToolTarget } from './components/ToolsPage';
 import PublicHeroPage from './components/PublicHeroPage';
 import SuperAdminControlCenter from './components/SuperAdminControlCenter';
 import { functions } from './lib/firebase';
-import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck } from 'lucide-react';
+import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck, CircleHelp, RefreshCcw, ChevronsUpDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 type AdminDashboardView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory';
@@ -40,12 +40,16 @@ export default function App() {
   const [dashboardBackSignal, setDashboardBackSignal] = useState(0);
   const [dashboardTarget, setDashboardTarget] = useState<DashboardTarget>(null);
   const [dashboardTargetSignal, setDashboardTargetSignal] = useState(0);
+  const [showAdminMenu, setShowAdminMenu] = useState(false);
+  const [showSupportModal, setShowSupportModal] = useState(false);
+  const [subscriptionExpiryText, setSubscriptionExpiryText] = useState<string>('N/A');
+  const [supportTicketForm, setSupportTicketForm] = useState({ subject: '', message: '', priority: 'medium' as 'low' | 'medium' | 'high' });
   const [loading, setLoading] = useState(true);
   const [loginToastName, setLoginToastName] = useState<string | null>(null);
   const loginToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAdminLikeUser = user?.role === 'super_admin' || user?.role === 'admin' || user?.role === 'client_admin' || user?.role === 'manager';
   const isSuperAdmin = user?.role === 'super_admin';
-  const useFullHeightAdminShell = isAdminLikeUser && activeScreen === 'dashboard';
+  const useFullHeightDashboardShell = activeScreen === 'dashboard' && (isAdminLikeUser || user?.role === 'employee');
 
   const showLoginToast = (name: string) => {
     setLoginToastName(name);
@@ -147,6 +151,32 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
+    const loadSubscriptionExpiry = async () => {
+      if (!user || !(user as any).clientId) {
+        setSubscriptionExpiryText('N/A');
+        return;
+      }
+      try {
+        const clientDoc = await getDoc(doc(db, 'platformClients', String((user as any).clientId)));
+        if (!clientDoc.exists()) {
+          setSubscriptionExpiryText('N/A');
+          return;
+        }
+        const expiryRaw = (clientDoc.data() as any)?.subscriptionExpiryDate;
+        if (!expiryRaw) {
+          setSubscriptionExpiryText('N/A');
+          return;
+        }
+        const expiryDate = new Date(expiryRaw);
+        setSubscriptionExpiryText(Number.isNaN(expiryDate.getTime()) ? String(expiryRaw) : expiryDate.toLocaleDateString());
+      } catch {
+        setSubscriptionExpiryText('N/A');
+      }
+    };
+    void loadSubscriptionExpiry();
+  }, [user]);
+
+  useEffect(() => {
     return () => {
       if (loginToastTimerRef.current) {
         clearTimeout(loginToastTimerRef.current);
@@ -161,6 +191,58 @@ export default function App() {
     setDashboardTarget(null);
     localStorage.removeItem('super_admin_impersonation');
     setImpersonation(null);
+  };
+
+  const handleSelfResetPassword = async () => {
+    if (!functions) {
+      alert('Password reset service is unavailable right now.');
+      return;
+    }
+    const defaultPassword = (user.phone || '').replace(/\D/g, '');
+    const entered = prompt('Enter a new temporary password (min 8 chars):', defaultPassword);
+    if (entered === null) return;
+    const nextPassword = entered.trim();
+    if (nextPassword.length < 8) {
+      alert('Password must be at least 8 characters.');
+      return;
+    }
+    try {
+      const fn = httpsCallable(functions, 'resetUserPassword');
+      await fn({ targetUid: user.uid, targetPhone: defaultPassword, newPassword: nextPassword });
+      alert('Password reset successful.');
+      setShowAdminMenu(false);
+    } catch (error: any) {
+      alert(error?.message || 'Failed to reset password.');
+    }
+  };
+
+  const handleRaiseSupportTicket = async () => {
+    const subject = supportTicketForm.subject.trim();
+    const message = supportTicketForm.message.trim();
+    if (!subject || !message) {
+      alert('Subject and message are required.');
+      return;
+    }
+    try {
+      await addDoc(collection(db, 'supportTickets'), {
+        subject,
+        message,
+        priority: supportTicketForm.priority,
+        status: 'open',
+        userId: user.uid,
+        userName: user.name,
+        companyId: (user as any).clientId || null,
+        companyName: (user as any).clientName || null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      alert('Support ticket raised successfully.');
+      setSupportTicketForm({ subject: '', message: '', priority: 'medium' });
+      setShowSupportModal(false);
+      setShowAdminMenu(false);
+    } catch (error: any) {
+      alert(error?.message || 'Failed to raise support ticket.');
+    }
   };
 
   const handleBack = () => {
@@ -197,8 +279,42 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      {!useFullHeightAdminShell && (
+    <div className={useFullHeightDashboardShell ? "h-screen bg-gray-50 flex flex-col overflow-hidden" : "min-h-screen bg-gray-50 flex flex-col"}>
+      {isAdminLikeUser && (
+        <div className="fixed right-4 top-4 z-[130]">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowAdminMenu((prev) => !prev)}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 shadow-md"
+              title="Account menu"
+            >
+              {user.profileImageUrl ? (
+                <img src={user.profileImageUrl} alt={user.name} className="h-7 w-7 rounded-full object-cover" />
+              ) : (
+                <UserCircle2 className="w-5 h-5" />
+              )}
+              <span className="hidden sm:inline">{user.name}</span>
+              <ChevronsUpDown className="w-4 h-4 text-slate-500" />
+            </button>
+            {showAdminMenu && (
+              <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl">
+                <div className="px-3 py-2 border-b border-slate-100">
+                  <p className="text-sm font-black text-slate-800">{user.name}</p>
+                  <p className="text-xs font-medium text-slate-500">{user.phone}</p>
+                  <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-slate-400">Subscription Expiry: {subscriptionExpiryText}</p>
+                </div>
+                <button onClick={() => { setActiveScreen('profile'); setShowAdminMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-slate-700 hover:bg-slate-50">Profile</button>
+                <button onClick={handleSelfResetPassword} className="w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-slate-700 hover:bg-slate-50">Reset Password</button>
+                <button onClick={() => { setActiveScreen('tools'); setShowAdminMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-slate-700 hover:bg-slate-50">Backup & Restore</button>
+                <button onClick={() => { setShowSupportModal(true); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-slate-700 hover:bg-slate-50">Help & Support (Raise Ticket)</button>
+                <button onClick={handleLogout} className="w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-rose-600 hover:bg-rose-50">Logout</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {!useFullHeightDashboardShell && (
       <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="bg-blue-600 p-2 rounded-lg">
@@ -291,7 +407,7 @@ export default function App() {
         </div>
       )}
 
-      <main className={useFullHeightAdminShell ? "flex-1 w-full p-0" : "flex-1 w-full max-w-7xl mx-auto p-4 md:p-6"}>
+      <main className={useFullHeightDashboardShell ? "flex-1 w-full p-0" : "flex-1 w-full max-w-7xl mx-auto p-4 md:p-6"}>
         <AnimatePresence mode="wait">
           <motion.div
             key={`${user.role}-${activeScreen}`}
@@ -299,6 +415,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2 }}
+            className={useFullHeightDashboardShell ? "h-full" : undefined}
           >
             {activeScreen === 'profile' ? (
               <ProfilePage
@@ -383,6 +500,43 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {showSupportModal && (
+        <div className="fixed inset-0 z-[140] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-black text-slate-900">Raise Support Ticket</h3>
+            <p className="mt-1 text-xs font-medium text-slate-500">Share issue details and our support team will follow up.</p>
+            <div className="mt-4 space-y-3">
+              <input
+                value={supportTicketForm.subject}
+                onChange={(e) => setSupportTicketForm((prev) => ({ ...prev, subject: e.target.value }))}
+                placeholder="Subject"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium"
+              />
+              <select
+                value={supportTicketForm.priority}
+                onChange={(e) => setSupportTicketForm((prev) => ({ ...prev, priority: e.target.value as 'low' | 'medium' | 'high' }))}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium"
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+              <textarea
+                value={supportTicketForm.message}
+                onChange={(e) => setSupportTicketForm((prev) => ({ ...prev, message: e.target.value }))}
+                placeholder="Describe the issue"
+                rows={4}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium"
+              />
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setShowSupportModal(false)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600">Cancel</button>
+              <button onClick={handleRaiseSupportTicket} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Submit Ticket</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

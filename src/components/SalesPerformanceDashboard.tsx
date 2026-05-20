@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BarChart3,
@@ -359,11 +359,40 @@ function MultiSelectDropdown({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const filteredOptions = options.filter((option) => `${option.label} ${option.hint || ''}`.toLowerCase().includes(search.toLowerCase()));
   const labelText = values.length === 0 ? placeholder : values.length === 1 ? options.find((option) => option.value === values[0])?.label || placeholder : `${values.length} selected`;
 
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const targetNode = event.target as Node | null;
+      if (!targetNode || !containerRef.current) return;
+      if (!containerRef.current.contains(targetNode)) {
+        setOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [open]);
+
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">{label}</label>
       <button
         type="button"

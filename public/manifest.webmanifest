@@ -1,0 +1,24 @@
+{
+  "name": "EstatePulse",
+  "short_name": "EstatePulse",
+  "description": "Real estate lead and operations management web app.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#03143d",
+  "icons": [
+    {
+      "src": "/icons/app-icon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/app-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -878,7 +878,8 @@ export default function AdminDashboard({
     }
   };
 
-  const [filter, setFilter] = useState<LeadStatus | 'total'>('total');
+  type LeadFilter = LeadStatus | 'total' | 'overdue' | 'today' | 'site_visits';
+  const [filter, setFilter] = useState<LeadFilter>('total');
   const [leadSearchQuery, setLeadSearchQuery] = useState('');
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -984,13 +985,39 @@ export default function AdminDashboard({
     return Boolean(lead.status === 'deal_approved' && d && d >= weekStart);
   }).length;
 
-  const statusFilteredLeads = filter === 'total' 
-    ? leads 
-    : leads.filter(l => {
-        if (filter === 'deal_pending') return l.status === 'deal_pending';
-        if (filter === 'deal_approved') return l.status === 'deal_approved';
-        return l.status === filter;
-      });
+  const statusFilteredLeads = leads.filter((lead) => {
+    if (filter === 'total') return true;
+
+    if (filter === 'overdue') {
+      const followupAt = parseTimestamp((lead as any).nextFollowupAt);
+      return Boolean(
+        followupAt &&
+        followupAt < todayStart &&
+        lead.status !== 'deal_approved' &&
+        lead.status !== 'not_interested'
+      );
+    }
+
+    if (filter === 'today') {
+      const followupAt = parseTimestamp((lead as any).nextFollowupAt);
+      return Boolean(
+        followupAt &&
+        followupAt >= todayStart &&
+        followupAt <= todayEnd &&
+        lead.status !== 'deal_approved' &&
+        lead.status !== 'not_interested'
+      );
+    }
+
+    if (filter === 'site_visits') {
+      const siteVisitAt = parseTimestamp((lead as any).siteVisitAt);
+      return Boolean(siteVisitAt && siteVisitAt >= weekStart);
+    }
+
+    if (filter === 'deal_pending') return lead.status === 'deal_pending';
+    if (filter === 'deal_approved') return lead.status === 'deal_approved';
+    return lead.status === filter;
+  });
 
   const adminLeadSearchTerm = leadSearchQuery.trim().toLowerCase();
   const filteredLeads = statusFilteredLeads.filter((l) => {
@@ -1574,7 +1601,7 @@ export default function AdminDashboard({
   ];
 
   return (
-    <div className="lg:h-[calc(100vh-72px)] lg:overflow-hidden">
+    <div className="lg:h-full lg:overflow-hidden">
       <div className="grid gap-0 lg:grid-cols-[236px_minmax(0,1fr)] lg:h-full">
         <aside className="hidden lg:flex lg:flex-col bg-gradient-to-b from-[#03143d] to-[#010f30] text-white p-3">
           <div className="px-3 py-2 border-b border-white/10">
@@ -1673,31 +1700,100 @@ export default function AdminDashboard({
               <h3 className="text-sm font-black text-slate-900">Leads Dashboard</h3>
               <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Condensed View</span>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
-              {[
-                { label: 'Total Leads', id: 'total', value: stats.total, tone: 'bg-slate-50 border-slate-200 text-slate-900' },
-                { label: 'Interested', id: 'interested', value: stats.interested, tone: 'bg-emerald-50 border-emerald-200 text-emerald-800' },
-                { label: 'Not Interested', id: 'not_interested', value: stats.notInterested, tone: 'bg-rose-50 border-rose-200 text-rose-800' },
-                { label: 'Pending', id: 'pending', value: stats.pending, tone: 'bg-amber-50 border-amber-200 text-amber-800' },
-                { label: 'Overdue', id: 'total', value: overdueCount, tone: 'bg-red-50 border-red-200 text-red-800' },
-                { label: 'Today', id: 'total', value: todayFollowupsCount, tone: 'bg-blue-50 border-blue-200 text-blue-800' },
-                { label: 'Site Visits', id: 'interested', value: weekSiteVisits, tone: 'bg-cyan-50 border-cyan-200 text-cyan-800' },
-                { label: 'Deals', id: 'deal_approved', value: weekDeals, tone: 'bg-violet-50 border-violet-200 text-violet-800' },
-              ].map((card) => (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Total Leads</p>
                 <button
-                  key={card.label}
                   type="button"
-                  onClick={() => setFilter(card.id as any)}
+                  onClick={() => setFilter('total')}
                   className={cn(
-                    "rounded-xl border px-2 py-2 text-left transition-all",
-                    card.tone,
-                    filter === card.id ? "ring-2 ring-blue-300" : "hover:shadow-sm"
+                    "w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition-all",
+                    filter === 'total' ? "ring-2 ring-blue-300" : "hover:shadow-sm"
                   )}
                 >
-                  <p className="text-[9px] font-black uppercase tracking-wider opacity-80">{card.label}</p>
-                  <p className="mt-1 text-lg leading-none font-black">{card.value}</p>
+                  <p className="text-xl leading-none font-black text-slate-900">{stats.total}</p>
+                  <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-slate-500">All Leads</p>
                 </button>
-              ))}
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Leads</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { label: 'Interested', id: 'interested', value: stats.interested, tone: 'bg-emerald-50 border-emerald-200 text-emerald-800' },
+                    { label: 'Not Interested', id: 'not_interested', value: stats.notInterested, tone: 'bg-rose-50 border-rose-200 text-rose-800' },
+                    { label: 'Pending', id: 'pending', value: stats.pending, tone: 'bg-amber-50 border-amber-200 text-amber-800' },
+                  ].map((card) => (
+                    <button
+                      key={card.label}
+                      type="button"
+                      onClick={() => setFilter(card.id as any)}
+                      className={cn(
+                        "rounded-xl border px-2 py-2 text-left transition-all",
+                        card.tone,
+                        filter === card.id ? "ring-2 ring-blue-300" : "hover:shadow-sm"
+                      )}
+                    >
+                      <p className="text-[9px] font-black uppercase tracking-wider opacity-80">{card.label}</p>
+                      <p className="mt-1 text-lg leading-none font-black">{card.value}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Follow-Ups</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { label: 'Overdue', id: 'overdue', value: overdueCount, tone: 'bg-red-50 border-red-200 text-red-800' },
+                    { label: 'Today', id: 'today', value: todayFollowupsCount, tone: 'bg-blue-50 border-blue-200 text-blue-800' },
+                  ].map((card) => (
+                    <button
+                      key={card.label}
+                      type="button"
+                      onClick={() => setFilter(card.id as any)}
+                      className={cn(
+                        "rounded-xl border px-2 py-2 text-left transition-all",
+                        card.tone,
+                        filter === card.id ? "ring-2 ring-blue-300" : "hover:shadow-sm"
+                      )}
+                    >
+                      <p className="text-[9px] font-black uppercase tracking-wider opacity-80">{card.label}</p>
+                      <p className="mt-1 text-lg leading-none font-black">{card.value}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-cyan-700 mb-1">Site Visits</p>
+                <button
+                  type="button"
+                  onClick={() => setFilter('site_visits')}
+                  className={cn(
+                    "w-full rounded-xl border border-cyan-200 bg-white px-3 py-3 text-left transition-all",
+                    filter === 'site_visits' ? "ring-2 ring-blue-300" : "hover:shadow-sm"
+                  )}
+                >
+                  <p className="text-xl leading-none font-black text-cyan-800">{weekSiteVisits}</p>
+                  <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-cyan-700">This Week</p>
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-violet-200 bg-violet-50 p-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-violet-700 mb-1">Deals</p>
+                <button
+                  type="button"
+                  onClick={() => setFilter('deal_approved')}
+                  className={cn(
+                    "w-full rounded-xl border border-violet-200 bg-white px-3 py-3 text-left transition-all",
+                    filter === 'deal_approved' ? "ring-2 ring-blue-300" : "hover:shadow-sm"
+                  )}
+                >
+                  <p className="text-xl leading-none font-black text-violet-800">{weekDeals}</p>
+                  <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-violet-700">This Week</p>
+                </button>
+              </div>
             </div>
           </div>
 

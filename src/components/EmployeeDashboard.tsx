@@ -177,6 +177,7 @@ export default function EmployeeDashboard({
   const [visitStep, setVisitStep] = useState<'idle' | 'capture' | 'confirm' | 'verifying' | 'verified'>('idle');
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [location, setLocation] = useState<{ latitude: number, longitude: number } | null>(null);
+  const [cameraFacingMode, setCameraFacingMode] = useState<'environment' | 'user'>('environment');
 
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [lastAttendance, setLastAttendance] = useState<Attendance | null>(null);
@@ -310,7 +311,7 @@ export default function EmployeeDashboard({
           return;
         }
 
-        const targetQueue = leads.filter(l => getLeadQueueTab(l) === targetTab);
+        const targetQueue = leads.filter((l) => l.assignedTo === user.uid && getLeadQueueTab(l) === targetTab);
         const leadIndex = targetQueue.findIndex(l => l.id === leadId);
         if (leadIndex === -1) {
           alert('Lead could not be opened right now. Please refresh and try again.');
@@ -422,6 +423,15 @@ export default function EmployeeDashboard({
     dealPending: leads.filter(l => l.status === 'deal_pending').length,
     dealsApproved: leads.filter(l => l.status === 'deal_approved').length
   };
+
+  const employeeTabs: Array<{ id: EmployeeView | 'followups'; icon: any; label: string }> = [
+    { id: 'performance', icon: BarChart3, label: 'Dashboard' },
+    { id: 'followups', icon: Clock, label: 'Followups' },
+    { id: 'requirements', icon: FileText, label: 'Needs' },
+    { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
+    { id: 'attendance', icon: History, label: 'Attendance' },
+    { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
+  ];
 
   useEffect(() => {
     const qAssigned = query(collection(db, 'leads'), where('assignedTo', '==', user.uid));
@@ -602,7 +612,7 @@ export default function EmployeeDashboard({
     activeTab === 'today' || activeTab === 'upcoming' || activeTab === 'overdue'
       ? activeTab
       : followupSubTab;
-  const queueLeads = leads.filter(l => getLeadQueueTab(l) === effectiveQueueTab);
+  const queueLeads = leads.filter((l) => l.assignedTo === user.uid && getLeadQueueTab(l) === effectiveQueueTab);
   const searchTerm = leadSearchQuery.trim().toLowerCase();
   const filteredLeads = queueLeads.filter(l => {
     if (!searchTerm) return true;
@@ -774,15 +784,25 @@ export default function EmployeeDashboard({
     }
   };
 
-  const startCamera = async () => {
+  const stopCameraStream = () => {
+    if (videoRef.current?.srcObject) {
+      (videoRef.current.srcObject as MediaStream).getTracks().forEach((track) => track.stop());
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  const startCamera = async (mode?: 'environment' | 'user') => {
+    const targetMode = mode ?? cameraFacingMode;
     setVisitStep('capture');
     try {
+      stopCameraStream();
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' } 
+        video: { facingMode: { ideal: targetMode } }
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
+      setCameraFacingMode(targetMode);
     } catch (err) {
       alert('Camera access denied');
       setVisitStep('idle');
@@ -797,9 +817,8 @@ export default function EmployeeDashboard({
       canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0);
       const dataUrl = canvas.toDataURL('image/jpeg');
       setCapturedImage(dataUrl);
-      
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(t => t.stop());
+
+      stopCameraStream();
       setVisitStep('confirm');
     }
   };
@@ -897,7 +916,37 @@ export default function EmployeeDashboard({
   };
 
   return (
-    <div className="space-y-6 pb-20">
+    <div className="lg:h-full lg:overflow-hidden">
+      <div className="grid gap-0 lg:grid-cols-[236px_minmax(0,1fr)] lg:h-full">
+        <aside className="hidden lg:flex lg:flex-col bg-gradient-to-b from-[#03143d] to-[#010f30] text-white p-3">
+          <div className="px-3 py-2 border-b border-white/10">
+            <p className="text-lg font-black tracking-tight">EstatePulse</p>
+            <p className="text-[10px] uppercase tracking-widest text-white/70">Employee</p>
+          </div>
+          <nav className="mt-3 flex-1 space-y-1">
+            {employeeTabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => { setActiveTab(tab.id as EmployeeView); setSelectedLeadIndex(null); }}
+                className={cn(
+                  "w-full flex items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold transition-all",
+                  activeTab === tab.id || (tab.id === 'followups' && (activeTab === 'today' || activeTab === 'upcoming' || activeTab === 'overdue'))
+                    ? "bg-blue-600/30 text-white border border-blue-300/30"
+                    : "text-white/80 hover:text-white hover:bg-white/10"
+                )}
+              >
+                <tab.icon size={16} />
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+          <div className="rounded-xl bg-white/10 px-3 py-2 text-xs">
+            <p className="font-black">{user.name}</p>
+            <p className="text-white/70">{user.phone}</p>
+          </div>
+        </aside>
+
+        <div className="min-w-0 lg:h-full lg:overflow-auto space-y-6 px-4 py-3">
       {/* Professional Header & Attendance */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6 bg-white/40 backdrop-blur-2xl p-4 sm:p-8 rounded-[32px] sm:rounded-[48px] border border-white/40 shadow-2xl shadow-blue-900/5 ring-1 ring-black/[0.02]">
         <div className="flex items-center gap-4 sm:gap-6 px-1">
@@ -966,19 +1015,12 @@ export default function EmployeeDashboard({
       </div>
 
       {/* Tab Navigation */}
-      <div className="relative mb-6 md:mb-8 md:sticky md:top-20 z-30">
+      <div className="relative mb-6 md:mb-8 md:sticky md:top-20 z-30 lg:hidden">
         <div
           ref={tabsScrollRef}
           className="flex bg-white/90 backdrop-blur p-1.5 rounded-[24px] border border-slate-100 overflow-x-auto no-scrollbar whitespace-nowrap"
         >
-        {[ 
-          { id: 'performance', icon: BarChart3, label: 'Dashboard' },
-          { id: 'followups', icon: Clock, label: 'Followups' },
-          { id: 'requirements', icon: FileText, label: 'Needs' },
-          { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
-          { id: 'attendance', icon: History, label: 'Attendance' },
-          { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' }
-        ].map(tab => (
+        {employeeTabs.map(tab => (
           <button
             key={tab.id}
             onClick={() => { setActiveTab(tab.id as any); setSelectedLeadIndex(null); }}
@@ -1713,10 +1755,15 @@ export default function EmployeeDashboard({
               {/* Camera Step */}
               {visitStep === 'capture' && (
                 <div className="relative aspect-square bg-gray-900">
-                  <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    className={cn("w-full h-full object-cover", cameraFacingMode === 'user' && "scale-x-[-1]")}
+                  />
                   <div className="absolute inset-x-0 bottom-8 flex justify-center gap-8 items-center">
                     <button 
-                      onClick={() => { setVisitStep('idle'); if(videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t=>t.stop()); }}
+                      onClick={() => { setVisitStep('idle'); stopCameraStream(); }}
                       className="w-14 h-14 rounded-full bg-white/20 text-white flex items-center justify-center hover:bg-white/30 backdrop-blur-md"
                     >
                       <XSquare size={28} />
@@ -1724,7 +1771,13 @@ export default function EmployeeDashboard({
                     <button onClick={capturePhoto} className="w-24 h-24 rounded-full border-8 border-white/20 bg-white shadow-xl flex items-center justify-center group active:scale-95 transition-all">
                       <div className="w-16 h-16 rounded-full bg-red-600 group-hover:bg-red-500" />
                     </button>
-                    <div className="w-14" />
+                    <button
+                      onClick={() => startCamera(cameraFacingMode === 'environment' ? 'user' : 'environment')}
+                      className="w-14 h-14 rounded-full bg-white/20 text-white flex items-center justify-center hover:bg-white/30 backdrop-blur-md text-[10px] font-black uppercase"
+                      title="Switch camera"
+                    >
+                      Flip
+                    </button>
                   </div>
                   <div className="absolute top-6 left-6 right-6">
                     <div className="bg-black/40 backdrop-blur-md px-4 py-2 rounded-full inline-flex items-center gap-2">
@@ -2131,5 +2184,7 @@ export default function EmployeeDashboard({
         )}
       </AnimatePresence>
     </div>
+        </div>
+      </div>
   );
 }

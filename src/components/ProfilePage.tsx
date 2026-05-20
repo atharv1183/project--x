@@ -1,7 +1,7 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { auth, db } from '../lib/firebase';
 import { EmailAuthProvider, reauthenticateWithCredential, updateEmail, updatePassword } from 'firebase/auth';
-import { doc, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { User } from '../types';
 import { Camera, Lock, Mail, Phone, Shield, UserCircle2 } from 'lucide-react';
 
@@ -21,6 +21,42 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [installPromptEvent, setInstallPromptEvent] = useState<any | null>(null);
+  const [ticketSubject, setTicketSubject] = useState('');
+  const [ticketMessage, setTicketMessage] = useState('');
+  const [ticketPriority, setTicketPriority] = useState<'low' | 'medium' | 'high'>('medium');
+  const [ticketLoading, setTicketLoading] = useState(false);
+
+  const isStandalone = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true;
+  }, []);
+
+  const platform = useMemo(() => {
+    const ua = navigator.userAgent.toLowerCase();
+    if (/iphone|ipad|ipod/.test(ua)) return 'ios';
+    if (/android/.test(ua)) return 'android';
+    if (/macintosh|mac os x/.test(ua)) return 'mac';
+    if (/windows/.test(ua)) return 'windows';
+    return 'desktop';
+  }, []);
+
+  useEffect(() => {
+    const onBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPromptEvent(event as any);
+    };
+
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (!installPromptEvent) return;
+    await installPromptEvent.prompt();
+    await installPromptEvent.userChoice.catch(() => {});
+    setInstallPromptEvent(null);
+  };
 
   const normalizePhone = (value: string) => value.replace(/\D/g, '');
 
@@ -146,6 +182,42 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
     }
   };
 
+  const handleRaiseTicket = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+    const subject = ticketSubject.trim();
+    const message = ticketMessage.trim();
+    if (!subject || !message) {
+      setError('Ticket subject and message are required.');
+      return;
+    }
+    setTicketLoading(true);
+    try {
+      await addDoc(collection(db, 'supportTickets'), {
+        subject,
+        message,
+        priority: ticketPriority,
+        status: 'open',
+        userId: user.uid,
+        userName: user.name,
+        userRole: user.role,
+        companyId: (user as any).clientId || null,
+        companyName: (user as any).clientName || null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setTicketSubject('');
+      setTicketMessage('');
+      setTicketPriority('medium');
+      setSuccess('Support ticket raised successfully.');
+    } catch (err: any) {
+      setError(err?.message || 'Failed to raise support ticket.');
+    } finally {
+      setTicketLoading(false);
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
@@ -229,6 +301,52 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
       </div>
 
       <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
+        <h3 className="text-xl font-bold text-gray-900">Download Web App</h3>
+        <p className="mt-1 text-sm text-gray-500">Install EstatePulse on mobile or desktop for app-like experience.</p>
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100">
+            <p className="text-xs font-semibold uppercase tracking-widest text-gray-500">Quick Install</p>
+            {isStandalone ? (
+              <p className="mt-2 text-sm font-bold text-green-700">Web app is already installed on this device.</p>
+            ) : installPromptEvent ? (
+              <button
+                type="button"
+                onClick={handleInstallApp}
+                className="mt-2 w-full py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold"
+              >
+                Install EstatePulse App
+              </button>
+            ) : (
+              <p className="mt-2 text-sm text-gray-600">Direct install prompt is not available on this browser right now.</p>
+            )}
+          </div>
+          <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100">
+            <p className="text-xs font-semibold uppercase tracking-widest text-gray-500">Current Device</p>
+            <p className="mt-2 text-sm font-bold text-gray-900 capitalize">{platform}</p>
+            <p className="mt-1 text-xs text-gray-600">
+              {platform === 'ios'
+                ? 'Open Share menu in Safari and choose "Add to Home Screen".'
+                : platform === 'android'
+                  ? 'In Chrome, open menu and tap "Install app" or "Add to Home screen".'
+                  : platform === 'mac'
+                    ? 'Use Chrome/Edge menu and choose "Install EstatePulse", or Safari Add to Dock.'
+                    : platform === 'windows'
+                      ? 'Use Chrome/Edge menu and choose "Install EstatePulse".'
+                      : 'Use browser menu and choose install/add to home screen.'}
+            </p>
+          </div>
+          <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100 md:col-span-2">
+            <p className="text-xs font-semibold uppercase tracking-widest text-gray-500">Other Platforms</p>
+            <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-gray-700">
+              <p><span className="font-bold">Mobile:</span> Android Chrome or iPhone Safari to Home Screen.</p>
+              <p><span className="font-bold">Windows:</span> Chrome/Edge menu -&gt; Install App.</p>
+              <p><span className="font-bold">Mac:</span> Chrome/Edge install menu or Safari Add to Dock.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
         <h3 className="text-xl font-bold text-gray-900">Change Password</h3>
         <form onSubmit={handleChangePassword} className="mt-4 space-y-4">
           <div>
@@ -304,6 +422,54 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
             </button>
             </div>
           </div>
+        </form>
+      </div>
+
+      <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
+        <h3 className="text-xl font-bold text-gray-900">Help & Support</h3>
+        <p className="mt-1 text-sm text-gray-500">Facing an issue? Raise a ticket and our team will respond.</p>
+        <form onSubmit={handleRaiseTicket} className="mt-4 space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Subject</label>
+            <input
+              type="text"
+              value={ticketSubject}
+              onChange={(e) => setTicketSubject(e.target.value)}
+              placeholder="Brief issue title"
+              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Priority</label>
+            <select
+              value={ticketPriority}
+              onChange={(e) => setTicketPriority(e.target.value as 'low' | 'medium' | 'high')}
+              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+            >
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Message</label>
+            <textarea
+              value={ticketMessage}
+              onChange={(e) => setTicketMessage(e.target.value)}
+              rows={4}
+              placeholder="Describe the issue in detail"
+              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+              required
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={ticketLoading}
+            className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all disabled:opacity-60"
+          >
+            {ticketLoading ? 'Submitting Ticket...' : 'Raise Ticket'}
+          </button>
         </form>
       </div>
     </div>
