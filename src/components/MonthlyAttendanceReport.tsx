@@ -190,6 +190,7 @@ export default function MonthlyAttendanceReport({
 }: MonthlyAttendanceReportProps) {
   const now = new Date();
   const [employeeId, setEmployeeId] = useState('all');
+  const [tableSort, setTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'date', dir: 'desc' });
   const [department, setDepartment] = useState('all');
   const [branch, setBranch] = useState('all');
   const [status, setStatus] = useState<'all' | AttendanceStatus>('all');
@@ -336,6 +337,23 @@ export default function MonthlyAttendanceReport({
       });
     }).filter((row) => status === 'all' || row.status === status);
   }, [approvedCorrectionByRow, attendance, editOverrides, filteredMembers, month, now, remarks, status, year]);
+
+  const sortedRows = useMemo(() => {
+    const compareValues = (a: unknown, b: unknown) => {
+      const aNum = typeof a === 'number' ? a : Number.NaN;
+      const bNum = typeof b === 'number' ? b : Number.NaN;
+      if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+      return String(a ?? '').localeCompare(String(b ?? ''), undefined, { sensitivity: 'base' });
+    };
+    const list = [...rows];
+    list.sort((a, b) => {
+      const mapA: Record<string, unknown> = { date: a.date.getTime(), day: a.day, employee: a.employeeName, loginTime: a.loginTime?.getTime() || 0, logoutTime: a.logoutTime?.getTime() || 0, workingHours: a.workingMinutes, lateBy: a.lateMinutes, status: a.status, remarks: a.remarks || '' };
+      const mapB: Record<string, unknown> = { date: b.date.getTime(), day: b.day, employee: b.employeeName, loginTime: b.loginTime?.getTime() || 0, logoutTime: b.logoutTime?.getTime() || 0, workingHours: b.workingMinutes, lateBy: b.lateMinutes, status: b.status, remarks: b.remarks || '' };
+      const result = compareValues(mapA[tableSort.key], mapB[tableSort.key]);
+      return tableSort.dir === 'asc' ? result : -result;
+    });
+    return list;
+  }, [rows, tableSort]);
 
   const summary = useMemo(() => {
     const totalWorkingDays = rows.filter((row) => row.status !== 'WO' && row.status !== 'H').length;
@@ -726,13 +744,30 @@ export default function MonthlyAttendanceReport({
           <table className="w-full text-left">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
-                {['Date', 'Day', employeeId === 'all' ? 'Employee' : '', 'Login Time', 'Login Location', 'Logout Time', 'Logout Location', 'Working Hours', 'Late By', 'Status', 'Remarks', 'Actions'].filter(Boolean).map((header) => (
-                  <th key={header} className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">{header}</th>
+                {[
+                  ['date', 'Date'],
+                  ['day', 'Day'],
+                  ...(employeeId === 'all' ? [['employee', 'Employee'] as [string, string]] : []),
+                  ['loginTime', 'Login Time'],
+                  ['loginLocation', 'Login Location'],
+                  ['logoutTime', 'Logout Time'],
+                  ['logoutLocation', 'Logout Location'],
+                  ['workingHours', 'Working Hours'],
+                  ['lateBy', 'Late By'],
+                  ['status', 'Status'],
+                  ['remarks', 'Remarks'],
+                  ['actions', 'Actions'],
+                ].map(([key, header]) => (
+                  <th key={header} className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    {key === 'actions' || key === 'loginLocation' || key === 'logoutLocation'
+                      ? header
+                      : <button type="button" onClick={() => setTableSort((p) => ({ key, dir: p.key === key && p.dir === 'asc' ? 'desc' : 'asc' }))}>{header}</button>}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {rows.map((row) => (
+              {sortedRows.map((row) => (
                 <tr key={row.key} className="hover:bg-slate-50/70">
                   <td className="px-4 py-3 text-sm font-bold text-slate-700">{row.date.toLocaleDateString()}</td>
                   <td className="px-4 py-3 text-sm font-bold text-slate-500">{row.day}</td>

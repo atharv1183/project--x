@@ -101,6 +101,7 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [companySearch, setCompanySearch] = useState('');
+  const [companyTableSort, setCompanyTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
   const [userSearch, setUserSearch] = useState('');
   const [userRoleFilter, setUserRoleFilter] = useState<'all' | User['role']>('all');
   const [userCompanyFilter, setUserCompanyFilter] = useState<string>('all');
@@ -188,6 +189,43 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
       )
     );
   }, [clients, companySearch]);
+
+  const sortedCompanies = useMemo(() => {
+    const compareValues = (a: unknown, b: unknown) => {
+      const aNum = typeof a === 'number' ? a : Number.NaN;
+      const bNum = typeof b === 'number' ? b : Number.NaN;
+      if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+      return String(a ?? '').localeCompare(String(b ?? ''), undefined, { sensitivity: 'base' });
+    };
+    const list = [...companies];
+    list.sort((a, b) => {
+      const mapA: Record<string, unknown> = {
+        id: a.id,
+        name: a.name,
+        contact: a.contactPerson,
+        mobile: a.mobileNumber,
+        email: a.email,
+        billing: a.billingCycle,
+        expiry: asDateInput(a.subscriptionExpiryDate),
+        status: a.state,
+        created: toMillis(a.createdAt),
+      };
+      const mapB: Record<string, unknown> = {
+        id: b.id,
+        name: b.name,
+        contact: b.contactPerson,
+        mobile: b.mobileNumber,
+        email: b.email,
+        billing: b.billingCycle,
+        expiry: asDateInput(b.subscriptionExpiryDate),
+        status: b.state,
+        created: toMillis(b.createdAt),
+      };
+      const result = compareValues(mapA[companyTableSort.key], mapB[companyTableSort.key]);
+      return companyTableSort.dir === 'asc' ? result : -result;
+    });
+    return list;
+  }, [companies, companyTableSort]);
 
   const mappedUsers = useMemo(
     () =>
@@ -575,11 +613,11 @@ export default function SuperAdminControlCenter({ user, onStartImpersonation }: 
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="text-left text-gray-500">
-                    <th className="px-3 py-2">Company ID</th><th className="px-3 py-2">Company Name</th><th className="px-3 py-2">Contact</th><th className="px-3 py-2">Mobile</th><th className="px-3 py-2">Email</th><th className="px-3 py-2">Billing</th><th className="px-3 py-2">Expiry</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Created</th><th className="px-3 py-2">Actions</th>
+                    <th className="px-3 py-2"><button type="button" onClick={() => setCompanyTableSort((p) => ({ key: 'id', dir: p.key === 'id' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Company ID</button></th><th className="px-3 py-2"><button type="button" onClick={() => setCompanyTableSort((p) => ({ key: 'name', dir: p.key === 'name' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Company Name</button></th><th className="px-3 py-2"><button type="button" onClick={() => setCompanyTableSort((p) => ({ key: 'contact', dir: p.key === 'contact' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Contact</button></th><th className="px-3 py-2"><button type="button" onClick={() => setCompanyTableSort((p) => ({ key: 'mobile', dir: p.key === 'mobile' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Mobile</button></th><th className="px-3 py-2"><button type="button" onClick={() => setCompanyTableSort((p) => ({ key: 'email', dir: p.key === 'email' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Email</button></th><th className="px-3 py-2"><button type="button" onClick={() => setCompanyTableSort((p) => ({ key: 'billing', dir: p.key === 'billing' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Billing</button></th><th className="px-3 py-2"><button type="button" onClick={() => setCompanyTableSort((p) => ({ key: 'expiry', dir: p.key === 'expiry' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Expiry</button></th><th className="px-3 py-2"><button type="button" onClick={() => setCompanyTableSort((p) => ({ key: 'status', dir: p.key === 'status' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Status</button></th><th className="px-3 py-2"><button type="button" onClick={() => setCompanyTableSort((p) => ({ key: 'created', dir: p.key === 'created' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Created</button></th><th className="px-3 py-2">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {companies.map((client) => (
+                  {sortedCompanies.map((client) => (
                     <tr key={client.id} className="border-t border-gray-100">
                       <td className="px-3 py-2 font-mono text-xs">{client.id}</td>
                       <td className="px-3 py-2 font-semibold">{client.name}</td>

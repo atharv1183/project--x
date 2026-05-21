@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, FormEvent } from 'react';
+import { useState, useEffect, useRef, FormEvent, useMemo } from 'react';
 import { db, auth } from '../lib/firebase';
 import { 
   collection, 
@@ -103,6 +103,16 @@ function normalizePhone(value: string): string {
   return value.replace(/\D/g, '');
 }
 
+const LOCATION_MAP: Record<string, string[]> = {
+  "Madhya Pradesh": ["Bhopal", "Indore", "Jabalpur", "Gwalior", "Ujjain"],
+  Maharashtra: ["Mumbai", "Pune", "Nagpur", "Nashik"],
+  Gujarat: ["Ahmedabad", "Surat", "Vadodara", "Rajkot"],
+  Rajasthan: ["Jaipur", "Jodhpur", "Udaipur", "Kota"],
+  "Uttar Pradesh": ["Lucknow", "Kanpur", "Noida", "Varanasi"],
+  Other: ["Other"],
+};
+const DEFAULT_SPECIALIZATIONS = ["Residential", "Commercial", "Industrial", "Agriculture"];
+
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timeoutId: number | undefined;
 
@@ -124,6 +134,7 @@ type EmployeeView = LeadQueueTab | 'followups' | 'performance' | 'attendance' | 
 
 type EmployeeDashboardProps = {
   user: User;
+  brand?: { logoUrl?: string; companyName?: string; tagline?: string };
   backSignal?: number;
   initialView?: EmployeeView;
   initialViewSignal?: number;
@@ -141,11 +152,13 @@ function getLeadQueueTab(lead: Lead): LeadQueueTab | null {
 
 export default function EmployeeDashboard({
   user,
+  brand,
   backSignal = 0,
   initialView,
   initialViewSignal = 0,
 }: EmployeeDashboardProps) {
   const [activeTab, setActiveTab] = useState<EmployeeView>(initialView ?? 'today');
+  const [transferTableSort, setTransferTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'when', dir: 'desc' });
   const [followupSubTab, setFollowupSubTab] = useState<LeadQueueTab>('today');
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
@@ -166,8 +179,18 @@ export default function EmployeeDashboard({
     area: '',
     budget: '',
     location: '',
-    remark: ''
+    remark: '',
+    brokerState: '',
+    brokerCity: '',
+    brokerLocality: '',
+    specializations: [] as string[],
   });
+  const [reqSearch, setReqSearch] = useState('');
+  const [reqStateFilter, setReqStateFilter] = useState('');
+  const [reqCityFilter, setReqCityFilter] = useState('');
+  const [reqSpecializationFilter, setReqSpecializationFilter] = useState('');
+  const [specializationOptions, setSpecializationOptions] = useState<string[]>(DEFAULT_SPECIALIZATIONS);
+  const [newSpecialization, setNewSpecialization] = useState('');
   const [remark, setRemark] = useState('');
   const [nextDate, setNextDate] = useState('');
   const [showHistory, setShowHistory] = useState(false);
@@ -546,7 +569,11 @@ export default function EmployeeDashboard({
         area: '',
         budget: '',
         location: '',
-        remark: ''
+        remark: '',
+        brokerState: '',
+        brokerCity: '',
+        brokerLocality: '',
+        specializations: [],
       });
       alert(editingRequirementId ? 'Requirement updated successfully!' : 'Requirement added successfully!');
     } catch (error) {
@@ -565,10 +592,42 @@ export default function EmployeeDashboard({
       budget: req.budget || '',
       location: req.location || '',
       remark: req.remark || '',
+      brokerState: req.brokerState || '',
+      brokerCity: req.brokerCity || '',
+      brokerLocality: req.brokerLocality || '',
+      specializations: req.specializations || [],
     });
     setEditingRequirementId(req.id);
     setShowReqModal(true);
   };
+
+  const filteredRequirements = useMemo(() => {
+    const q = reqSearch.trim().toLowerCase();
+    return requirements.filter((req) => {
+      const matchesSearch = !q || [
+        req.name, req.phone, req.type, req.location, req.brokerState, req.brokerCity, req.brokerLocality, ...(req.specializations || [])
+      ].filter(Boolean).join(' ').toLowerCase().includes(q);
+      const matchesState = !reqStateFilter || req.brokerState === reqStateFilter;
+      const matchesCity = !reqCityFilter || req.brokerCity === reqCityFilter;
+      const matchesSpec = !reqSpecializationFilter || (req.specializations || []).includes(reqSpecializationFilter);
+      return matchesSearch && matchesState && matchesCity && matchesSpec;
+    });
+  }, [requirements, reqSearch, reqStateFilter, reqCityFilter, reqSpecializationFilter]);
+
+  useEffect(() => {
+    const ownerId = user.managerId || user.uid;
+    const raw = localStorage.getItem(`estatepulse_requirement_specializations_${ownerId}`);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) setSpecializationOptions(Array.from(new Set([...DEFAULT_SPECIALIZATIONS, ...parsed.map(String)])));
+    } catch {}
+  }, [user.managerId, user.uid]);
+
+  useEffect(() => {
+    const ownerId = user.managerId || user.uid;
+    localStorage.setItem(`estatepulse_requirement_specializations_${ownerId}`, JSON.stringify(specializationOptions));
+  }, [specializationOptions, user.managerId, user.uid]);
 
   const handleAddLead = async (e: FormEvent) => {
     e.preventDefault();
@@ -915,13 +974,48 @@ export default function EmployeeDashboard({
     }
   };
 
+  const sortedLeadTransfers = useMemo(() => {
+    const compareValues = (a: unknown, b: unknown) => {
+      const aNum = typeof a === 'number' ? a : Number.NaN;
+      const bNum = typeof b === 'number' ? b : Number.NaN;
+      if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+      return String(a ?? '').localeCompare(String(b ?? ''), undefined, { sensitivity: 'base' });
+    };
+    const list = [...leadTransfers];
+    list.sort((a, b) => {
+      const mapA: Record<string, unknown> = {
+        when: toDateValue(a.createdAt)?.getTime() || 0,
+        lead: a.leadName || a.leadId,
+        from: a.fromName,
+        to: a.toName,
+        by: a.transferredByName,
+      };
+      const mapB: Record<string, unknown> = {
+        when: toDateValue(b.createdAt)?.getTime() || 0,
+        lead: b.leadName || b.leadId,
+        from: b.fromName,
+        to: b.toName,
+        by: b.transferredByName,
+      };
+      const result = compareValues(mapA[transferTableSort.key], mapB[transferTableSort.key]);
+      return transferTableSort.dir === 'asc' ? result : -result;
+    });
+    return list;
+  }, [leadTransfers, transferTableSort]);
+
   return (
     <div className="lg:h-full lg:overflow-hidden">
       <div className="grid gap-0 lg:grid-cols-[236px_minmax(0,1fr)] lg:h-full">
-        <aside className="hidden lg:flex lg:flex-col bg-gradient-to-b from-[#03143d] to-[#010f30] text-white p-3">
+        <aside className="hidden lg:sticky lg:top-0 lg:h-screen lg:flex lg:flex-col bg-gradient-to-b from-[#03143d] to-[#010f30] text-white p-3">
           <div className="px-3 py-2 border-b border-white/10">
-            <p className="text-lg font-black tracking-tight">EstatePulse</p>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-lg bg-blue-600 text-white">
+                {brand?.logoUrl ? <img src={brand.logoUrl} alt="Brand" className="h-full w-full object-cover" /> : <UserIcon size={16} />}
+              </span>
+              <p className="text-lg font-black tracking-tight">{brand?.companyName || 'EstatePulse'}</p>
+            </div>
             <p className="text-[10px] uppercase tracking-widest text-white/70">Employee</p>
+            {brand?.tagline ? <p className="mt-1 text-[10px] text-white/70">{brand.tagline}</p> : null}
           </div>
           <nav className="mt-3 flex-1 space-y-1">
             {employeeTabs.map((tab) => (
@@ -1093,9 +1187,24 @@ export default function EmployeeDashboard({
               <PlusCircle size={18} /> Add New Requirement
             </button>
           </div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <input value={reqSearch} onChange={(e) => setReqSearch(e.target.value)} placeholder="Search by name, phone, location, specialization..." className="px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+            <select value={reqStateFilter} onChange={(e) => { setReqStateFilter(e.target.value); setReqCityFilter(''); }} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+              <option value="">All States</option>
+              {Object.keys(LOCATION_MAP).map((state) => <option key={state} value={state}>{state}</option>)}
+            </select>
+            <select value={reqCityFilter} onChange={(e) => setReqCityFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+              <option value="">All Cities</option>
+              {(reqStateFilter ? LOCATION_MAP[reqStateFilter] || [] : Array.from(new Set(Object.values(LOCATION_MAP).flat()))).map((city) => <option key={city} value={city}>{city}</option>)}
+            </select>
+            <select value={reqSpecializationFilter} onChange={(e) => setReqSpecializationFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+              <option value="">All Specializations</option>
+              {specializationOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {requirements.map(req => (
+            {filteredRequirements.map(req => (
               <motion.div 
                 key={req.id}
                 layout
@@ -1109,6 +1218,11 @@ export default function EmployeeDashboard({
                     {req.type}
                   </div>
                 </div>
+                {(req.specializations || []).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {(req.specializations || []).map((s) => <span key={s} className="px-2 py-0.5 bg-blue-50 text-blue-700 text-[9px] font-black rounded-full uppercase">{s}</span>)}
+                  </div>
+                )}
 
                 <div>
                   <h3 className="font-black text-slate-900 text-lg tracking-tight">{req.name}</h3>
@@ -1129,7 +1243,7 @@ export default function EmployeeDashboard({
                   <div className="space-y-1 col-span-2">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Location</p>
                     <p className="text-xs font-black text-slate-700 flex items-center gap-1">
-                      <MapPin size={10} className="text-blue-500" /> {req.location || 'N/A'}
+                      <MapPin size={10} className="text-blue-500" /> {req.brokerState && req.brokerCity ? `${req.brokerState}, ${req.brokerCity}${req.brokerLocality ? `, ${req.brokerLocality}` : ''}` : (req.location || 'N/A')}
                     </p>
                   </div>
                 </div>
@@ -1169,15 +1283,15 @@ export default function EmployeeDashboard({
               <table className="w-full text-left">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">When</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Lead</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">From</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">To</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Transferred By</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setTransferTableSort((p) => ({ key: 'when', dir: p.key === 'when' && p.dir === 'asc' ? 'desc' : 'asc' }))}>When</button></th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setTransferTableSort((p) => ({ key: 'lead', dir: p.key === 'lead' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Lead</button></th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setTransferTableSort((p) => ({ key: 'from', dir: p.key === 'from' && p.dir === 'asc' ? 'desc' : 'asc' }))}>From</button></th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setTransferTableSort((p) => ({ key: 'to', dir: p.key === 'to' && p.dir === 'asc' ? 'desc' : 'asc' }))}>To</button></th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setTransferTableSort((p) => ({ key: 'by', dir: p.key === 'by' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Transferred By</button></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {leadTransfers.map((entry) => (
+                  {sortedLeadTransfers.map((entry) => (
                     <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-6 py-4 text-xs font-bold text-slate-500">{formatDateValue(entry.createdAt, 'MMM dd, yyyy hh:mm a', 'N/A')}</td>
                       <td className="px-6 py-4 text-sm font-black text-slate-800">{entry.leadName || entry.leadId}</td>
@@ -2145,6 +2259,62 @@ export default function EmployeeDashboard({
                         className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
                         placeholder="Preferred location"
                       />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">State</label>
+                      <select value={reqForm.brokerState} onChange={e => setReqForm({ ...reqForm, brokerState: e.target.value, brokerCity: '' })} className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-3xl font-bold text-slate-700">
+                        <option value="">Select State</option>
+                        {Object.keys(LOCATION_MAP).map((state) => <option key={state} value={state}>{state}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">City</label>
+                      <select value={reqForm.brokerCity} onChange={e => setReqForm({ ...reqForm, brokerCity: e.target.value })} className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-3xl font-bold text-slate-700">
+                        <option value="">Select City</option>
+                        {(LOCATION_MAP[reqForm.brokerState] || []).map((city) => <option key={city} value={city}>{city}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Locality</label>
+                      <input value={reqForm.brokerLocality} onChange={e => setReqForm({ ...reqForm, brokerLocality: e.target.value })} className="w-full px-6 py-4 bg-slate-50 border border-slate-100 rounded-3xl font-bold text-slate-700" placeholder="Area / Locality" />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Specialization (Select Many)</label>
+                    <div className="flex flex-wrap gap-2">
+                      {specializationOptions.map((item) => (
+                        <label key={item} className="inline-flex items-center gap-2 text-xs font-semibold px-2 py-1 rounded-lg border border-slate-200 bg-slate-50">
+                          <input
+                            type="checkbox"
+                            checked={reqForm.specializations.includes(item)}
+                            onChange={(e) => setReqForm({
+                              ...reqForm,
+                              specializations: e.target.checked
+                                ? Array.from(new Set([...reqForm.specializations, item]))
+                                : reqForm.specializations.filter((x) => x !== item),
+                            })}
+                          />
+                          {item}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <input value={newSpecialization} onChange={(e) => setNewSpecialization(e.target.value)} placeholder="Add more specialization" className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-semibold" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = newSpecialization.trim();
+                          if (!next) return;
+                          if (!specializationOptions.includes(next)) setSpecializationOptions((prev) => [...prev, next]);
+                          if (!reqForm.specializations.includes(next)) setReqForm({ ...reqForm, specializations: [...reqForm.specializations, next] });
+                          setNewSpecialization('');
+                        }}
+                        className="px-3 py-2 rounded-2xl bg-blue-600 text-white text-sm font-bold"
+                      >
+                        Add
+                      </button>
                     </div>
                   </div>
 

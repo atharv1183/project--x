@@ -71,6 +71,7 @@ type AdminView = 'performance' | 'leads' | 'employees' | 'attendance' | 'require
 
 type AdminDashboardProps = {
   user: User;
+  brand?: { logoUrl?: string; companyName?: string; tagline?: string };
   backSignal?: number;
   initialView?: AdminView;
   initialViewSignal?: number;
@@ -113,6 +114,16 @@ const getAddedByRoleLabel = (role?: Lead['addedByRole']) => {
   return 'Legacy';
 };
 
+const LOCATION_MAP: Record<string, string[]> = {
+  "Madhya Pradesh": ["Bhopal", "Indore", "Jabalpur", "Gwalior", "Ujjain"],
+  Maharashtra: ["Mumbai", "Pune", "Nagpur", "Nashik"],
+  Gujarat: ["Ahmedabad", "Surat", "Vadodara", "Rajkot"],
+  Rajasthan: ["Jaipur", "Jodhpur", "Udaipur", "Kota"],
+  "Uttar Pradesh": ["Lucknow", "Kanpur", "Noida", "Varanasi"],
+  Other: ["Other"],
+};
+const DEFAULT_SPECIALIZATIONS = ["Residential", "Commercial", "Industrial", "Agriculture"];
+
 const parseTimestamp = (value: any): Date | null => {
   if (!value) return null;
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
@@ -130,6 +141,7 @@ const parseTimestamp = (value: any): Date | null => {
 
 export default function AdminDashboard({
   user,
+  brand,
   backSignal = 0,
   initialView,
   initialViewSignal = 0,
@@ -137,6 +149,10 @@ export default function AdminDashboard({
   const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin';
   const isManager = user.role === 'manager';
   const [activeView, setActiveView] = useState<AdminView>(initialView ?? 'performance');
+  const [leadTableSort, setLeadTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'client', dir: 'asc' });
+  const [requirementTableSort, setRequirementTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'client', dir: 'asc' });
+  const [transferTableSort, setTransferTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'when', dir: 'desc' });
+  const [brokerTableSort, setBrokerTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'broker', dir: 'asc' });
   const [employees, setEmployees] = useState<User[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
@@ -168,8 +184,18 @@ export default function AdminDashboard({
     area: '',
     budget: '',
     location: '',
-    remark: ''
+    remark: '',
+    brokerState: '',
+    brokerCity: '',
+    brokerLocality: '',
+    specializations: [] as string[],
   });
+  const [reqSearch, setReqSearch] = useState('');
+  const [reqStateFilter, setReqStateFilter] = useState('');
+  const [reqCityFilter, setReqCityFilter] = useState('');
+  const [reqSpecializationFilter, setReqSpecializationFilter] = useState('');
+  const [specializationOptions, setSpecializationOptions] = useState<string[]>(DEFAULT_SPECIALIZATIONS);
+  const [newSpecialization, setNewSpecialization] = useState('');
   const [loading, setLoading] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferSearch, setTransferSearch] = useState('');
@@ -1035,6 +1061,128 @@ export default function AdminDashboard({
     return searchableText.includes(adminLeadSearchTerm);
   });
 
+  const compareValues = (a: unknown, b: unknown) => {
+    const aNum = typeof a === 'number' ? a : Number.NaN;
+    const bNum = typeof b === 'number' ? b : Number.NaN;
+    if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+    return String(a ?? '').localeCompare(String(b ?? ''), undefined, { sensitivity: 'base' });
+  };
+  const sortIndicator = (activeKey: string, key: string, dir: 'asc' | 'desc') => (activeKey === key ? (dir === 'asc' ? ' ▲' : ' ▼') : '');
+
+  const sortedFilteredLeads = useMemo(() => {
+    const list = [...filteredLeads];
+    list.sort((a, b) => {
+      const assignedA = employees.find((e) => e.uid === a.assignedTo)?.name || '';
+      const assignedB = employees.find((e) => e.uid === b.assignedTo)?.name || '';
+      const mapA: Record<string, unknown> = {
+        client: a.name,
+        source: a.source,
+        addedBy: a.addedByName || getAddedByRoleLabel(a.addedByRole),
+        assignedTo: assignedA,
+        lastFollowup: parseTimestamp(a.lastInteractionAt)?.getTime() || 0,
+        upcomingFollowup: parseTimestamp((a as any).nextFollowupAt)?.getTime() || 0,
+        status: a.status,
+      };
+      const mapB: Record<string, unknown> = {
+        client: b.name,
+        source: b.source,
+        addedBy: b.addedByName || getAddedByRoleLabel(b.addedByRole),
+        assignedTo: assignedB,
+        lastFollowup: parseTimestamp(b.lastInteractionAt)?.getTime() || 0,
+        upcomingFollowup: parseTimestamp((b as any).nextFollowupAt)?.getTime() || 0,
+        status: b.status,
+      };
+      const result = compareValues(mapA[leadTableSort.key], mapB[leadTableSort.key]);
+      return leadTableSort.dir === 'asc' ? result : -result;
+    });
+    return list;
+  }, [filteredLeads, employees, leadTableSort]);
+
+  const sortedRequirements = useMemo(() => {
+    const list = [...requirements];
+    list.sort((a, b) => {
+      const mapA: Record<string, unknown> = {
+        client: a.name,
+        type: a.type,
+        budgetArea: `${a.budget || ''} ${a.area || ''}`,
+        location: a.location,
+        employee: a.employeeName,
+      };
+      const mapB: Record<string, unknown> = {
+        client: b.name,
+        type: b.type,
+        budgetArea: `${b.budget || ''} ${b.area || ''}`,
+        location: b.location,
+        employee: b.employeeName,
+      };
+      const result = compareValues(mapA[requirementTableSort.key], mapB[requirementTableSort.key]);
+      return requirementTableSort.dir === 'asc' ? result : -result;
+    });
+    return list;
+  }, [requirements, requirementTableSort]);
+
+  const filteredRequirements = useMemo(() => {
+    const q = reqSearch.trim().toLowerCase();
+    return sortedRequirements.filter((req) => {
+      const matchesSearch = !q || [
+        req.name, req.phone, req.type, req.location, req.brokerState, req.brokerCity, req.brokerLocality, ...(req.specializations || [])
+      ].filter(Boolean).join(' ').toLowerCase().includes(q);
+      const matchesState = !reqStateFilter || req.brokerState === reqStateFilter;
+      const matchesCity = !reqCityFilter || req.brokerCity === reqCityFilter;
+      const matchesSpec = !reqSpecializationFilter || (req.specializations || []).includes(reqSpecializationFilter);
+      return matchesSearch && matchesState && matchesCity && matchesSpec;
+    });
+  }, [sortedRequirements, reqSearch, reqStateFilter, reqCityFilter, reqSpecializationFilter]);
+
+  useEffect(() => {
+    const ownerId = user.managerId || user.uid;
+    const raw = localStorage.getItem(`estatepulse_requirement_specializations_${ownerId}`);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) setSpecializationOptions(Array.from(new Set([...DEFAULT_SPECIALIZATIONS, ...parsed.map(String)])));
+    } catch {}
+  }, [user.managerId, user.uid]);
+
+  useEffect(() => {
+    const ownerId = user.managerId || user.uid;
+    localStorage.setItem(`estatepulse_requirement_specializations_${ownerId}`, JSON.stringify(specializationOptions));
+  }, [specializationOptions, user.managerId, user.uid]);
+
+  const sortedLeadTransfers = useMemo(() => {
+    const list = [...leadTransfers];
+    list.sort((a, b) => {
+      const mapA: Record<string, unknown> = {
+        when: parseTimestamp(a.createdAt)?.getTime() || 0,
+        lead: a.leadName || a.leadId,
+        from: a.fromName,
+        to: a.toName,
+        by: a.transferredByName,
+      };
+      const mapB: Record<string, unknown> = {
+        when: parseTimestamp(b.createdAt)?.getTime() || 0,
+        lead: b.leadName || b.leadId,
+        from: b.fromName,
+        to: b.toName,
+        by: b.transferredByName,
+      };
+      const result = compareValues(mapA[transferTableSort.key], mapB[transferTableSort.key]);
+      return transferTableSort.dir === 'asc' ? result : -result;
+    });
+    return list;
+  }, [leadTransfers, transferTableSort]);
+
+  const sortedBrokers = useMemo(() => {
+    const list = [...brokers];
+    list.sort((a, b) => {
+      const mapA: Record<string, unknown> = { broker: a.name, company: a.company, email: a.email };
+      const mapB: Record<string, unknown> = { broker: b.name, company: b.company, email: b.email };
+      const result = compareValues(mapA[brokerTableSort.key], mapB[brokerTableSort.key]);
+      return brokerTableSort.dir === 'asc' ? result : -result;
+    });
+    return list;
+  }, [brokers, brokerTableSort]);
+
   const managerLastAttendance = useMemo(() => {
     if (!isManager) return null;
     const ownLogs = attendance
@@ -1078,6 +1226,10 @@ export default function AdminDashboard({
       budget: req.budget || '',
       location: req.location || '',
       remark: req.remark || '',
+      brokerState: req.brokerState || '',
+      brokerCity: req.brokerCity || '',
+      brokerLocality: req.brokerLocality || '',
+      specializations: req.specializations || [],
     });
     setEditingRequirementId(req.id);
     setShowReqModal(true);
@@ -1603,15 +1755,16 @@ export default function AdminDashboard({
   return (
     <div className="lg:h-full lg:overflow-hidden">
       <div className="grid gap-0 lg:grid-cols-[236px_minmax(0,1fr)] lg:h-full">
-        <aside className="hidden lg:flex lg:flex-col bg-gradient-to-b from-[#03143d] to-[#010f30] text-white p-3">
+        <aside className="hidden lg:sticky lg:top-0 lg:h-screen lg:flex lg:flex-col bg-gradient-to-b from-[#03143d] to-[#010f30] text-white p-3">
           <div className="px-3 py-2 border-b border-white/10">
             <div className="flex items-center gap-2">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white">
-                <Home size={16} />
+              <span className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-lg bg-blue-600 text-white">
+                {brand?.logoUrl ? <img src={brand.logoUrl} alt="Brand" className="h-full w-full object-cover" /> : <Home size={16} />}
               </span>
-              <p className="text-lg font-black tracking-tight">EstatePulse</p>
+              <p className="text-lg font-black tracking-tight">{brand?.companyName || 'EstatePulse'}</p>
             </div>
             <p className="text-[10px] uppercase tracking-widest text-white/70">{isManager ? 'Manager' : 'Admin'}</p>
+            {brand?.tagline ? <p className="mt-1 text-[10px] text-white/70">{brand.tagline}</p> : null}
           </div>
           <nav className="mt-3 flex-1 space-y-1">
             {adminTabs.map((tab) => (
@@ -1700,7 +1853,7 @@ export default function AdminDashboard({
               <h3 className="text-sm font-black text-slate-900">Leads Dashboard</h3>
               <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Condensed View</span>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1.35fr_1.35fr_0.8fr_0.8fr]">
               <div className="rounded-xl border border-slate-200 bg-white p-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Total Leads</p>
                 <button
@@ -1718,7 +1871,7 @@ export default function AdminDashboard({
 
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Leads</p>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
                   {[
                     { label: 'Interested', id: 'interested', value: stats.interested, tone: 'bg-emerald-50 border-emerald-200 text-emerald-800' },
                     { label: 'Not Interested', id: 'not_interested', value: stats.notInterested, tone: 'bg-rose-50 border-rose-200 text-rose-800' },
@@ -1729,12 +1882,12 @@ export default function AdminDashboard({
                       type="button"
                       onClick={() => setFilter(card.id as any)}
                       className={cn(
-                        "rounded-xl border px-2 py-2 text-left transition-all",
+                        "min-w-0 rounded-xl border px-2 py-2 text-left transition-all",
                         card.tone,
                         filter === card.id ? "ring-2 ring-blue-300" : "hover:shadow-sm"
                       )}
                     >
-                      <p className="text-[9px] font-black uppercase tracking-wider opacity-80">{card.label}</p>
+                      <p className="text-[9px] leading-tight font-black uppercase tracking-wide opacity-80 break-words">{card.label}</p>
                       <p className="mt-1 text-lg leading-none font-black">{card.value}</p>
                     </button>
                   ))}
@@ -1753,12 +1906,12 @@ export default function AdminDashboard({
                       type="button"
                       onClick={() => setFilter(card.id as any)}
                       className={cn(
-                        "rounded-xl border px-2 py-2 text-left transition-all",
+                        "min-w-0 rounded-xl border px-2 py-2 text-left transition-all",
                         card.tone,
                         filter === card.id ? "ring-2 ring-blue-300" : "hover:shadow-sm"
                       )}
                     >
-                      <p className="text-[9px] font-black uppercase tracking-wider opacity-80">{card.label}</p>
+                      <p className="text-[9px] leading-tight font-black uppercase tracking-wide opacity-80 break-words">{card.label}</p>
                       <p className="mt-1 text-lg leading-none font-black">{card.value}</p>
                     </button>
                   ))}
@@ -1859,18 +2012,18 @@ export default function AdminDashboard({
               <table className="w-full text-left">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-100">
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Client</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Source</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Added By</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Assigned To</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Last Follow-up</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Upcoming Follow-up</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setLeadTableSort((p) => ({ key: 'client', dir: p.key === 'client' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Client{sortIndicator(leadTableSort.key, 'client', leadTableSort.dir)}</button></th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setLeadTableSort((p) => ({ key: 'source', dir: p.key === 'source' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Source{sortIndicator(leadTableSort.key, 'source', leadTableSort.dir)}</button></th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setLeadTableSort((p) => ({ key: 'addedBy', dir: p.key === 'addedBy' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Added By{sortIndicator(leadTableSort.key, 'addedBy', leadTableSort.dir)}</button></th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setLeadTableSort((p) => ({ key: 'assignedTo', dir: p.key === 'assignedTo' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Assigned To{sortIndicator(leadTableSort.key, 'assignedTo', leadTableSort.dir)}</button></th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setLeadTableSort((p) => ({ key: 'lastFollowup', dir: p.key === 'lastFollowup' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Last Follow-up{sortIndicator(leadTableSort.key, 'lastFollowup', leadTableSort.dir)}</button></th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setLeadTableSort((p) => ({ key: 'upcomingFollowup', dir: p.key === 'upcomingFollowup' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Upcoming Follow-up{sortIndicator(leadTableSort.key, 'upcomingFollowup', leadTableSort.dir)}</button></th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setLeadTableSort((p) => ({ key: 'status', dir: p.key === 'status' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Status{sortIndicator(leadTableSort.key, 'status', leadTableSort.dir)}</button></th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {filteredLeads.map((lead) => (
+                  {sortedFilteredLeads.map((lead) => (
                     <tr 
                       key={lead.id} 
                       onClick={() => { setSelectedLead(lead); setEditForm(lead); }}
@@ -2116,22 +2269,37 @@ export default function AdminDashboard({
               Total Recorded: {requirements.length}
             </p>
           </div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <input value={reqSearch} onChange={(e) => setReqSearch(e.target.value)} placeholder="Search by name, phone, location, specialization..." className="px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+            <select value={reqStateFilter} onChange={(e) => { setReqStateFilter(e.target.value); setReqCityFilter(''); }} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+              <option value="">All States</option>
+              {Object.keys(LOCATION_MAP).map((state) => <option key={state} value={state}>{state}</option>)}
+            </select>
+            <select value={reqCityFilter} onChange={(e) => setReqCityFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+              <option value="">All Cities</option>
+              {(reqStateFilter ? LOCATION_MAP[reqStateFilter] || [] : Array.from(new Set(Object.values(LOCATION_MAP).flat()))).map((city) => <option key={city} value={city}>{city}</option>)}
+            </select>
+            <select value={reqSpecializationFilter} onChange={(e) => setReqSpecializationFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+              <option value="">All Specializations</option>
+              {specializationOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
 
           <div className="bg-white rounded-[32px] border border-slate-100 shadow-xl shadow-slate-200/20 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">Client Details</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">Type</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">Budget/Area</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">Location</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">Employee</th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setRequirementTableSort((p) => ({ key: 'client', dir: p.key === 'client' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Client Details{sortIndicator(requirementTableSort.key, 'client', requirementTableSort.dir)}</button></th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setRequirementTableSort((p) => ({ key: 'type', dir: p.key === 'type' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Type{sortIndicator(requirementTableSort.key, 'type', requirementTableSort.dir)}</button></th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setRequirementTableSort((p) => ({ key: 'budgetArea', dir: p.key === 'budgetArea' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Budget/Area{sortIndicator(requirementTableSort.key, 'budgetArea', requirementTableSort.dir)}</button></th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setRequirementTableSort((p) => ({ key: 'location', dir: p.key === 'location' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Location{sortIndicator(requirementTableSort.key, 'location', requirementTableSort.dir)}</button></th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setRequirementTableSort((p) => ({ key: 'employee', dir: p.key === 'employee' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Employee{sortIndicator(requirementTableSort.key, 'employee', requirementTableSort.dir)}</button></th>
                     <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {requirements.map((req) => (
+                  {filteredRequirements.map((req) => (
                     <tr key={req.id} className="hover:bg-slate-50/50 transition-colors group">
                       <td className="px-8 py-6">
                         <div className="flex items-center gap-3">
@@ -2150,6 +2318,11 @@ export default function AdminDashboard({
                         <span className="px-3 py-1 bg-slate-900 text-white text-[9px] font-black uppercase rounded-full tracking-widest">
                           {req.type}
                         </span>
+                        {(req.specializations || []).length > 0 ? (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {(req.specializations || []).map((s) => <span key={s} className="px-2 py-0.5 bg-blue-50 text-blue-700 text-[9px] font-black rounded-full uppercase">{s}</span>)}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-8 py-6">
                         <div>
@@ -2160,7 +2333,7 @@ export default function AdminDashboard({
                       <td className="px-8 py-6">
                         <div className="flex items-center gap-1.5 text-xs text-slate-600 font-bold">
                           <MapPin size={14} className="text-blue-500" />
-                          {req.location || 'N/A'}
+                          {req.brokerState && req.brokerCity ? `${req.brokerState}, ${req.brokerCity}${req.brokerLocality ? `, ${req.brokerLocality}` : ''}` : (req.location || 'N/A')}
                         </div>
                       </td>
                       <td className="px-8 py-6">
@@ -2217,15 +2390,15 @@ export default function AdminDashboard({
               <table className="w-full text-left">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">When</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">Lead</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">From</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">To</th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest">Transferred By</th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setTransferTableSort((p) => ({ key: 'when', dir: p.key === 'when' && p.dir === 'asc' ? 'desc' : 'asc' }))}>When{sortIndicator(transferTableSort.key, 'when', transferTableSort.dir)}</button></th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setTransferTableSort((p) => ({ key: 'lead', dir: p.key === 'lead' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Lead{sortIndicator(transferTableSort.key, 'lead', transferTableSort.dir)}</button></th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setTransferTableSort((p) => ({ key: 'from', dir: p.key === 'from' && p.dir === 'asc' ? 'desc' : 'asc' }))}>From{sortIndicator(transferTableSort.key, 'from', transferTableSort.dir)}</button></th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setTransferTableSort((p) => ({ key: 'to', dir: p.key === 'to' && p.dir === 'asc' ? 'desc' : 'asc' }))}>To{sortIndicator(transferTableSort.key, 'to', transferTableSort.dir)}</button></th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setTransferTableSort((p) => ({ key: 'by', dir: p.key === 'by' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Transferred By{sortIndicator(transferTableSort.key, 'by', transferTableSort.dir)}</button></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {leadTransfers.map((entry) => (
+                  {sortedLeadTransfers.map((entry) => (
                     <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-8 py-5 text-xs font-bold text-slate-500">{formatLeadDate(entry.createdAt)}</td>
                       <td className="px-8 py-5 text-sm font-black text-slate-800">{entry.leadName || entry.leadId}</td>
@@ -2266,14 +2439,14 @@ export default function AdminDashboard({
               <table className="w-full text-left">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-100">
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Broker</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Company</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Email</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setBrokerTableSort((p) => ({ key: 'broker', dir: p.key === 'broker' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Broker{sortIndicator(brokerTableSort.key, 'broker', brokerTableSort.dir)}</button></th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setBrokerTableSort((p) => ({ key: 'company', dir: p.key === 'company' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Company{sortIndicator(brokerTableSort.key, 'company', brokerTableSort.dir)}</button></th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setBrokerTableSort((p) => ({ key: 'email', dir: p.key === 'email' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Email{sortIndicator(brokerTableSort.key, 'email', brokerTableSort.dir)}</button></th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {brokers.map((broker) => (
+                  {sortedBrokers.map((broker) => (
                     <tr key={broker.id} className="hover:bg-gray-50/50 transition-colors">
                       <td className="px-6 py-4">
                         <p className="font-bold text-gray-900">{broker.name}</p>
@@ -3019,9 +3192,56 @@ export default function AdminDashboard({
               <input required value={reqForm.name} onChange={e => setReqForm({ ...reqForm, name: e.target.value })} placeholder="Client Name" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
               <input required type="tel" inputMode="numeric" maxLength={10} value={reqForm.phone} onChange={e => setReqForm({ ...reqForm, phone: normalizePhone(e.target.value).slice(0, 10) })} placeholder="Phone" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
               <input required value={reqForm.type} onChange={e => setReqForm({ ...reqForm, type: e.target.value })} placeholder="Type" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <select value={reqForm.brokerState} onChange={(e) => setReqForm({ ...reqForm, brokerState: e.target.value, brokerCity: '' })} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl">
+                  <option value="">Select State</option>
+                  {Object.keys(LOCATION_MAP).map((state) => <option key={state} value={state}>{state}</option>)}
+                </select>
+                <select value={reqForm.brokerCity} onChange={(e) => setReqForm({ ...reqForm, brokerCity: e.target.value })} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl">
+                  <option value="">Select City</option>
+                  {(LOCATION_MAP[reqForm.brokerState] || []).map((city) => <option key={city} value={city}>{city}</option>)}
+                </select>
+                <input value={reqForm.brokerLocality} onChange={(e) => setReqForm({ ...reqForm, brokerLocality: e.target.value })} placeholder="Area / Locality" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl" />
+              </div>
               <input value={reqForm.budget} onChange={e => setReqForm({ ...reqForm, budget: e.target.value })} placeholder="Budget" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
               <input value={reqForm.area} onChange={e => setReqForm({ ...reqForm, area: e.target.value })} placeholder="Area" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
               <input value={reqForm.location} onChange={e => setReqForm({ ...reqForm, location: e.target.value })} placeholder="Location" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              <div className="space-y-2">
+                <p className="text-xs font-bold text-gray-600">Specialization (Select Many)</p>
+                <div className="flex flex-wrap gap-2">
+                  {specializationOptions.map((item) => (
+                    <label key={item} className="inline-flex items-center gap-2 text-xs font-semibold px-2 py-1 rounded-lg border border-gray-200 bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={reqForm.specializations.includes(item)}
+                        onChange={(e) => setReqForm({
+                          ...reqForm,
+                          specializations: e.target.checked
+                            ? Array.from(new Set([...reqForm.specializations, item]))
+                            : reqForm.specializations.filter((x) => x !== item),
+                        })}
+                      />
+                      {item}
+                    </label>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input value={newSpecialization} onChange={(e) => setNewSpecialization(e.target.value)} placeholder="Add more specialization" className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = newSpecialization.trim();
+                      if (!next) return;
+                      if (!specializationOptions.includes(next)) setSpecializationOptions((prev) => [...prev, next]);
+                      if (!reqForm.specializations.includes(next)) setReqForm({ ...reqForm, specializations: [...reqForm.specializations, next] });
+                      setNewSpecialization('');
+                    }}
+                    className="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
               <textarea value={reqForm.remark} onChange={e => setReqForm({ ...reqForm, remark: e.target.value })} placeholder="Remark / Requirement" className="w-full h-24 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none resize-none" />
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => { setShowReqModal(false); setEditingRequirementId(null); }} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>

@@ -79,6 +79,9 @@ export interface User {
   email: string;
   phone: string;
   profileImageUrl?: string;
+  brandLogoUrl?: string;
+  brandCompanyName?: string;
+  brandTagline?: string;
   role: 'super_admin' | 'admin' | 'client_admin' | 'manager' | 'employee' | 'suspended' | 'deleted';
   managerId?: string;
   managerName?: string;
@@ -151,6 +154,10 @@ export interface Requirement {
   name: string;
   phone: string;
   type: string; // 'zeemen' | 'plot' | 'house'
+  specializations?: string[];
+  brokerState?: string;
+  brokerCity?: string;
+  brokerLocality?: string;
   area: string;
   budget: string;
   location: string;

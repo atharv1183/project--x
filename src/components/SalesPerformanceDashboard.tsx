@@ -462,6 +462,7 @@ export default function SalesPerformanceDashboard({
   const [customTo, setCustomTo] = useState(formatInputDate(new Date()));
   const [teamManagerId, setTeamManagerId] = useState('');
   const [detailEmployee, setDetailEmployee] = useState<EmployeeMetrics | null>(null);
+  const [sourceTableSort, setSourceTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'total', dir: 'desc' });
   const [leadList, setLeadList] = useState<{ title: string; leads: Lead[] } | null>(null);
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('score');
@@ -1090,13 +1091,28 @@ export default function SalesPerformanceDashboard({
                   <table className="w-full text-left">
                     <thead>
                       <tr className="bg-slate-50">
-                        {['Source', 'Total', 'Interested', 'Visits', 'Deals'].map((header) => (
-                          <th key={header} className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-400">{header}</th>
+                        {[
+                          ['source', 'Source'],
+                          ['total', 'Total'],
+                          ['interested', 'Interested'],
+                          ['visits', 'Visits'],
+                          ['deals', 'Deals'],
+                        ].map(([key, header]) => (
+                          <th key={header} className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                            <button type="button" onClick={() => setSourceTableSort((p) => ({ key, dir: p.key === key && p.dir === 'asc' ? 'desc' : 'asc' }))}>{header}</button>
+                          </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {detailEmployee.sourceRows.map((row) => (
+                      {[...detailEmployee.sourceRows].sort((a, b) => {
+                        const mapA: Record<string, unknown> = { source: a.source, total: a.total, interested: a.interested, visits: a.visits, deals: a.deals };
+                        const mapB: Record<string, unknown> = { source: b.source, total: b.total, interested: b.interested, visits: b.visits, deals: b.deals };
+                        const av = mapA[sourceTableSort.key];
+                        const bv = mapB[sourceTableSort.key];
+                        const result = (typeof av === 'number' && typeof bv === 'number') ? av - bv : String(av ?? '').localeCompare(String(bv ?? ''), undefined, { sensitivity: 'base' });
+                        return sourceTableSort.dir === 'asc' ? result : -result;
+                      }).map((row) => (
                         <tr key={row.source} className="border-t border-slate-50">
                           <td className="px-3 py-2 text-sm font-bold text-slate-700">{row.source}</td>
                           <td className="px-3 py-2 text-sm font-bold text-slate-700">{row.total}</td>

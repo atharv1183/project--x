@@ -15,6 +15,9 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
   const [mobile, setMobile] = useState(user.phone || '');
   const [email, setEmail] = useState(user.email || '');
   const [profileImageUrl, setProfileImageUrl] = useState(user.profileImageUrl || '');
+  const [brandLogoUrl, setBrandLogoUrl] = useState(user.brandLogoUrl || '');
+  const [brandCompanyName, setBrandCompanyName] = useState(user.brandCompanyName || '');
+  const [brandTagline, setBrandTagline] = useState(user.brandTagline || '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -26,6 +29,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
   const [ticketMessage, setTicketMessage] = useState('');
   const [ticketPriority, setTicketPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [ticketLoading, setTicketLoading] = useState(false);
+  const canEditBrand = user.role === 'admin' || user.role === 'client_admin' || user.role === 'manager' || user.role === 'super_admin';
 
   const isStandalone = useMemo(() => {
     if (typeof window === 'undefined') return false;
@@ -113,11 +117,25 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
         phone: normalizedPhone,
         email: email.trim().toLowerCase(),
         profileImageUrl: profileImageUrl.trim(),
+        ...(canEditBrand
+          ? {
+              brandLogoUrl: brandLogoUrl.trim(),
+              brandCompanyName: brandCompanyName.trim(),
+              brandTagline: brandTagline.trim(),
+            }
+          : {}),
       });
       onUserUpdate?.({
         phone: normalizedPhone,
         email: email.trim().toLowerCase(),
         profileImageUrl: profileImageUrl.trim(),
+        ...(canEditBrand
+          ? {
+              brandLogoUrl: brandLogoUrl.trim(),
+              brandCompanyName: brandCompanyName.trim(),
+              brandTagline: brandTagline.trim(),
+            }
+          : {}),
       });
       setSuccess('Profile updated successfully.');
     } catch (err: any) {
@@ -277,6 +295,40 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
               className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
             />
           </div>
+          {canEditBrand && (
+            <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4 space-y-3">
+              <p className="text-sm font-bold text-blue-900">Self Brand</p>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Company Logo URL</label>
+                <input
+                  type="text"
+                  value={brandLogoUrl}
+                  onChange={(e) => setBrandLogoUrl(e.target.value)}
+                  placeholder="https://... or base64 data URL"
+                  className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Company Name</label>
+                <input
+                  type="text"
+                  value={brandCompanyName}
+                  onChange={(e) => setBrandCompanyName(e.target.value)}
+                  className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Footer / Tagline (optional)</label>
+                <input
+                  type="text"
+                  value={brandTagline}
+                  onChange={(e) => setBrandTagline(e.target.value)}
+                  className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <p className="text-xs text-blue-700">This branding is shown to you and all users assigned under you.</p>
+            </div>
+          )}
           <button type="submit" disabled={loading} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all disabled:opacity-60">
             {loading ? 'Saving...' : 'Save Profile'}
           </button>

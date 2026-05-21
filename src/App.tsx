@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, signInWithCustomToken, signOut } from 'firebase/auth';
-import { addDoc, collection, doc, getDoc, onSnapshot, orderBy, query, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { PlatformAnnouncement, User } from './types';
 import Login from './components/Login';
@@ -17,7 +17,7 @@ import ToolsPage, { ToolTarget } from './components/ToolsPage';
 import PublicHeroPage from './components/PublicHeroPage';
 import SuperAdminControlCenter from './components/SuperAdminControlCenter';
 import { functions } from './lib/firebase';
-import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck, CircleHelp, RefreshCcw, ChevronsUpDown } from 'lucide-react';
+import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 type AdminDashboardView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory';
@@ -40,10 +40,11 @@ export default function App() {
   const [dashboardBackSignal, setDashboardBackSignal] = useState(0);
   const [dashboardTarget, setDashboardTarget] = useState<DashboardTarget>(null);
   const [dashboardTargetSignal, setDashboardTargetSignal] = useState(0);
-  const [showAdminMenu, setShowAdminMenu] = useState(false);
-  const [showSupportModal, setShowSupportModal] = useState(false);
-  const [subscriptionExpiryText, setSubscriptionExpiryText] = useState<string>('N/A');
-  const [supportTicketForm, setSupportTicketForm] = useState({ subject: '', message: '', priority: 'medium' as 'low' | 'medium' | 'high' });
+  const [brand, setBrand] = useState<{ logoUrl: string; companyName: string; tagline: string }>({
+    logoUrl: '',
+    companyName: 'EstatePulse',
+    tagline: '',
+  });
   const [loading, setLoading] = useState(true);
   const [loginToastName, setLoginToastName] = useState<string | null>(null);
   const loginToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -151,29 +152,25 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    const loadSubscriptionExpiry = async () => {
-      if (!user || !(user as any).clientId) {
-        setSubscriptionExpiryText('N/A');
+    const loadBranding = async () => {
+      if (!user) {
+        setBrand({ logoUrl: '', companyName: 'EstatePulse', tagline: '' });
         return;
       }
+      const ownerUid = user.managerId || user.uid;
       try {
-        const clientDoc = await getDoc(doc(db, 'platformClients', String((user as any).clientId)));
-        if (!clientDoc.exists()) {
-          setSubscriptionExpiryText('N/A');
-          return;
-        }
-        const expiryRaw = (clientDoc.data() as any)?.subscriptionExpiryDate;
-        if (!expiryRaw) {
-          setSubscriptionExpiryText('N/A');
-          return;
-        }
-        const expiryDate = new Date(expiryRaw);
-        setSubscriptionExpiryText(Number.isNaN(expiryDate.getTime()) ? String(expiryRaw) : expiryDate.toLocaleDateString());
+        const ownerDoc = await getDoc(doc(db, 'users', ownerUid));
+        const ownerData = ownerDoc.exists() ? (ownerDoc.data() as any) : {};
+        setBrand({
+          logoUrl: ownerData?.brandLogoUrl || '',
+          companyName: ownerData?.brandCompanyName || (user as any).clientName || 'EstatePulse',
+          tagline: ownerData?.brandTagline || '',
+        });
       } catch {
-        setSubscriptionExpiryText('N/A');
+        setBrand({ logoUrl: '', companyName: (user as any).clientName || 'EstatePulse', tagline: '' });
       }
     };
-    void loadSubscriptionExpiry();
+    void loadBranding();
   }, [user]);
 
   useEffect(() => {
@@ -191,58 +188,6 @@ export default function App() {
     setDashboardTarget(null);
     localStorage.removeItem('super_admin_impersonation');
     setImpersonation(null);
-  };
-
-  const handleSelfResetPassword = async () => {
-    if (!functions) {
-      alert('Password reset service is unavailable right now.');
-      return;
-    }
-    const defaultPassword = (user.phone || '').replace(/\D/g, '');
-    const entered = prompt('Enter a new temporary password (min 8 chars):', defaultPassword);
-    if (entered === null) return;
-    const nextPassword = entered.trim();
-    if (nextPassword.length < 8) {
-      alert('Password must be at least 8 characters.');
-      return;
-    }
-    try {
-      const fn = httpsCallable(functions, 'resetUserPassword');
-      await fn({ targetUid: user.uid, targetPhone: defaultPassword, newPassword: nextPassword });
-      alert('Password reset successful.');
-      setShowAdminMenu(false);
-    } catch (error: any) {
-      alert(error?.message || 'Failed to reset password.');
-    }
-  };
-
-  const handleRaiseSupportTicket = async () => {
-    const subject = supportTicketForm.subject.trim();
-    const message = supportTicketForm.message.trim();
-    if (!subject || !message) {
-      alert('Subject and message are required.');
-      return;
-    }
-    try {
-      await addDoc(collection(db, 'supportTickets'), {
-        subject,
-        message,
-        priority: supportTicketForm.priority,
-        status: 'open',
-        userId: user.uid,
-        userName: user.name,
-        companyId: (user as any).clientId || null,
-        companyName: (user as any).clientName || null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      alert('Support ticket raised successfully.');
-      setSupportTicketForm({ subject: '', message: '', priority: 'medium' });
-      setShowSupportModal(false);
-      setShowAdminMenu(false);
-    } catch (error: any) {
-      alert(error?.message || 'Failed to raise support ticket.');
-    }
   };
 
   const handleBack = () => {
@@ -280,48 +225,21 @@ export default function App() {
 
   return (
     <div className={useFullHeightDashboardShell ? "h-screen bg-gray-50 flex flex-col overflow-y-auto overflow-x-hidden" : "min-h-screen bg-gray-50 flex flex-col"}>
-      {isAdminLikeUser && (
-        <div className="fixed right-4 top-4 z-[130]">
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setShowAdminMenu((prev) => !prev)}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 shadow-md"
-              title="Account menu"
-            >
-              {user.profileImageUrl ? (
-                <img src={user.profileImageUrl} alt={user.name} className="h-7 w-7 rounded-full object-cover" />
-              ) : (
-                <UserCircle2 className="w-5 h-5" />
-              )}
-              <span className="hidden sm:inline">{user.name}</span>
-              <ChevronsUpDown className="w-4 h-4 text-slate-500" />
-            </button>
-            {showAdminMenu && (
-              <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl">
-                <div className="px-3 py-2 border-b border-slate-100">
-                  <p className="text-sm font-black text-slate-800">{user.name}</p>
-                  <p className="text-xs font-medium text-slate-500">{user.phone}</p>
-                  <p className="mt-1 text-[10px] font-black uppercase tracking-widest text-slate-400">Subscription Expiry: {subscriptionExpiryText}</p>
-                </div>
-                <button onClick={() => { setActiveScreen('profile'); setShowAdminMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-slate-700 hover:bg-slate-50">Profile</button>
-                <button onClick={handleSelfResetPassword} className="w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-slate-700 hover:bg-slate-50">Reset Password</button>
-                <button onClick={() => { setActiveScreen('tools'); setShowAdminMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-slate-700 hover:bg-slate-50">Backup & Restore</button>
-                <button onClick={() => { setShowSupportModal(true); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-slate-700 hover:bg-slate-50">Help & Support (Raise Ticket)</button>
-                <button onClick={handleLogout} className="w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-rose-600 hover:bg-rose-50">Logout</button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
       {!useFullHeightDashboardShell && (
       <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-2">
-          <div className="bg-blue-600 p-2 rounded-lg">
-            <Home className="text-white w-5 h-5" />
+          <div className="bg-blue-600 p-2 rounded-lg w-9 h-9 flex items-center justify-center overflow-hidden">
+            {brand.logoUrl ? (
+              <img src={brand.logoUrl} alt="Brand" className="w-full h-full object-cover" />
+            ) : (
+              <Home className="text-white w-5 h-5" />
+            )}
           </div>
           <div>
-            <h1 className="font-bold text-lg text-gray-900 leading-none">EstatePulse</h1>
+            <h1 className="font-bold text-lg text-gray-900 leading-none">{brand.companyName || 'EstatePulse'}</h1>
+            {brand.tagline ? (
+              <p className="text-[10px] text-gray-500 leading-none mt-0.5">{brand.tagline}</p>
+            ) : null}
             <p className="text-xs text-gray-500 font-medium">{user.role.toUpperCase()}</p>
           </div>
         </div>
@@ -345,13 +263,6 @@ export default function App() {
             title="Tools"
           >
             <Wrench className="w-5 h-5" />
-          </button>
-          <button
-            onClick={() => setActiveScreen('profile')}
-            className="p-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
-            title="Profile"
-          >
-            <UserCircle2 className="w-5 h-5" />
           </button>
           <button 
             onClick={handleBack}
@@ -407,7 +318,7 @@ export default function App() {
         </div>
       )}
 
-      <main className={useFullHeightDashboardShell ? "flex-1 w-full p-0" : "flex-1 w-full max-w-7xl mx-auto p-4 md:p-6"}>
+      <main className={useFullHeightDashboardShell ? "flex-1 w-full p-0 pb-20" : "flex-1 w-full max-w-7xl mx-auto p-4 md:p-6 pb-24"}>
         <AnimatePresence mode="wait">
           <motion.div
             key={`${user.role}-${activeScreen}`}
@@ -463,6 +374,7 @@ export default function App() {
             ) : isAdminLikeUser ? (
               <AdminDashboard
                 user={user}
+                brand={brand}
                 backSignal={dashboardBackSignal}
                 initialView={isAdminView(dashboardTarget) ? dashboardTarget : undefined}
                 initialViewSignal={dashboardTargetSignal}
@@ -470,6 +382,7 @@ export default function App() {
             ) : (
               <EmployeeDashboard
                 user={user}
+                brand={brand}
                 backSignal={dashboardBackSignal}
                 initialView={isEmployeeView(dashboardTarget) ? dashboardTarget : undefined}
                 initialViewSignal={dashboardTargetSignal}
@@ -501,42 +414,32 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {showSupportModal && (
-        <div className="fixed inset-0 z-[140] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
-            <h3 className="text-lg font-black text-slate-900">Raise Support Ticket</h3>
-            <p className="mt-1 text-xs font-medium text-slate-500">Share issue details and our support team will follow up.</p>
-            <div className="mt-4 space-y-3">
-              <input
-                value={supportTicketForm.subject}
-                onChange={(e) => setSupportTicketForm((prev) => ({ ...prev, subject: e.target.value }))}
-                placeholder="Subject"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium"
-              />
-              <select
-                value={supportTicketForm.priority}
-                onChange={(e) => setSupportTicketForm((prev) => ({ ...prev, priority: e.target.value as 'low' | 'medium' | 'high' }))}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium"
-              >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-              <textarea
-                value={supportTicketForm.message}
-                onChange={(e) => setSupportTicketForm((prev) => ({ ...prev, message: e.target.value }))}
-                placeholder="Describe the issue"
-                rows={4}
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium"
-              />
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setShowSupportModal(false)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600">Cancel</button>
-              <button onClick={handleRaiseSupportTicket} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Submit Ticket</button>
-            </div>
-          </div>
+      <nav className="fixed inset-x-0 bottom-0 z-[130] border-t border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-around px-2">
+          <button onClick={() => setActiveScreen('dashboard')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
+            <Home className="h-5 w-5" />
+            <span>Home</span>
+          </button>
+          <button onClick={() => setActiveScreen('profile')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
+            <UserCircle2 className="h-5 w-5" />
+            <span>Profile</span>
+          </button>
+          <button onClick={() => setActiveScreen('tools')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
+            <Wrench className="h-5 w-5" />
+            <span>Tools</span>
+          </button>
+          {isSuperAdmin && (
+            <button onClick={() => setActiveScreen('platform')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
+              <ShieldCheck className="h-5 w-5" />
+              <span>Platform</span>
+            </button>
+          )}
+          <button onClick={handleLogout} className="flex flex-col items-center justify-center text-[11px] font-semibold text-rose-600">
+            <LogOut className="h-5 w-5" />
+            <span>Logout</span>
+          </button>
         </div>
-      )}
+      </nav>
     </div>
   );
 }
