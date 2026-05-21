@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, signInWithCustomToken, signOut } from 'firebase/auth';
-import { doc, getDoc, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { PlatformAnnouncement, User } from './types';
 import Login from './components/Login';
@@ -224,7 +224,7 @@ export default function App() {
   }
 
   return (
-    <div className={useFullHeightDashboardShell ? "h-screen bg-gray-50 flex flex-col overflow-y-auto overflow-x-hidden" : "min-h-screen bg-gray-50 flex flex-col"}>
+    <div className={useFullHeightDashboardShell ? "h-screen bg-gray-50 flex flex-col overflow-hidden" : "min-h-screen bg-gray-50 flex flex-col"}>
       {!useFullHeightDashboardShell && (
       <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-2">
@@ -318,7 +318,7 @@ export default function App() {
         </div>
       )}
 
-      <main className={useFullHeightDashboardShell ? "flex-1 w-full p-0 pb-20" : "flex-1 w-full max-w-7xl mx-auto p-4 md:p-6 pb-24"}>
+      <main className={useFullHeightDashboardShell ? "flex-1 w-full p-0 pb-20 overflow-y-auto overflow-x-hidden" : "flex-1 w-full max-w-7xl mx-auto p-4 md:p-6 pb-24"}>
         <AnimatePresence mode="wait">
           <motion.div
             key={`${user.role}-${activeScreen}`}
