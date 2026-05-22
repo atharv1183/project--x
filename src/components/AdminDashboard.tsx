@@ -1663,7 +1663,7 @@ export default function AdminDashboard({
     setLoading(true);
     let provisionApp: ReturnType<typeof initializeApp> | null = null;
     let provisionAuth: ReturnType<typeof getAuth> | null = null;
-    let provisionedUser: { delete: () => Promise<void> } | null = null;
+    let provisionedUser: { uid: string; delete: () => Promise<void> } | null = null;
     try {
       const existingUsersSnapshot = await getDocs(query(collection(db, 'users'), where('phone', '==', normalizedPhone), limit(1)));
       if (!existingUsersSnapshot.empty) {

@@ -13,6 +13,7 @@ export type ToolTarget =
   | 'attendance'
   | 'requirements'
   | 'inventory'
+  | 'activity_logs'
   | 'pending'
   | 'today'
   | 'upcoming';

@@ -14,8 +14,7 @@ import {
   serverTimestamp,
   orderBy,
   Timestamp,
-  deleteField,
-  doc
+  deleteField
 } from 'firebase/firestore';
 import { Lead, User, Followup, Attendance, AttendanceCorrectionRequest, Notification, OperationType, Location, Requirement, LeadTransfer, AuditLogEntry } from '../types';
 import { handleFirestoreError } from '../lib/utils';
