@@ -1,14 +1,44 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { auth, db } from '../lib/firebase';
 import { EmailAuthProvider, reauthenticateWithCredential, updateEmail, updatePassword } from 'firebase/auth';
-import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { User } from '../types';
 import { ArrowLeft, Camera, Lock, Mail, Phone, Shield, UserCircle2 } from 'lucide-react';
+import { addAuditLog } from '../lib/audit';
 
 interface ProfilePageProps {
   user: User;
   onClose: () => void;
   onUserUpdate?: (patch: Partial<User>) => void;
+}
+
+type SupportTicketItem = {
+  id: string;
+  subject: string;
+  message: string;
+  priority: 'low' | 'medium' | 'high';
+  status: string;
+  userId: string;
+  userName?: string;
+  userRole?: string;
+  companyId?: string | null;
+  companyName?: string | null;
+  createdAt?: any;
+  updatedAt?: any;
+};
+
+function toMillis(value: unknown): number {
+  if (!value) return 0;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? 0 : value.getTime();
+  if (typeof value === 'object' && value !== null) {
+    const maybeTimestamp = value as { toDate?: () => Date; seconds?: number };
+    if (typeof maybeTimestamp.toDate === 'function') {
+      const parsed = maybeTimestamp.toDate();
+      return parsed instanceof Date && !Number.isNaN(parsed.getTime()) ? parsed.getTime() : 0;
+    }
+    if (typeof maybeTimestamp.seconds === 'number') return maybeTimestamp.seconds * 1000;
+  }
+  return 0;
 }
 
 export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePageProps) {
@@ -29,7 +59,13 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
   const [ticketMessage, setTicketMessage] = useState('');
   const [ticketPriority, setTicketPriority] = useState<'low' | 'medium' | 'high'>('medium');
   const [ticketLoading, setTicketLoading] = useState(false);
+  const [supportTab, setSupportTab] = useState<'help' | 'tickets'>('help');
+  const [showRaiseTicketForm, setShowRaiseTicketForm] = useState(false);
+  const [myTickets, setMyTickets] = useState<SupportTicketItem[]>([]);
+  const [ticketsLoading, setTicketsLoading] = useState(true);
+  const [selectedTicketId, setSelectedTicketId] = useState<string>('');
   const canEditBrand = user.role === 'admin' || user.role === 'client_admin' || user.role === 'manager' || user.role === 'super_admin';
+  const isCompanyAdminLike = user.role === 'admin' || user.role === 'client_admin' || user.role === 'manager';
 
   const isStandalone = useMemo(() => {
     if (typeof window === 'undefined') return false;
@@ -54,6 +90,29 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
     window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
     return () => window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
   }, []);
+
+  useEffect(() => {
+    setTicketsLoading(true);
+    const companyId = (user as any).clientId ? String((user as any).clientId) : '';
+    const ticketQuery = isCompanyAdminLike && companyId
+      ? query(collection(db, 'supportTickets'), where('companyId', '==', companyId))
+      : query(collection(db, 'supportTickets'), where('userId', '==', user.uid));
+
+    const unsubscribe = onSnapshot(
+      ticketQuery,
+      (snapshot) => {
+        const nextTickets = snapshot.docs
+          .map((item) => ({ id: item.id, ...item.data() } as SupportTicketItem))
+          .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+        setMyTickets(nextTickets);
+        setSelectedTicketId((prev) => prev || nextTickets[0]?.id || '');
+        setTicketsLoading(false);
+      },
+      () => setTicketsLoading(false)
+    );
+
+    return () => unsubscribe();
+  }, [isCompanyAdminLike, user]);
 
   const handleInstallApp = async () => {
     if (!installPromptEvent) return;
@@ -137,6 +196,23 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
             }
           : {}),
       });
+      await addAuditLog(db, {
+        action: 'profile_modified',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'user',
+        targetId: user.uid,
+        description: 'Profile details updated',
+        newValue: {
+          phone: normalizedPhone,
+          email: email.trim().toLowerCase(),
+          profileImageUrl: profileImageUrl.trim(),
+          brandLogoUrl: canEditBrand ? brandLogoUrl.trim() : undefined,
+          brandCompanyName: canEditBrand ? brandCompanyName.trim() : undefined,
+          brandTagline: canEditBrand ? brandTagline.trim() : undefined,
+        },
+      });
       setSuccess('Profile updated successfully.');
     } catch (err: any) {
       if (err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-credential') {
@@ -183,6 +259,15 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
       const credential = EmailAuthProvider.credential(email, currentPassword);
       await reauthenticateWithCredential(currentUser, credential);
       await updatePassword(currentUser, newPassword);
+      await addAuditLog(db, {
+        action: 'password_modified',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'user',
+        targetId: user.uid,
+        description: 'Password changed from profile',
+      });
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
@@ -229,12 +314,16 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
       setTicketMessage('');
       setTicketPriority('medium');
       setSuccess('Support ticket raised successfully.');
+      setShowRaiseTicketForm(false);
+      setSupportTab('tickets');
     } catch (err: any) {
       setError(err?.message || 'Failed to raise support ticket.');
     } finally {
       setTicketLoading(false);
     }
   };
+
+  const selectedTicket = myTickets.find((ticket) => ticket.id === selectedTicketId) || null;
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -489,50 +578,129 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
 
       <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
         <h3 className="text-xl font-bold text-gray-900">Help & Support</h3>
-        <p className="mt-1 text-sm text-gray-500">Facing an issue? Raise a ticket and our team will respond.</p>
-        <form onSubmit={handleRaiseTicket} className="mt-4 space-y-4">
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Subject</label>
-            <input
-              type="text"
-              value={ticketSubject}
-              onChange={(e) => setTicketSubject(e.target.value)}
-              placeholder="Brief issue title"
-              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Priority</label>
-            <select
-              value={ticketPriority}
-              onChange={(e) => setTicketPriority(e.target.value as 'low' | 'medium' | 'high')}
-              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+        <p className="mt-1 text-sm text-gray-500">Raise and track support requests for your account.</p>
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <div className="inline-flex rounded-xl border border-gray-200 bg-gray-50 p-1">
+            <button
+              type="button"
+              onClick={() => setSupportTab('help')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold ${supportTab === 'help' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600'}`}
             >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Message</label>
-            <textarea
-              value={ticketMessage}
-              onChange={(e) => setTicketMessage(e.target.value)}
-              rows={4}
-              placeholder="Describe the issue in detail"
-              className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none resize-none"
-              required
-            />
+              Help
+            </button>
+            <button
+              type="button"
+              onClick={() => setSupportTab('tickets')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold ${supportTab === 'tickets' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600'}`}
+            >
+              My Tickets
+            </button>
           </div>
           <button
-            type="submit"
-            disabled={ticketLoading}
-            className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all disabled:opacity-60"
+            type="button"
+            onClick={() => {
+              setSupportTab('help');
+              setShowRaiseTicketForm((prev) => !prev);
+            }}
+            className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold shadow-lg shadow-blue-200"
           >
-            {ticketLoading ? 'Submitting Ticket...' : 'Raise Ticket'}
+            {showRaiseTicketForm ? 'Close Form' : 'Raise Ticket'}
           </button>
-        </form>
+        </div>
+
+        {supportTab === 'help' && (
+          <div className="mt-4 space-y-4">
+            <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-4 text-sm text-blue-900">
+              Share exact issue details, affected page, and expected outcome for faster resolution.
+            </div>
+            {showRaiseTicketForm && (
+              <form onSubmit={handleRaiseTicket} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Subject</label>
+                  <input
+                    type="text"
+                    value={ticketSubject}
+                    onChange={(e) => setTicketSubject(e.target.value)}
+                    placeholder="Brief issue title"
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Priority</label>
+                  <select
+                    value={ticketPriority}
+                    onChange={(e) => setTicketPriority(e.target.value as 'low' | 'medium' | 'high')}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Message</label>
+                  <textarea
+                    value={ticketMessage}
+                    onChange={(e) => setTicketMessage(e.target.value)}
+                    rows={4}
+                    placeholder="Describe the issue in detail"
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={ticketLoading}
+                  className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all disabled:opacity-60"
+                >
+                  {ticketLoading ? 'Submitting Ticket...' : 'Raise Ticket'}
+                </button>
+              </form>
+            )}
+          </div>
+        )}
+
+        {supportTab === 'tickets' && (
+          <div className="mt-4 space-y-4">
+            {ticketsLoading ? (
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-sm text-gray-600">Loading tickets...</div>
+            ) : myTickets.length === 0 ? (
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-sm text-gray-600">
+                No tickets found. Use the Raise Ticket button to create your first request.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {myTickets.map((ticket) => (
+                  <button
+                    key={ticket.id}
+                    type="button"
+                    onClick={() => setSelectedTicketId(ticket.id)}
+                    className={`w-full text-left rounded-2xl border p-3 transition ${selectedTicketId === ticket.id ? 'border-blue-300 bg-blue-50/50' : 'border-gray-100 bg-white hover:bg-gray-50'}`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-gray-900">{ticket.subject}</p>
+                      <span className={`text-[11px] font-bold px-2 py-1 rounded-full ${String(ticket.status || 'open').toLowerCase() === 'closed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {String(ticket.status || 'open').replace('_', ' ')}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">#{ticket.id.slice(0, 8)} · Priority: {(ticket.priority || 'medium').toUpperCase()}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {selectedTicket && (
+              <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                <p className="text-sm font-bold text-gray-900">{selectedTicket.subject}</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Ticket ID: {selectedTicket.id} · Created: {toMillis(selectedTicket.createdAt) ? new Date(toMillis(selectedTicket.createdAt)).toLocaleString() : 'N/A'}
+                </p>
+                <p className="mt-3 text-sm text-gray-700 whitespace-pre-wrap">{selectedTicket.message || 'No description provided.'}</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

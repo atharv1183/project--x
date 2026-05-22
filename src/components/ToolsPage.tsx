@@ -63,6 +63,23 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
   const leadsImportInputRef = useRef<HTMLInputElement | null>(null);
   const inventoryImportInputRef = useRef<HTMLInputElement | null>(null);
   const [dataToolsBusy, setDataToolsBusy] = useState<string | null>(null);
+  const [backupHistory, setBackupHistory] = useState<Array<{ at: string; action: string; collection: string; count?: number; file?: string }>>(() => {
+    try {
+      const ownerId = user.managerId || user.uid;
+      const raw = localStorage.getItem(`estatepulse_backup_history_${ownerId}`);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const pushBackupHistory = (entry: { action: string; collection: string; count?: number; file?: string }) => {
+    const ownerId = user.managerId || user.uid;
+    const next = [{ at: new Date().toISOString(), ...entry }, ...backupHistory].slice(0, 300);
+    setBackupHistory(next);
+    localStorage.setItem(`estatepulse_backup_history_${ownerId}`, JSON.stringify(next));
+  };
 
   const serializeFirestoreValue = (value: any): any => {
     if (value instanceof Timestamp) {
@@ -133,6 +150,7 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
         `leads-export-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
         { collection: 'leads', exportedAt: new Date().toISOString(), records }
       );
+      pushBackupHistory({ action: 'export', collection: 'leads', count: records.length });
       alert(`Exported ${records.length} leads successfully.`);
     } catch (error) {
       alert(handleFirestoreError(error, OperationType.GET, 'leads'));
@@ -153,6 +171,7 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
         `inventory-export-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
         { collection: 'inventory', exportedAt: new Date().toISOString(), records }
       );
+      pushBackupHistory({ action: 'export', collection: 'inventory', count: records.length });
       alert(`Exported ${records.length} inventory items successfully.`);
     } catch (error) {
       alert(handleFirestoreError(error, OperationType.GET, 'inventory'));
@@ -216,6 +235,7 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
       }
 
       const importedCount = await commitBatchedWrites(targetCollection, records);
+      pushBackupHistory({ action: 'import', collection: targetCollection, count: importedCount, file: file.name });
       alert(`Imported ${importedCount} ${targetCollection} records successfully.`);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Import failed. Please verify the JSON file format.');
@@ -253,6 +273,7 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
         await batch.commit();
       }
       alert(`Cleared inventory database. Deleted ${deletedCount} documents.`);
+      pushBackupHistory({ action: 'clear_all', collection: 'inventory', count: deletedCount });
     } catch (error) {
       alert(handleFirestoreError(error, OperationType.DELETE, 'inventory'));
     } finally {
@@ -284,6 +305,7 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
       }
 
       alert(`Cleared leads database. Deleted ${deletedLeads} leads (with their follow-ups).`);
+      pushBackupHistory({ action: 'clear_all', collection: 'leads', count: deletedLeads });
     } catch (error) {
       alert(handleFirestoreError(error, OperationType.DELETE, 'leads'));
     } finally {
@@ -416,6 +438,40 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
               Processing: {dataToolsBusy.replace('_', ' ')}
             </p>
           )}
+        </div>
+      )}
+      {isSuperAdmin && (
+        <div className="bg-white border border-gray-100 rounded-3xl p-5 sm:p-6 shadow-sm">
+          <h3 className="text-sm font-black text-gray-900 uppercase tracking-wider mb-3">Backup & Restore History</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100">
+                  <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-500">When</th>
+                  <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-500">Action</th>
+                  <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-500">Collection</th>
+                  <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-500">Rows</th>
+                  <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-500">File</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {backupHistory.map((item, idx) => (
+                  <tr key={`${item.at}-${idx}`}>
+                    <td className="px-4 py-3 text-xs font-semibold text-gray-700">{new Date(item.at).toLocaleString()}</td>
+                    <td className="px-4 py-3 text-xs font-bold text-gray-700 uppercase">{item.action.replace('_', ' ')}</td>
+                    <td className="px-4 py-3 text-xs font-semibold text-gray-700">{item.collection}</td>
+                    <td className="px-4 py-3 text-xs font-semibold text-gray-700">{item.count ?? '-'}</td>
+                    <td className="px-4 py-3 text-xs font-semibold text-gray-700">{item.file || '-'}</td>
+                  </tr>
+                ))}
+                {backupHistory.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-500">No backup/restore history yet.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

@@ -20,11 +20,14 @@ import {
   writeBatch,
   Timestamp
 } from 'firebase/firestore';
-import { Lead, User, LeadStatus, OperationType, Requirement, Attendance, AttendanceCorrectionRequest, Broker, LeadTransfer } from '../types';
+import { Lead, User, LeadStatus, OperationType, Requirement, Attendance, AttendanceCorrectionRequest, Broker, LeadTransfer, AuditLogEntry } from '../types';
 import { handleFirestoreError } from '../lib/utils';
+import { addAuditLog } from '../lib/audit';
 import InventoryManagement from './InventoryManagement';
 import SalesPerformanceDashboard from './SalesPerformanceDashboard';
 import MonthlyAttendanceReport from './MonthlyAttendanceReport';
+import ActivityLogsTable from './ActivityLogsTable';
+import NotificationSettingsPanel from './NotificationSettingsPanel';
 import { 
   BarChart3,
   Users, 
@@ -53,7 +56,8 @@ import {
   LayoutGrid,
   Download,
   Upload,
-  Database
+  Database,
+  Bell
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -67,7 +71,7 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-type AdminView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'brokers' | 'transfer_register';
+type AdminView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'brokers' | 'transfer_register' | 'notification_center' | 'activity_logs';
 
 type AdminDashboardProps = {
   user: User;
@@ -174,7 +178,16 @@ export default function AdminDashboard({
     role: 'employee' as 'employee' | 'manager',
     managerId: isManager ? user.uid : '',
   });
-  const [brokerForm, setBrokerForm] = useState({ name: '', phone: '', email: '', company: '' });
+  const [brokerForm, setBrokerForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    company: '',
+    state: '',
+    city: '',
+    locality: '',
+    specializations: [] as string[],
+  });
   const [editingBrokerId, setEditingBrokerId] = useState<string | null>(null);
   const [editingRequirementId, setEditingRequirementId] = useState<string | null>(null);
   const [reqForm, setReqForm] = useState({
@@ -185,17 +198,14 @@ export default function AdminDashboard({
     budget: '',
     location: '',
     remark: '',
-    brokerState: '',
-    brokerCity: '',
-    brokerLocality: '',
-    specializations: [] as string[],
   });
   const [reqSearch, setReqSearch] = useState('');
-  const [reqStateFilter, setReqStateFilter] = useState('');
-  const [reqCityFilter, setReqCityFilter] = useState('');
-  const [reqSpecializationFilter, setReqSpecializationFilter] = useState('');
-  const [specializationOptions, setSpecializationOptions] = useState<string[]>(DEFAULT_SPECIALIZATIONS);
-  const [newSpecialization, setNewSpecialization] = useState('');
+  const [brokerSearch, setBrokerSearch] = useState('');
+  const [brokerStateFilter, setBrokerStateFilter] = useState('');
+  const [brokerCityFilter, setBrokerCityFilter] = useState('');
+  const [brokerSpecializationFilter, setBrokerSpecializationFilter] = useState('');
+  const [brokerSpecializationOptions, setBrokerSpecializationOptions] = useState<string[]>(DEFAULT_SPECIALIZATIONS);
+  const [newBrokerSpecialization, setNewBrokerSpecialization] = useState('');
   const [loading, setLoading] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferSearch, setTransferSearch] = useState('');
@@ -218,6 +228,18 @@ export default function AdminDashboard({
   const [canScrollTabsLeft, setCanScrollTabsLeft] = useState(false);
   const [canScrollTabsRight, setCanScrollTabsRight] = useState(false);
   const [dataToolsBusy, setDataToolsBusy] = useState<string | null>(null);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [notificationSettings, setNotificationSettings] = useState<{
+    officeStart: string;
+    officeEnd: string;
+    reminderIntervalValue: number;
+    reminderIntervalUnit: 'minutes' | 'hours';
+  }>({
+    officeStart: '09:00',
+    officeEnd: '20:00',
+    reminderIntervalValue: 1,
+    reminderIntervalUnit: 'hours',
+  });
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const managerScopeUserIdsRef = useRef<Set<string>>(new Set([user.uid]));
   const rawLeadsRef = useRef<Lead[]>([]);
@@ -610,6 +632,17 @@ export default function AdminDashboard({
         transferredByRole: user.role,
         createdAt: serverTimestamp(),
       });
+      await addAuditLog(db, {
+        action: 'lead_transferred',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: selectedLead.id,
+        description: `Lead transferred from ${employees.find(e => e.uid === selectedLead.assignedTo)?.name || 'Unknown'} to ${targetEmployee.name}`,
+        oldValue: { assignedTo: selectedLead.assignedTo },
+        newValue: { assignedTo: targetEmployee.uid },
+      });
 
       // Notify new assignee
       await addDoc(collection(db, 'notifications'), {
@@ -659,6 +692,17 @@ export default function AdminDashboard({
       }
 
       await updateDoc(leadRef, updateData);
+      await addAuditLog(db, {
+        action: status === 'deal_pending' ? 'lead_sent_for_approval' : 'lead_followup_updated',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: selectedLead.id,
+        description: `Lead "${selectedLead.name}" updated to ${status}`,
+        oldValue: { status: selectedLead.status, lastRemark: selectedLead.lastRemark || null },
+        newValue: { status, lastRemark: interactionRemark, nextFollowupDate: nextFollowupDate || null },
+      });
 
       await addDoc(collection(db, 'leads', selectedLead.id, 'followups'), {
         date: serverTimestamp(),
@@ -811,6 +855,37 @@ export default function AdminDashboard({
   }, [isSuperAdmin]);
 
   useEffect(() => {
+    const qLogs = query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(2000));
+    const unsubscribe = onSnapshot(qLogs, (snapshot) => {
+      const allLogs = snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as AuditLogEntry));
+      if (!isManager) {
+        setAuditLogs(allLogs);
+        return;
+      }
+      const scopeIds = managerScopeUserIdsRef.current;
+      setAuditLogs(allLogs.filter((entry) => scopeIds.has(entry.actorId)));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'auditLogs'));
+    return () => unsubscribe();
+  }, [isManager]);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    const ownerId = user.managerId || user.uid;
+    const settingsRef = doc(db, 'notificationSettings', ownerId);
+    const unsubscribe = onSnapshot(settingsRef, (snapshot) => {
+      const data = snapshot.data() as Partial<typeof notificationSettings> | undefined;
+      if (!data) return;
+      setNotificationSettings((prev) => ({
+        officeStart: data.officeStart || prev.officeStart,
+        officeEnd: data.officeEnd || prev.officeEnd,
+        reminderIntervalValue: typeof data.reminderIntervalValue === 'number' ? data.reminderIntervalValue : prev.reminderIntervalValue,
+        reminderIntervalUnit: data.reminderIntervalUnit === 'minutes' ? 'minutes' : (data.reminderIntervalUnit === 'hours' ? 'hours' : prev.reminderIntervalUnit),
+      }));
+    }, (error) => handleFirestoreError(error, OperationType.GET, `notificationSettings/${ownerId}`));
+    return () => unsubscribe();
+  }, [isSuperAdmin, user.managerId, user.uid]);
+
+  useEffect(() => {
     return () => {
       if (saveToastTimerRef.current) {
         clearTimeout(saveToastTimerRef.current);
@@ -898,7 +973,18 @@ export default function AdminDashboard({
   const deleteRequirement = async (reqId: string) => {
     if (!confirm('Are you sure you want to delete this requirement?')) return;
     try {
+      const existing = requirements.find((req) => req.id === reqId);
       await deleteDoc(doc(db, 'requirements', reqId));
+      await addAuditLog(db, {
+        action: 'requirement_deleted',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'requirement',
+        targetId: reqId,
+        description: `Requirement deleted${existing?.name ? ` (${existing.name})` : ''}`,
+        oldValue: existing || null,
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `requirements/${reqId}`);
     }
@@ -907,6 +993,7 @@ export default function AdminDashboard({
   type LeadFilter = LeadStatus | 'total' | 'overdue' | 'today' | 'site_visits';
   const [filter, setFilter] = useState<LeadFilter>('total');
   const [leadSearchQuery, setLeadSearchQuery] = useState('');
+  const [assignedUserFilter, setAssignedUserFilter] = useState('');
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<Partial<Lead>>({});
@@ -939,6 +1026,17 @@ export default function AdminDashboard({
         });
         batch.delete(doc(db, 'employeeDirectory', showEditEmployee.uid));
         await batch.commit();
+        await addAuditLog(db, {
+          action: 'employee_removed',
+          actorId: user.uid,
+          actorName: user.name,
+          actorRole: user.role,
+          targetType: 'user',
+          targetId: showEditEmployee.uid,
+          description: `Employee removed: ${showEditEmployee.name}`,
+          oldValue: currentUser || null,
+          newValue: { role: 'deleted' },
+        });
         setShowEditEmployee(null);
         return;
       }
@@ -966,6 +1064,23 @@ export default function AdminDashboard({
       } else {
         await deleteDoc(doc(db, 'employeeDirectory', showEditEmployee.uid));
       }
+      await addAuditLog(db, {
+        action: 'employee_modified',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'user',
+        targetId: showEditEmployee.uid,
+        description: `Employee updated: ${showEditEmployee.name}`,
+        oldValue: currentUser || null,
+        newValue: {
+          name: showEditEmployee.name,
+          phone: showEditEmployee.phone,
+          role: showEditEmployee.role,
+          managerId: selectedManager?.uid || null,
+          managerName: selectedManager?.name || null,
+        },
+      });
 
       setShowEditEmployee(null);
     } catch (error) {
@@ -1047,6 +1162,7 @@ export default function AdminDashboard({
 
   const adminLeadSearchTerm = leadSearchQuery.trim().toLowerCase();
   const filteredLeads = statusFilteredLeads.filter((l) => {
+    if (assignedUserFilter && l.assignedTo !== assignedUserFilter) return false;
     if (!adminLeadSearchTerm) return true;
     const assignedName = employees.find(e => e.uid === l.assignedTo)?.name || '';
     const searchableText = [
@@ -1125,29 +1241,28 @@ export default function AdminDashboard({
     const q = reqSearch.trim().toLowerCase();
     return sortedRequirements.filter((req) => {
       const matchesSearch = !q || [
-        req.name, req.phone, req.type, req.location, req.brokerState, req.brokerCity, req.brokerLocality, ...(req.specializations || [])
+        req.name, req.phone, req.type, req.location, req.area, req.budget, req.employeeName
       ].filter(Boolean).join(' ').toLowerCase().includes(q);
-      const matchesState = !reqStateFilter || req.brokerState === reqStateFilter;
-      const matchesCity = !reqCityFilter || req.brokerCity === reqCityFilter;
-      const matchesSpec = !reqSpecializationFilter || (req.specializations || []).includes(reqSpecializationFilter);
-      return matchesSearch && matchesState && matchesCity && matchesSpec;
+      return matchesSearch;
     });
-  }, [sortedRequirements, reqSearch, reqStateFilter, reqCityFilter, reqSpecializationFilter]);
+  }, [sortedRequirements, reqSearch]);
 
   useEffect(() => {
     const ownerId = user.managerId || user.uid;
-    const raw = localStorage.getItem(`estatepulse_requirement_specializations_${ownerId}`);
+    const raw = localStorage.getItem(`estatepulse_broker_specializations_${ownerId}`);
     if (!raw) return;
     try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setSpecializationOptions(Array.from(new Set([...DEFAULT_SPECIALIZATIONS, ...parsed.map(String)])));
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        setBrokerSpecializationOptions(Array.from(new Set([...DEFAULT_SPECIALIZATIONS, ...parsed.map(String)])));
+      }
     } catch {}
   }, [user.managerId, user.uid]);
 
   useEffect(() => {
     const ownerId = user.managerId || user.uid;
-    localStorage.setItem(`estatepulse_requirement_specializations_${ownerId}`, JSON.stringify(specializationOptions));
-  }, [specializationOptions, user.managerId, user.uid]);
+    localStorage.setItem(`estatepulse_broker_specializations_${ownerId}`, JSON.stringify(brokerSpecializationOptions));
+  }, [brokerSpecializationOptions, user.managerId, user.uid]);
 
   const sortedLeadTransfers = useMemo(() => {
     const list = [...leadTransfers];
@@ -1172,6 +1287,14 @@ export default function AdminDashboard({
     return list;
   }, [leadTransfers, transferTableSort]);
 
+  const filteredLeadTransfers = useMemo(() => {
+    const q = transferSearch.trim().toLowerCase();
+    if (!q) return sortedLeadTransfers;
+    return sortedLeadTransfers.filter((entry) => [
+      entry.leadName, entry.leadId, entry.fromName, entry.toName, entry.transferredByName
+    ].filter(Boolean).join(' ').toLowerCase().includes(q));
+  }, [sortedLeadTransfers, transferSearch]);
+
   const sortedBrokers = useMemo(() => {
     const list = [...brokers];
     list.sort((a, b) => {
@@ -1182,6 +1305,19 @@ export default function AdminDashboard({
     });
     return list;
   }, [brokers, brokerTableSort]);
+
+  const filteredBrokers = useMemo(() => {
+    const q = brokerSearch.trim().toLowerCase();
+    return sortedBrokers.filter((broker) => {
+      const matchesSearch = !q || [
+        broker.name, broker.phone, broker.company, broker.email, broker.state, broker.city, broker.locality, ...(broker.specializations || [])
+      ].filter(Boolean).join(' ').toLowerCase().includes(q);
+      const matchesState = !brokerStateFilter || broker.state === brokerStateFilter;
+      const matchesCity = !brokerCityFilter || broker.city === brokerCityFilter;
+      const matchesSpec = !brokerSpecializationFilter || (broker.specializations || []).includes(brokerSpecializationFilter);
+      return matchesSearch && matchesState && matchesCity && matchesSpec;
+    });
+  }, [sortedBrokers, brokerSearch, brokerStateFilter, brokerCityFilter, brokerSpecializationFilter]);
 
   const managerLastAttendance = useMemo(() => {
     if (!isManager) return null;
@@ -1210,6 +1346,16 @@ export default function AdminDashboard({
         type,
         location: { latitude, longitude },
       });
+      await addAuditLog(db, {
+        action: 'attendance_marked',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'attendance',
+        targetId: user.uid,
+        description: `Attendance ${type} marked`,
+        newValue: { type, latitude, longitude },
+      });
     } catch (error) {
       alert('Error fetching location or saving attendance. Please ensure GPS is enabled.');
     } finally {
@@ -1226,10 +1372,6 @@ export default function AdminDashboard({
       budget: req.budget || '',
       location: req.location || '',
       remark: req.remark || '',
-      brokerState: req.brokerState || '',
-      brokerCity: req.brokerCity || '',
-      brokerLocality: req.brokerLocality || '',
-      specializations: req.specializations || [],
     });
     setEditingRequirementId(req.id);
     setShowReqModal(true);
@@ -1247,6 +1389,16 @@ export default function AdminDashboard({
         ...reqForm,
         phone: normalizedPhone,
         updatedAt: serverTimestamp(),
+      });
+      await addAuditLog(db, {
+        action: 'requirement_updated',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'requirement',
+        targetId: editingRequirementId,
+        description: `Requirement updated for ${reqForm.name}`,
+        newValue: { ...reqForm, phone: normalizedPhone },
       });
       setShowReqModal(false);
       setEditingRequirementId(null);
@@ -1299,6 +1451,17 @@ export default function AdminDashboard({
         reviewedBy: user.name,
         reviewedAt: serverTimestamp(),
       });
+      await addAuditLog(db, {
+        action: 'attendance_correction_reviewed',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'attendanceCorrection',
+        targetId: request.id,
+        description: `Attendance correction ${status}`,
+        oldValue: { status: request.status },
+        newValue: { status },
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `attendanceCorrections/${request.id}`);
     }
@@ -1322,6 +1485,16 @@ export default function AdminDashboard({
       });
       batch.delete(doc(db, 'employeeDirectory', empId));
       await batch.commit();
+      await addAuditLog(db, {
+        action: 'employee_removed',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'user',
+        targetId: empId,
+        description: `Employee removed${emp?.name ? ` (${emp.name})` : ''}`,
+        oldValue: emp || null,
+      });
     } catch (error) {
        handleFirestoreError(error, OperationType.DELETE, `users/${empId}`);
     }
@@ -1341,6 +1514,15 @@ export default function AdminDashboard({
     try {
       const fn = httpsCallable(functions, 'resetUserPassword');
       await fn({ targetUid: emp.uid, targetPhone: suggested, newPassword: nextPassword });
+      await addAuditLog(db, {
+        action: 'password_modified',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'user',
+        targetId: emp.uid,
+        description: `Password reset for ${emp.name}`,
+      });
       alert(`Password reset successful.\nTemporary password: ${nextPassword}`);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${emp.uid}/password-reset`);
@@ -1373,6 +1555,9 @@ export default function AdminDashboard({
 
     try {
       const assignableMembers = leadAssignableMembers;
+      let assignedEmployee: User | null = null;
+      let createdLeadId = '';
+      const leadName = leadForm.name || 'Anonymous';
       if (assignableMembers.length === 0) {
         throw new Error('No active employees available for allocation. Add or activate an employee first.');
       }
@@ -1382,13 +1567,13 @@ export default function AdminDashboard({
           throw new Error('Select an active employee for manual allocation.');
         }
 
-        const assignedEmployee = assignableMembers.find(e => e.uid === manualLeadAssigneeId);
+        assignedEmployee = assignableMembers.find(e => e.uid === manualLeadAssigneeId) || null;
         if (!assignedEmployee) {
           throw new Error('Selected employee is not active. Please choose another employee.');
         }
 
-        await addDoc(collection(db, 'leads'), {
-          name: leadForm.name || 'Anonymous',
+        const createdLeadRef = await addDoc(collection(db, 'leads'), {
+          name: leadName,
           phone: normalizedLeadPhone,
           source: leadForm.source,
           status: 'pending',
@@ -1400,6 +1585,7 @@ export default function AdminDashboard({
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+        createdLeadId = createdLeadRef.id;
       } else {
         await runTransaction(db, async (transaction) => {
           const allocationRef = doc(db, 'system', 'allocation');
@@ -1410,15 +1596,16 @@ export default function AdminDashboard({
             nextIndex = (allocationDoc.data().lastIndex + 1) % assignableMembers.length;
           }
 
-          const assignedEmployee = assignableMembers[nextIndex];
+          assignedEmployee = assignableMembers[nextIndex];
           
           const newLeadRef = doc(collection(db, 'leads'));
+          createdLeadId = newLeadRef.id;
           transaction.set(newLeadRef, {
-            name: leadForm.name || 'Anonymous',
+            name: leadName,
             phone: normalizedLeadPhone,
             source: leadForm.source,
             status: 'pending',
-            assignedTo: assignedEmployee.uid,
+            assignedTo: assignedEmployee!.uid,
             addedById: user.uid,
             addedByName: user.name,
             addedByRole: user.role === 'manager' ? 'manager' : 'admin',
@@ -1544,9 +1731,40 @@ export default function AdminDashboard({
           updatedAt: serverTimestamp(),
         });
       }
+
+      if (assignedEmployee && createdLeadId) {
+        await addDoc(collection(db, 'notifications'), {
+          userId: assignedEmployee.uid,
+          title: 'New Lead Assigned',
+          message: `${actorLabel} assigned lead "${leadName}" to you.`,
+          leadId: createdLeadId,
+          read: false,
+          createdAt: serverTimestamp(),
+        });
+        await addAuditLog(db, {
+          action: 'lead_added',
+          actorId: user.uid,
+          actorName: user.name,
+          actorRole: user.role,
+          targetType: 'lead',
+          targetId: createdLeadId,
+          description: `Lead "${leadName}" added and assigned to ${assignedEmployee.name}`,
+          newValue: { name: leadName, phone: normalizedLeadPhone, assignedTo: assignedEmployee.uid },
+        });
+      }
       await batch.commit();
 
       showSaveToast(`${name} added successfully`, `${memberRole === 'manager' ? 'Manager' : 'Employee'} account created`);
+      await addAuditLog(db, {
+        action: 'employee_added',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'user',
+        targetId: provisionedUser?.uid,
+        description: `${memberRole === 'manager' ? 'Manager' : 'Employee'} added: ${name}`,
+        newValue: { name, phone: normalizedPhone, role: memberRole, managerId: selectedManager?.uid || null },
+      });
       setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: isManager ? user.uid : '' });
       setShowAddEmployee(false);
     } catch (error) {
@@ -1585,8 +1803,14 @@ export default function AdminDashboard({
 
     const name = brokerForm.name.trim();
     const phone = normalizePhone(brokerForm.phone);
+    const state = brokerForm.state.trim();
+    const city = brokerForm.city.trim();
+    const locality = brokerForm.locality.trim();
+    const specializations = Array.from(new Set((brokerForm.specializations || []).map((item) => item.trim()).filter(Boolean)));
     if (!name) return alert('Broker name is required.');
     if (phone.length !== 10) return alert('Broker mobile number must be exactly 10 digits.');
+    if (!state) return alert('Broker state is required.');
+    if (!city) return alert('Broker city is required.');
 
     setLoading(true);
     try {
@@ -1596,20 +1820,48 @@ export default function AdminDashboard({
           phone,
           email: brokerForm.email.trim(),
           company: brokerForm.company.trim(),
+          state,
+          city,
+          locality,
+          specializations,
           updatedAt: serverTimestamp(),
         });
+        await addAuditLog(db, {
+          action: 'broker_updated',
+          actorId: user.uid,
+          actorName: user.name,
+          actorRole: user.role,
+          targetType: 'broker',
+          targetId: editingBrokerId,
+          description: `Broker updated: ${name}`,
+          newValue: { name, phone, state, city, locality, specializations },
+        });
       } else {
-        await addDoc(collection(db, 'brokers'), {
+        const brokerRef = await addDoc(collection(db, 'brokers'), {
           name,
           phone,
           email: brokerForm.email.trim(),
           company: brokerForm.company.trim(),
+          state,
+          city,
+          locality,
+          specializations,
           createdBy: user.uid,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+        await addAuditLog(db, {
+          action: 'broker_added',
+          actorId: user.uid,
+          actorName: user.name,
+          actorRole: user.role,
+          targetType: 'broker',
+          targetId: brokerRef.id,
+          description: `Broker added: ${name}`,
+          newValue: { name, phone, state, city, locality, specializations },
+        });
       }
-      setBrokerForm({ name: '', phone: '', email: '', company: '' });
+      setBrokerForm({ name: '', phone: '', email: '', company: '', state: '', city: '', locality: '', specializations: [] });
       setEditingBrokerId(null);
       setShowAddBroker(false);
       showSaveToast(editingBrokerId ? 'Broker updated' : 'Broker added', `${name} is available for inventory assignment`);
@@ -1659,7 +1911,18 @@ export default function AdminDashboard({
     if (!confirm('Delete this broker from the broker list? Existing inventory assignments will keep the saved broker name.')) return;
 
     try {
+      const existing = brokers.find((item) => item.id === brokerId);
       await deleteDoc(doc(db, 'brokers', brokerId));
+      await addAuditLog(db, {
+        action: 'broker_deleted',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'broker',
+        targetId: brokerId,
+        description: `Broker deleted${existing?.name ? ` (${existing.name})` : ''}`,
+        oldValue: existing || null,
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `brokers/${brokerId}`);
     }
@@ -1671,6 +1934,10 @@ export default function AdminDashboard({
       phone: broker.phone || '',
       email: broker.email || '',
       company: broker.company || '',
+      state: broker.state || '',
+      city: broker.city || '',
+      locality: broker.locality || '',
+      specializations: broker.specializations || [],
     });
     setEditingBrokerId(broker.id);
     setShowAddBroker(true);
@@ -1684,6 +1951,17 @@ export default function AdminDashboard({
       await updateDoc(doc(db, 'leads', selectedLead.id), {
         ...editForm,
         updatedAt: serverTimestamp()
+      });
+      await addAuditLog(db, {
+        action: 'lead_modified',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: selectedLead.id,
+        description: `Lead details modified for ${selectedLead.name}`,
+        oldValue: selectedLead,
+        newValue: { ...selectedLead, ...editForm },
       });
       setIsEditing(false);
       setSelectedLead({ ...selectedLead, ...editForm } as Lead);
@@ -1706,6 +1984,17 @@ export default function AdminDashboard({
       await updateDoc(doc(db, 'leads', leadId), {
         status: 'deal_approved',
         updatedAt: serverTimestamp()
+      });
+      await addAuditLog(db, {
+        action: 'lead_approved',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: leadId,
+        description: `Lead approved${lead?.name ? ` (${lead.name})` : ''}`,
+        oldValue: { status: lead?.status || null },
+        newValue: { status: 'deal_approved' },
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `leads/${leadId}`);
@@ -1749,8 +2038,39 @@ export default function AdminDashboard({
     { id: 'requirements', icon: FileText, label: 'Needs' },
     { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
     { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
+    { id: 'notification_center', icon: Bell, label: 'Notification Center' },
+    { id: 'activity_logs', icon: History, label: 'Activity Logs' },
     ...(isSuperAdmin ? [{ id: 'brokers' as AdminView, icon: ClipboardList, label: 'Brokers' }] : []),
   ];
+
+  const saveNotificationSettings = async () => {
+    if (!isSuperAdmin) return;
+    const ownerId = user.managerId || user.uid;
+    try {
+      await setDoc(doc(db, 'notificationSettings', ownerId), {
+        officeStart: notificationSettings.officeStart,
+        officeEnd: notificationSettings.officeEnd,
+        reminderIntervalValue: Math.max(1, Number(notificationSettings.reminderIntervalValue) || 1),
+        reminderIntervalUnit: notificationSettings.reminderIntervalUnit,
+        ownerId,
+        updatedBy: user.uid,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      await addAuditLog(db, {
+        action: 'notification_settings_updated',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'notificationSettings',
+        targetId: ownerId,
+        description: 'Notification center settings updated',
+        newValue: notificationSettings,
+      });
+      showSaveToast('Notification settings saved', 'Office hours and lead reminder frequency updated');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `notificationSettings/${ownerId}`);
+    }
+  };
 
   return (
     <div className="lg:h-full lg:overflow-hidden">
@@ -1786,7 +2106,10 @@ export default function AdminDashboard({
             <p className="text-white/70">{user.phone}</p>
           </div>
         </aside>
-        <div className="min-w-0 lg:h-full lg:overflow-auto space-y-3 px-4 py-3">
+        <div
+          className="min-w-0 lg:h-full lg:overflow-auto space-y-3 px-4 py-3"
+          style={{ paddingBottom: 'calc(var(--bottom-nav-height, 64px) + env(safe-area-inset-bottom, 0px) + 24px)' }}
+        >
       <div className="relative mb-1 lg:hidden">
         <div
           ref={tabsScrollRef}
@@ -2005,6 +2328,25 @@ export default function AdminDashboard({
               placeholder="Search leads by name, number, source, assignee..."
               className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 placeholder:text-gray-400 focus:ring-4 focus:ring-blue-100 focus:border-blue-300 outline-none"
             />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setAssignedUserFilter('')}
+              className={cn("px-3 py-1.5 rounded-full text-[11px] font-bold border", assignedUserFilter === '' ? "bg-blue-600 text-white border-blue-600" : "bg-white text-slate-600 border-slate-200")}
+            >
+              All Assigned
+            </button>
+            {leadAssignableMembers.map((member) => (
+              <button
+                key={member.uid}
+                type="button"
+                onClick={() => setAssignedUserFilter(member.uid)}
+                className={cn("px-3 py-1.5 rounded-full text-[11px] font-bold border", assignedUserFilter === member.uid ? "bg-blue-600 text-white border-blue-600" : "bg-white text-slate-600 border-slate-200")}
+              >
+                {member.name}
+              </button>
+            ))}
           </div>
 
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -2270,19 +2612,7 @@ export default function AdminDashboard({
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <input value={reqSearch} onChange={(e) => setReqSearch(e.target.value)} placeholder="Search by name, phone, location, specialization..." className="px-3 py-2 rounded-xl border border-slate-200 text-sm" />
-            <select value={reqStateFilter} onChange={(e) => { setReqStateFilter(e.target.value); setReqCityFilter(''); }} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
-              <option value="">All States</option>
-              {Object.keys(LOCATION_MAP).map((state) => <option key={state} value={state}>{state}</option>)}
-            </select>
-            <select value={reqCityFilter} onChange={(e) => setReqCityFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
-              <option value="">All Cities</option>
-              {(reqStateFilter ? LOCATION_MAP[reqStateFilter] || [] : Array.from(new Set(Object.values(LOCATION_MAP).flat()))).map((city) => <option key={city} value={city}>{city}</option>)}
-            </select>
-            <select value={reqSpecializationFilter} onChange={(e) => setReqSpecializationFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
-              <option value="">All Specializations</option>
-              {specializationOptions.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
+            <input value={reqSearch} onChange={(e) => setReqSearch(e.target.value)} placeholder="Search by name, phone, type, location..." className="px-3 py-2 rounded-xl border border-slate-200 text-sm md:col-span-4" />
           </div>
 
           <div className="bg-white rounded-[32px] border border-slate-100 shadow-xl shadow-slate-200/20 overflow-hidden">
@@ -2318,11 +2648,6 @@ export default function AdminDashboard({
                         <span className="px-3 py-1 bg-slate-900 text-white text-[9px] font-black uppercase rounded-full tracking-widest">
                           {req.type}
                         </span>
-                        {(req.specializations || []).length > 0 ? (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {(req.specializations || []).map((s) => <span key={s} className="px-2 py-0.5 bg-blue-50 text-blue-700 text-[9px] font-black rounded-full uppercase">{s}</span>)}
-                          </div>
-                        ) : null}
                       </td>
                       <td className="px-8 py-6">
                         <div>
@@ -2333,7 +2658,7 @@ export default function AdminDashboard({
                       <td className="px-8 py-6">
                         <div className="flex items-center gap-1.5 text-xs text-slate-600 font-bold">
                           <MapPin size={14} className="text-blue-500" />
-                          {req.brokerState && req.brokerCity ? `${req.brokerState}, ${req.brokerCity}${req.brokerLocality ? `, ${req.brokerLocality}` : ''}` : (req.location || 'N/A')}
+                          {req.location || 'N/A'}
                         </div>
                       </td>
                       <td className="px-8 py-6">
@@ -2384,6 +2709,14 @@ export default function AdminDashboard({
               Total Records: {leadTransfers.length}
             </p>
           </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input
+              value={transferSearch}
+              onChange={(e) => setTransferSearch(e.target.value)}
+              placeholder="Search by lead, from, to, transferred by..."
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm md:col-span-2"
+            />
+          </div>
 
           <div className="bg-white rounded-[32px] border border-slate-100 shadow-xl shadow-slate-200/20 overflow-hidden">
             <div className="overflow-x-auto">
@@ -2398,7 +2731,7 @@ export default function AdminDashboard({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {sortedLeadTransfers.map((entry) => (
+                  {filteredLeadTransfers.map((entry) => (
                     <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-8 py-5 text-xs font-bold text-slate-500">{formatLeadDate(entry.createdAt)}</td>
                       <td className="px-8 py-5 text-sm font-black text-slate-800">{entry.leadName || entry.leadId}</td>
@@ -2419,6 +2752,28 @@ export default function AdminDashboard({
             </div>
           </div>
         </div>
+      ) : activeView === 'activity_logs' ? (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Activity Logs</h2>
+            <p className="text-xs text-gray-500 mt-1">
+              {isManager ? 'Showing your and your team activity.' : 'Showing full platform activity logs in this scope.'}
+            </p>
+          </div>
+          <ActivityLogsTable logs={auditLogs} formatWhen={(value) => value ? formatLeadDate(value) : 'N/A'} />
+        </div>
+      ) : activeView === 'notification_center' && isSuperAdmin ? (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Notification Center</h2>
+            <p className="text-xs text-gray-500 mt-1">Set office hours and reminder frequency for overdue/today lead alerts.</p>
+          </div>
+          <NotificationSettingsPanel
+            settings={notificationSettings}
+            onChange={(next) => setNotificationSettings(next)}
+            onSave={saveNotificationSettings}
+          />
+        </div>
       ) : activeView === 'brokers' && isSuperAdmin ? (
         <div className="space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -2433,6 +2788,26 @@ export default function AdminDashboard({
               <Plus size={20} /> Add Broker
             </button>
           </div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <input
+              value={brokerSearch}
+              onChange={(e) => setBrokerSearch(e.target.value)}
+              placeholder="Search by name, phone, location, specialization..."
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm"
+            />
+            <select value={brokerStateFilter} onChange={(e) => { setBrokerStateFilter(e.target.value); setBrokerCityFilter(''); }} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+              <option value="">All States</option>
+              {Object.keys(LOCATION_MAP).map((state) => <option key={state} value={state}>{state}</option>)}
+            </select>
+            <select value={brokerCityFilter} onChange={(e) => setBrokerCityFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+              <option value="">All Cities</option>
+              {(brokerStateFilter ? LOCATION_MAP[brokerStateFilter] || [] : Array.from(new Set(Object.values(LOCATION_MAP).flat()))).map((city) => <option key={city} value={city}>{city}</option>)}
+            </select>
+            <select value={brokerSpecializationFilter} onChange={(e) => setBrokerSpecializationFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+              <option value="">All Specializations</option>
+              {brokerSpecializationOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
 
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="overflow-x-auto">
@@ -2442,11 +2817,13 @@ export default function AdminDashboard({
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setBrokerTableSort((p) => ({ key: 'broker', dir: p.key === 'broker' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Broker{sortIndicator(brokerTableSort.key, 'broker', brokerTableSort.dir)}</button></th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setBrokerTableSort((p) => ({ key: 'company', dir: p.key === 'company' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Company{sortIndicator(brokerTableSort.key, 'company', brokerTableSort.dir)}</button></th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider"><button type="button" onClick={() => setBrokerTableSort((p) => ({ key: 'email', dir: p.key === 'email' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Email{sortIndicator(brokerTableSort.key, 'email', brokerTableSort.dir)}</button></th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Location</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Specialization</th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {sortedBrokers.map((broker) => (
+                  {filteredBrokers.map((broker) => (
                     <tr key={broker.id} className="hover:bg-gray-50/50 transition-colors">
                       <td className="px-6 py-4">
                         <p className="font-bold text-gray-900">{broker.name}</p>
@@ -2454,6 +2831,18 @@ export default function AdminDashboard({
                       </td>
                       <td className="px-6 py-4 text-sm font-medium text-gray-600">{broker.company || '-'}</td>
                       <td className="px-6 py-4 text-sm font-medium text-gray-600">{broker.email || '-'}</td>
+                      <td className="px-6 py-4 text-sm font-medium text-gray-600">
+                        {broker.state && broker.city ? `${broker.state}, ${broker.city}${broker.locality ? `, ${broker.locality}` : ''}` : '-'}
+                      </td>
+                      <td className="px-6 py-4">
+                        {(broker.specializations || []).length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {(broker.specializations || []).map((s) => <span key={s} className="px-2 py-0.5 bg-blue-50 text-blue-700 text-[9px] font-black rounded-full uppercase">{s}</span>)}
+                          </div>
+                        ) : (
+                          <span className="text-sm text-gray-400">-</span>
+                        )}
+                      </td>
                       <td className="px-6 py-4 text-right">
                         <button
                           type="button"
@@ -2478,7 +2867,7 @@ export default function AdminDashboard({
                   ))}
                   {brokers.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-6 py-16 text-center text-gray-400 font-medium">
+                      <td colSpan={6} className="px-6 py-16 text-center text-gray-400 font-medium">
                         No brokers added yet.
                       </td>
                     </tr>
@@ -3174,8 +3563,55 @@ export default function AdminDashboard({
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <select required value={brokerForm.state} onChange={(e) => setBrokerForm({ ...brokerForm, state: e.target.value, city: '' })} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl">
+                  <option value="">Select State</option>
+                  {Object.keys(LOCATION_MAP).map((state) => <option key={state} value={state}>{state}</option>)}
+                </select>
+                <select required value={brokerForm.city} onChange={(e) => setBrokerForm({ ...brokerForm, city: e.target.value })} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl">
+                  <option value="">Select City</option>
+                  {(LOCATION_MAP[brokerForm.state] || []).map((city) => <option key={city} value={city}>{city}</option>)}
+                </select>
+                <input value={brokerForm.locality} onChange={(e) => setBrokerForm({ ...brokerForm, locality: e.target.value })} placeholder="Area / Locality" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl" />
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs font-bold text-gray-600">Specialization (Select Many)</p>
+                <div className="flex flex-wrap gap-2">
+                  {brokerSpecializationOptions.map((item) => (
+                    <label key={item} className="inline-flex items-center gap-2 text-xs font-semibold px-2 py-1 rounded-lg border border-gray-200 bg-gray-50">
+                      <input
+                        type="checkbox"
+                        checked={brokerForm.specializations.includes(item)}
+                        onChange={(e) => setBrokerForm({
+                          ...brokerForm,
+                          specializations: e.target.checked
+                            ? Array.from(new Set([...brokerForm.specializations, item]))
+                            : brokerForm.specializations.filter((x) => x !== item),
+                        })}
+                      />
+                      {item}
+                    </label>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input value={newBrokerSpecialization} onChange={(e) => setNewBrokerSpecialization(e.target.value)} placeholder="Add more specialization" className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = newBrokerSpecialization.trim();
+                      if (!next) return;
+                      if (!brokerSpecializationOptions.includes(next)) setBrokerSpecializationOptions((prev) => [...prev, next]);
+                      if (!brokerForm.specializations.includes(next)) setBrokerForm({ ...brokerForm, specializations: [...brokerForm.specializations, next] });
+                      setNewBrokerSpecialization('');
+                    }}
+                    className="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
               <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => { setShowAddBroker(false); setEditingBrokerId(null); setBrokerForm({ name: '', phone: '', email: '', company: '' }); }} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
+                <button type="button" onClick={() => { setShowAddBroker(false); setEditingBrokerId(null); setBrokerForm({ name: '', phone: '', email: '', company: '', state: '', city: '', locality: '', specializations: [] }); }} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>
                 <button type="submit" disabled={loading} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all">
                   {loading ? (editingBrokerId ? 'Updating...' : 'Adding...') : (editingBrokerId ? 'Update Broker' : 'Add Broker')}
                 </button>
@@ -3192,56 +3628,9 @@ export default function AdminDashboard({
               <input required value={reqForm.name} onChange={e => setReqForm({ ...reqForm, name: e.target.value })} placeholder="Client Name" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
               <input required type="tel" inputMode="numeric" maxLength={10} value={reqForm.phone} onChange={e => setReqForm({ ...reqForm, phone: normalizePhone(e.target.value).slice(0, 10) })} placeholder="Phone" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
               <input required value={reqForm.type} onChange={e => setReqForm({ ...reqForm, type: e.target.value })} placeholder="Type" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <select value={reqForm.brokerState} onChange={(e) => setReqForm({ ...reqForm, brokerState: e.target.value, brokerCity: '' })} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl">
-                  <option value="">Select State</option>
-                  {Object.keys(LOCATION_MAP).map((state) => <option key={state} value={state}>{state}</option>)}
-                </select>
-                <select value={reqForm.brokerCity} onChange={(e) => setReqForm({ ...reqForm, brokerCity: e.target.value })} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl">
-                  <option value="">Select City</option>
-                  {(LOCATION_MAP[reqForm.brokerState] || []).map((city) => <option key={city} value={city}>{city}</option>)}
-                </select>
-                <input value={reqForm.brokerLocality} onChange={(e) => setReqForm({ ...reqForm, brokerLocality: e.target.value })} placeholder="Area / Locality" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl" />
-              </div>
               <input value={reqForm.budget} onChange={e => setReqForm({ ...reqForm, budget: e.target.value })} placeholder="Budget" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
               <input value={reqForm.area} onChange={e => setReqForm({ ...reqForm, area: e.target.value })} placeholder="Area" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
               <input value={reqForm.location} onChange={e => setReqForm({ ...reqForm, location: e.target.value })} placeholder="Location" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
-              <div className="space-y-2">
-                <p className="text-xs font-bold text-gray-600">Specialization (Select Many)</p>
-                <div className="flex flex-wrap gap-2">
-                  {specializationOptions.map((item) => (
-                    <label key={item} className="inline-flex items-center gap-2 text-xs font-semibold px-2 py-1 rounded-lg border border-gray-200 bg-gray-50">
-                      <input
-                        type="checkbox"
-                        checked={reqForm.specializations.includes(item)}
-                        onChange={(e) => setReqForm({
-                          ...reqForm,
-                          specializations: e.target.checked
-                            ? Array.from(new Set([...reqForm.specializations, item]))
-                            : reqForm.specializations.filter((x) => x !== item),
-                        })}
-                      />
-                      {item}
-                    </label>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <input value={newSpecialization} onChange={(e) => setNewSpecialization(e.target.value)} placeholder="Add more specialization" className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = newSpecialization.trim();
-                      if (!next) return;
-                      if (!specializationOptions.includes(next)) setSpecializationOptions((prev) => [...prev, next]);
-                      if (!reqForm.specializations.includes(next)) setReqForm({ ...reqForm, specializations: [...reqForm.specializations, next] });
-                      setNewSpecialization('');
-                    }}
-                    className="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-bold"
-                  >
-                    Add
-                  </button>
-                </div>
-              </div>
               <textarea value={reqForm.remark} onChange={e => setReqForm({ ...reqForm, remark: e.target.value })} placeholder="Remark / Requirement" className="w-full h-24 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none resize-none" />
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => { setShowReqModal(false); setEditingRequirementId(null); }} className="flex-1 py-3 font-bold text-gray-500 hover:bg-gray-100 rounded-xl transition-colors">Cancel</button>

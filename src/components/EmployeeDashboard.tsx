@@ -14,13 +14,16 @@ import {
   serverTimestamp,
   orderBy,
   Timestamp,
-  deleteField
+  deleteField,
+  doc
 } from 'firebase/firestore';
-import { Lead, User, Followup, Attendance, AttendanceCorrectionRequest, Notification, OperationType, Location, Requirement, LeadTransfer } from '../types';
+import { Lead, User, Followup, Attendance, AttendanceCorrectionRequest, Notification, OperationType, Location, Requirement, LeadTransfer, AuditLogEntry } from '../types';
 import { handleFirestoreError } from '../lib/utils';
+import { addAuditLog } from '../lib/audit';
 import InventoryManagement from './InventoryManagement';
 import SalesPerformanceDashboard from './SalesPerformanceDashboard';
 import MonthlyAttendanceReport from './MonthlyAttendanceReport';
+import ActivityLogsTable from './ActivityLogsTable';
 import { 
   BarChart3,
   Calendar, 
@@ -130,7 +133,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 }
 
 type LeadQueueTab = 'overdue' | 'today' | 'upcoming';
-type EmployeeView = LeadQueueTab | 'followups' | 'performance' | 'attendance' | 'requirements' | 'inventory' | 'transfer_register' | 'pending';
+type EmployeeView = LeadQueueTab | 'followups' | 'performance' | 'leads' | 'attendance' | 'requirements' | 'inventory' | 'transfer_register' | 'activity_logs' | 'pending';
 
 type EmployeeDashboardProps = {
   user: User;
@@ -209,9 +212,22 @@ export default function EmployeeDashboard({
   const [employees, setEmployees] = useState<User[]>([]);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferSearch, setTransferSearch] = useState('');
+  const [transferRegisterSearch, setTransferRegisterSearch] = useState('');
   const [leadSearchQuery, setLeadSearchQuery] = useState('');
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [notificationSettings, setNotificationSettings] = useState<{
+    officeStart: string;
+    officeEnd: string;
+    reminderIntervalValue: number;
+    reminderIntervalUnit: 'minutes' | 'hours';
+  }>({
+    officeStart: '09:00',
+    officeEnd: '20:00',
+    reminderIntervalValue: 1,
+    reminderIntervalUnit: 'hours',
+  });
   const processedBackSignalRef = useRef(0);
   const tabsScrollRef = useRef<HTMLDivElement | null>(null);
   const [canScrollTabsLeft, setCanScrollTabsLeft] = useState(false);
@@ -429,6 +445,16 @@ export default function EmployeeDashboard({
         type,
         location: { latitude, longitude }
       });
+      await addAuditLog(db, {
+        action: 'attendance_marked',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'attendance',
+        targetId: user.uid,
+        description: `Attendance ${type} marked`,
+        newValue: { type, latitude, longitude },
+      });
     } catch (error) {
       alert('Error fetching location or saving record. Please ensure GPS is enabled.');
     } finally {
@@ -449,11 +475,13 @@ export default function EmployeeDashboard({
 
   const employeeTabs: Array<{ id: EmployeeView | 'followups'; icon: any; label: string }> = [
     { id: 'performance', icon: BarChart3, label: 'Dashboard' },
+    { id: 'leads', icon: Users, label: 'Leads' },
     { id: 'followups', icon: Clock, label: 'Followups' },
     { id: 'requirements', icon: FileText, label: 'Needs' },
     { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
     { id: 'attendance', icon: History, label: 'Attendance' },
     { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
+    { id: 'activity_logs', icon: ClipboardList, label: 'Activity Logs' },
   ];
 
   useEffect(() => {
@@ -490,6 +518,68 @@ export default function EmployeeDashboard({
   }, [user.uid]);
 
   useEffect(() => {
+    const ownerId = user.managerId || user.uid;
+    const settingsRef = doc(db, 'notificationSettings', ownerId);
+    const unsubscribe = onSnapshot(settingsRef, (snapshot) => {
+      const data = snapshot.data() as Partial<typeof notificationSettings> | undefined;
+      if (!data) return;
+      setNotificationSettings((prev) => ({
+        officeStart: data.officeStart || prev.officeStart,
+        officeEnd: data.officeEnd || prev.officeEnd,
+        reminderIntervalValue: typeof data.reminderIntervalValue === 'number' ? data.reminderIntervalValue : prev.reminderIntervalValue,
+        reminderIntervalUnit: data.reminderIntervalUnit === 'minutes' ? 'minutes' : (data.reminderIntervalUnit === 'hours' ? 'hours' : prev.reminderIntervalUnit),
+      }));
+    });
+    return () => unsubscribe();
+  }, [user.managerId, user.uid]);
+
+  useEffect(() => {
+    const parseMinutes = (hhmm: string) => {
+      const [h, m] = hhmm.split(':').map(Number);
+      if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
+      return h * 60 + m;
+    };
+    const isWithinOfficeHours = (now: Date) => {
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const start = parseMinutes(notificationSettings.officeStart || '09:00');
+      const end = parseMinutes(notificationSettings.officeEnd || '20:00');
+      if (start <= end) return nowMinutes >= start && nowMinutes <= end;
+      return nowMinutes >= start || nowMinutes <= end;
+    };
+    const intervalMs = Math.max(1, notificationSettings.reminderIntervalValue || 1) * (notificationSettings.reminderIntervalUnit === 'minutes' ? 60_000 : 3_600_000);
+
+    const run = async () => {
+      const now = new Date();
+      if (!isWithinOfficeHours(now)) return;
+
+      const dueLeads = leads.filter((lead) => lead.assignedTo === user.uid && lead.status !== 'deal_approved' && lead.status !== 'not_interested');
+      for (const lead of dueLeads) {
+        const queueTab = getLeadQueueTab(lead);
+        if (queueTab !== 'overdue' && queueTab !== 'today') continue;
+        const key = `estatepulse_notif_ping_${user.uid}_${lead.id}_${queueTab}`;
+        const lastAt = Number(localStorage.getItem(key) || 0);
+        if (Date.now() - lastAt < intervalMs) continue;
+
+        await addDoc(collection(db, 'notifications'), {
+          userId: user.uid,
+          title: queueTab === 'overdue' ? 'Overdue Lead Reminder' : 'Today Lead Reminder',
+          message: queueTab === 'overdue'
+            ? `Lead "${lead.name}" is overdue for follow-up.`
+            : `Lead "${lead.name}" needs follow-up today.`,
+          leadId: lead.id,
+          read: false,
+          createdAt: serverTimestamp(),
+        });
+        localStorage.setItem(key, String(Date.now()));
+      }
+    };
+
+    void run();
+    const timerId = window.setInterval(() => { void run(); }, 60_000);
+    return () => window.clearInterval(timerId);
+  }, [leads, notificationSettings, user.uid]);
+
+  useEffect(() => {
     const qFrom = query(collection(db, 'leadTransfers'), where('fromUid', '==', user.uid));
     const qTo = query(collection(db, 'leadTransfers'), where('toUid', '==', user.uid));
     const fromTransfers: LeadTransfer[] = [];
@@ -518,6 +608,17 @@ export default function EmployeeDashboard({
       unsubFrom();
       unsubTo();
     };
+  }, [user.uid]);
+
+  useEffect(() => {
+    const qLogs = query(collection(db, 'auditLogs'), where('actorId', '==', user.uid));
+    const unsubscribe = onSnapshot(qLogs, (snapshot) => {
+      const logs = snapshot.docs
+        .map((item) => ({ id: item.id, ...item.data() } as AuditLogEntry))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      setAuditLogs(logs);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'auditLogs'));
+    return () => unsubscribe();
   }, [user.uid]);
 
   useEffect(() => {
@@ -551,13 +652,33 @@ export default function EmployeeDashboard({
           phone: normalizedPhone,
           updatedAt: serverTimestamp(),
         });
+        await addAuditLog(db, {
+          action: 'requirement_updated',
+          actorId: user.uid,
+          actorName: user.name,
+          actorRole: user.role,
+          targetType: 'requirement',
+          targetId: editingRequirementId,
+          description: `Requirement updated for ${reqForm.name}`,
+          newValue: { ...reqForm, phone: normalizedPhone },
+        });
       } else {
-        await addDoc(collection(db, 'requirements'), {
+        const reqRef = await addDoc(collection(db, 'requirements'), {
           ...reqForm,
           phone: normalizedPhone,
           employeeId: user.uid,
           employeeName: user.name,
           createdAt: serverTimestamp()
+        });
+        await addAuditLog(db, {
+          action: 'requirement_added',
+          actorId: user.uid,
+          actorName: user.name,
+          actorRole: user.role,
+          targetType: 'requirement',
+          targetId: reqRef.id,
+          description: `Requirement added for ${reqForm.name}`,
+          newValue: { ...reqForm, phone: normalizedPhone },
         });
       }
       setShowReqModal(false);
@@ -643,7 +764,7 @@ export default function EmployeeDashboard({
 
     setLoading(true);
     try {
-      await addDoc(collection(db, 'leads'), {
+      const leadRef = await addDoc(collection(db, 'leads'), {
         name: leadForm.name || 'Anonymous',
         phone: normalizedPhone,
         source: 'Employee Added',
@@ -655,6 +776,16 @@ export default function EmployeeDashboard({
         assignedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+      });
+      await addAuditLog(db, {
+        action: 'lead_added',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: leadRef.id,
+        description: `Lead added by employee: ${leadForm.name || 'Anonymous'}`,
+        newValue: { name: leadForm.name || 'Anonymous', phone: normalizedPhone, assignedTo: user.uid },
       });
 
       setLeadForm({ name: '', phone: '', source: 'Employee Added' });
@@ -672,6 +803,21 @@ export default function EmployeeDashboard({
       ? activeTab
       : followupSubTab;
   const queueLeads = leads.filter((l) => l.assignedTo === user.uid && getLeadQueueTab(l) === effectiveQueueTab);
+  const employeeAssignedLeads = useMemo(
+    () => leads.filter((lead) => lead.assignedTo === user.uid).sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt)),
+    [leads, user.uid]
+  );
+  const employeeAssignedLeadsFiltered = useMemo(() => {
+    const term = leadSearchQuery.trim().toLowerCase();
+    if (!term) return employeeAssignedLeads;
+    return employeeAssignedLeads.filter((lead) =>
+      [lead.name, lead.phone, lead.source, lead.status, lead.lastRemark]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(term)
+    );
+  }, [employeeAssignedLeads, leadSearchQuery]);
   const searchTerm = leadSearchQuery.trim().toLowerCase();
   const filteredLeads = queueLeads.filter(l => {
     if (!searchTerm) return true;
@@ -818,6 +964,17 @@ export default function EmployeeDashboard({
       }
 
       await updateDoc(leadRef, updateData);
+      await addAuditLog(db, {
+        action: status === 'deal_pending' ? 'lead_sent_for_approval' : 'lead_followup_updated',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: currentLead.id,
+        description: `Lead "${currentLead.name}" updated to ${status}`,
+        oldValue: { status: currentLead.status, lastRemark: currentLead.lastRemark || null },
+        newValue: { status, remark, nextDate: nextDate || null },
+      });
 
       await addDoc(collection(db, 'leads', currentLead.id, 'followups'), {
         date: serverTimestamp(),
@@ -964,6 +1121,26 @@ export default function EmployeeDashboard({
         createdAt: serverTimestamp(),
       });
 
+      await addDoc(collection(db, 'notifications'), {
+        userId: targetEmployee.uid,
+        title: 'New Lead Assigned',
+        message: `${user.name} re-assigned lead "${currentLead.name}" to you.`,
+        leadId: currentLead.id,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+      await addAuditLog(db, {
+        action: 'lead_transferred',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: currentLead.id,
+        description: `Lead transferred to ${targetEmployee.name}`,
+        oldValue: { assignedTo: currentLead.assignedTo },
+        newValue: { assignedTo: targetEmployee.uid },
+      });
+
       setShowTransferModal(false);
       setSelectedLeadIndex(null);
       alert(`Lead successfully transferred to ${targetEmployee.name}`);
@@ -1003,6 +1180,14 @@ export default function EmployeeDashboard({
     return list;
   }, [leadTransfers, transferTableSort]);
 
+  const filteredLeadTransfers = useMemo(() => {
+    const q = transferRegisterSearch.trim().toLowerCase();
+    if (!q) return sortedLeadTransfers;
+    return sortedLeadTransfers.filter((entry) => [
+      entry.leadName, entry.leadId, entry.fromName, entry.toName, entry.transferredByName
+    ].filter(Boolean).join(' ').toLowerCase().includes(q));
+  }, [sortedLeadTransfers, transferRegisterSearch]);
+
   return (
     <div className="lg:h-full lg:overflow-hidden">
       <div className="grid gap-0 lg:grid-cols-[236px_minmax(0,1fr)] lg:h-full">
@@ -1040,7 +1225,10 @@ export default function EmployeeDashboard({
           </div>
         </aside>
 
-        <div className="min-w-0 lg:h-full lg:overflow-auto space-y-6 px-4 py-3">
+        <div
+          className="min-w-0 lg:h-full lg:overflow-auto space-y-6 px-4 py-3"
+          style={{ paddingBottom: 'calc(var(--bottom-nav-height, 64px) + env(safe-area-inset-bottom, 0px) + 24px)' }}
+        >
       {/* Professional Header & Attendance */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6 bg-white/40 backdrop-blur-2xl p-4 sm:p-8 rounded-[32px] sm:rounded-[48px] border border-white/40 shadow-2xl shadow-blue-900/5 ring-1 ring-black/[0.02]">
         <div className="flex items-center gap-4 sm:gap-6 px-1">
@@ -1176,6 +1364,56 @@ export default function EmployeeDashboard({
           attendance={attendanceRecords}
           scope="employee"
         />
+      ) : activeTab === 'leads' ? (
+        <div className="space-y-6 pt-3 sm:pt-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">My Assigned Leads</h2>
+            <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+              {employeeAssignedLeadsFiltered.length}
+            </span>
+          </div>
+          <div className="relative">
+            <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={leadSearchQuery}
+              onChange={e => setLeadSearchQuery(e.target.value)}
+              placeholder="Search my assigned leads..."
+              className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 placeholder:text-slate-400 focus:ring-4 focus:ring-blue-100 focus:border-blue-300 outline-none"
+            />
+          </div>
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-200/20 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100">
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Client</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Phone</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Source</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Status</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Created</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {employeeAssignedLeadsFiltered.map((lead) => (
+                    <tr key={lead.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="px-6 py-4 text-sm font-black text-slate-800">{lead.name}</td>
+                      <td className="px-6 py-4 text-sm font-bold text-slate-600">{lead.phone}</td>
+                      <td className="px-6 py-4 text-sm font-bold text-slate-600">{lead.source || '-'}</td>
+                      <td className="px-6 py-4 text-xs font-black text-slate-700 uppercase">{(lead.status || 'pending').replace('_', ' ')}</td>
+                      <td className="px-6 py-4 text-xs font-bold text-slate-500">{formatDateValue(lead.createdAt, 'MMM dd, yyyy hh:mm a', 'N/A')}</td>
+                    </tr>
+                  ))}
+                  {employeeAssignedLeadsFiltered.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-16 text-center text-sm font-bold text-slate-400">No assigned leads found.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       ) : activeTab === 'requirements' ? (
         <div className="space-y-7 pt-3 sm:pt-4">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -1275,9 +1513,25 @@ export default function EmployeeDashboard({
             )}
           </div>
         </div>
+      ) : activeTab === 'activity_logs' ? (
+        <div className="space-y-6 pt-3 sm:pt-4">
+          <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">My Activity Logs</h2>
+          <ActivityLogsTable
+            logs={auditLogs}
+            showActor={false}
+            className="border-slate-100 shadow-xl shadow-slate-200/20"
+            formatWhen={(value) => formatDateValue(value, 'MMM dd, yyyy hh:mm a', 'N/A')}
+          />
+        </div>
       ) : activeTab === 'transfer_register' ? (
         <div className="space-y-6 pt-3 sm:pt-4">
           <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">Lead Transfer Register</h2>
+          <input
+            value={transferRegisterSearch}
+            onChange={(e) => setTransferRegisterSearch(e.target.value)}
+            placeholder="Search by lead, from, to, transferred by..."
+            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          />
           <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-200/20 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left">
@@ -1291,7 +1545,7 @@ export default function EmployeeDashboard({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {sortedLeadTransfers.map((entry) => (
+                  {filteredLeadTransfers.map((entry) => (
                     <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-6 py-4 text-xs font-bold text-slate-500">{formatDateValue(entry.createdAt, 'MMM dd, yyyy hh:mm a', 'N/A')}</td>
                       <td className="px-6 py-4 text-sm font-black text-slate-800">{entry.leadName || entry.leadId}</td>

@@ -131,8 +131,10 @@ export interface AuditLogEntry {
   action: string;
   actorId: string;
   actorName: string;
+  actorRole?: string;
   targetType?: string;
   targetId?: string;
+  description?: string;
   oldValue?: any;
   newValue?: any;
   meta?: Record<string, any>;
@@ -214,6 +216,10 @@ export interface Broker {
   phone: string;
   email?: string;
   company?: string;
+  state?: string;
+  city?: string;
+  locality?: string;
+  specializations?: string[];
   createdAt: any;
   updatedAt?: any;
   createdBy?: string;

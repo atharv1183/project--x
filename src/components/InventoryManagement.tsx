@@ -26,6 +26,7 @@ import {
   OperationType 
 } from '../types';
 import { handleFirestoreError, cn, convertArea, AREA_CONVERSIONS } from '../lib/utils';
+import { addAuditLog } from '../lib/audit';
 import { 
   Plus, 
   Search, 
@@ -181,16 +182,11 @@ function getVideoLinkLabel(url: string): string {
   }
 }
 
-function compactUrl(url: string, maxLength = 52): string {
-  try {
-    const parsed = new URL(url);
-    const compact = `${parsed.hostname.replace(/^www\./, '')}${parsed.pathname}${parsed.search}`;
-    if (compact.length <= maxLength) return compact;
-    return `${compact.slice(0, maxLength - 3)}...`;
-  } catch {
-    if (url.length <= maxLength) return url;
-    return `${url.slice(0, maxLength - 3)}...`;
-  }
+function buildProjectViewLink(itemId: string, view: 'list' | 'icon'): string {
+  const url = new URL('/website', window.location.origin);
+  url.searchParams.set('project', itemId);
+  url.searchParams.set('view', view);
+  return url.toString();
 }
 
 export default function InventoryManagement({ user, onBack }: InventoryManagementProps) {
@@ -679,13 +675,34 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           status: isDraftSubmission ? 'draft' : selectedListingStatus
         };
         await updateDoc(doc(db, 'inventory', editingItem.id), updatePayload);
+        await addAuditLog(db, {
+          action: 'inventory_modified',
+          actorId: user.uid,
+          actorName: user.name,
+          actorRole: user.role,
+          targetType: 'inventory',
+          targetId: editingItem.id,
+          description: `Inventory updated: ${payload.title}`,
+          oldValue: editingItem,
+          newValue: updatePayload,
+        });
       } else {
-        await addDoc(collection(db, 'inventory'), {
+        const inventoryRef = await addDoc(collection(db, 'inventory'), {
           ...payload,
           status: isDraftSubmission ? 'draft' : selectedListingStatus,
           submitterId: user.uid,
           submitterName: user.name,
           createdAt: serverTimestamp(),
+        });
+        await addAuditLog(db, {
+          action: 'inventory_added',
+          actorId: user.uid,
+          actorName: user.name,
+          actorRole: user.role,
+          targetType: 'inventory',
+          targetId: inventoryRef.id,
+          description: `Inventory added: ${payload.title}`,
+          newValue: payload,
         });
       }
 
@@ -748,6 +765,16 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         approvalAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+      await addAuditLog(db, {
+        action: status === 'approved' ? 'inventory_approved' : 'inventory_status_changed',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'inventory',
+        targetId: id,
+        description: `Inventory status updated to ${status}`,
+        newValue: { status, approvedBy: user.name },
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `inventory/${id}`);
     }
@@ -756,7 +783,18 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this listing?')) return;
     try {
+      const existing = items.find((item) => item.id === id);
       await deleteDoc(doc(db, 'inventory', id));
+      await addAuditLog(db, {
+        action: 'inventory_deleted',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'inventory',
+        targetId: id,
+        description: `Inventory deleted${existing?.title ? ` (${existing.title})` : ''}`,
+        oldValue: existing || null,
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `inventory/${id}`);
     }
@@ -946,10 +984,10 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     const mapLink = getInventoryLocationLink(item);
     const isProject = item.listingMode === 'project' || item.isProject;
     const imageLinks = item.photos?.length
-      ? item.photos.slice(0, 10).map((link, index) => `${index + 1}. ${compactUrl(link)}\n${link}`).join('\n')
+      ? item.photos.slice(0, 10).map((link, index) => `Img${index + 1}: ${link}`).join('\n')
       : 'N/A';
     const videoLinks = item.videos?.length
-      ? item.videos.slice(0, 6).map((link, index) => `${index + 1}. ${compactUrl(link)}\n${link}`).join('\n')
+      ? item.videos.slice(0, 6).map((link, index) => `Vid${index + 1}: ${link}`).join('\n')
       : 'N/A';
     const projectSummary = isProject && item.projectUnits?.length
       ? item.projectUnits
@@ -961,11 +999,13 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       ? item.projectUnits
           .flatMap((unit, unitIndex) =>
             (unit.photos || []).slice(0, 2).map((link, photoIndex) =>
-              `U${unitIndex + 1}-P${photoIndex + 1}. ${compactUrl(link)}\n${link}`
+              `Unit${unitIndex + 1}Img${photoIndex + 1}: ${link}`
             )
           )
           .slice(0, 16)
       : [];
+    const projectListViewLink = item.id ? buildProjectViewLink(item.id, 'list') : '';
+    const projectIconViewLink = item.id ? buildProjectViewLink(item.id, 'icon') : '';
 
     const message = [
       `*${item.title}*`,
@@ -973,11 +1013,13 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       `Listing: ${isProject ? 'Project' : 'Individual Property'}`,
       `Category: ${getTypeWithSubType(item)}`,
       `Location: ${item.location || 'N/A'}`,
-      `Map: ${compactUrl(mapLink)}`,
-      mapLink,
+      `Map: ${mapLink}`,
       !isProject ? `Area: ${getPrimarySizeText(item)}` : `Units: ${item.projectUnitCount || item.projectUnits?.length || 0}`,
       !isProject ? `Rate: Rs ${Number(item.rate || 0).toLocaleString()} ${item.rateUnit ? `(${item.rateUnit})` : ''}` : '',
       item.description ? `Description: ${item.description}` : '',
+      ...(isProject && projectListViewLink && projectIconViewLink
+        ? ['', '*Views*', `List: ${projectListViewLink}`, `Icon: ${projectIconViewLink}`]
+        : []),
       '',
       isProject ? '*Project Unit Details*' : '',
       isProject ? projectSummary : '',

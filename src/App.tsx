@@ -20,15 +20,15 @@ import { functions } from './lib/firebase';
 import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-type AdminDashboardView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory';
-type EmployeeDashboardView = 'performance' | 'pending' | 'today' | 'upcoming' | 'attendance' | 'requirements' | 'inventory';
+type AdminDashboardView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'activity_logs';
+type EmployeeDashboardView = 'performance' | 'leads' | 'pending' | 'today' | 'upcoming' | 'attendance' | 'requirements' | 'inventory' | 'activity_logs';
 type DashboardTarget = ToolTarget | null;
 
 const isAdminView = (view: DashboardTarget): view is AdminDashboardView =>
-  view === 'performance' || view === 'leads' || view === 'employees' || view === 'attendance' || view === 'requirements' || view === 'inventory';
+  view === 'performance' || view === 'leads' || view === 'employees' || view === 'attendance' || view === 'requirements' || view === 'inventory' || view === 'activity_logs';
 
 const isEmployeeView = (view: DashboardTarget): view is EmployeeDashboardView =>
-  view === 'performance' || view === 'pending' || view === 'today' || view === 'upcoming' || view === 'attendance' || view === 'requirements' || view === 'inventory';
+  view === 'performance' || view === 'leads' || view === 'pending' || view === 'today' || view === 'upcoming' || view === 'attendance' || view === 'requirements' || view === 'inventory' || view === 'activity_logs';
 
 export default function App() {
   const pathname = window.location.pathname.toLowerCase();
@@ -50,7 +50,7 @@ export default function App() {
   const loginToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAdminLikeUser = user?.role === 'super_admin' || user?.role === 'admin' || user?.role === 'client_admin' || user?.role === 'manager';
   const isSuperAdmin = user?.role === 'super_admin';
-  const useFullHeightDashboardShell = activeScreen === 'dashboard' && (isAdminLikeUser || user?.role === 'employee');
+  const useFullHeightDashboardShell = Boolean(isAdminLikeUser || user?.role === 'employee');
 
   const showLoginToast = (name: string) => {
     setLoginToastName(name);
@@ -200,6 +200,16 @@ export default function App() {
     }
   };
 
+  const handleHomeNavigation = () => {
+    setActiveScreen('dashboard');
+    const leadTarget: DashboardTarget =
+      (user?.role === 'super_admin' || user?.role === 'admin' || user?.role === 'client_admin' || user?.role === 'manager')
+        ? 'leads'
+        : 'today';
+    setDashboardTarget(leadTarget);
+    setDashboardTargetSignal((prev) => prev + 1);
+  };
+
   if (isPublicHeroRoute) {
     return <PublicHeroPage />;
   }
@@ -224,7 +234,10 @@ export default function App() {
   }
 
   return (
-    <div className={useFullHeightDashboardShell ? "h-screen bg-gray-50 flex flex-col overflow-hidden" : "min-h-screen bg-gray-50 flex flex-col"}>
+    <div
+      className={useFullHeightDashboardShell ? "h-screen bg-gray-50 flex flex-col overflow-hidden" : "min-h-screen bg-gray-50 flex flex-col"}
+      style={{ ['--bottom-nav-height' as string]: '64px' }}
+    >
       {!useFullHeightDashboardShell && (
       <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-2">
@@ -260,7 +273,7 @@ export default function App() {
           <button
             onClick={() => setActiveScreen('tools')}
             className="p-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
-            title="Tools"
+            title="Backup & Restore"
           >
             <Wrench className="w-5 h-5" />
           </button>
@@ -318,7 +331,10 @@ export default function App() {
         </div>
       )}
 
-      <main className={useFullHeightDashboardShell ? "flex-1 w-full p-0 pb-20 overflow-y-auto overflow-x-hidden" : "flex-1 w-full max-w-7xl mx-auto p-4 md:p-6 pb-24"}>
+      <main
+        className={useFullHeightDashboardShell ? "flex-1 w-full p-0 overflow-y-auto overflow-x-hidden" : "flex-1 w-full max-w-7xl mx-auto p-4 md:p-6"}
+        style={{ paddingBottom: 'calc(var(--bottom-nav-height, 64px) + env(safe-area-inset-bottom, 0px) + 16px)' }}
+      >
         <AnimatePresence mode="wait">
           <motion.div
             key={`${user.role}-${activeScreen}`}
@@ -328,22 +344,7 @@ export default function App() {
             transition={{ duration: 0.2 }}
             className={useFullHeightDashboardShell ? "h-full" : undefined}
           >
-            {activeScreen === 'profile' ? (
-              <ProfilePage
-                user={user}
-                onClose={() => setActiveScreen('dashboard')}
-                onUserUpdate={(patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev))}
-              />
-            ) : activeScreen === 'tools' ? (
-              <ToolsPage
-                user={user}
-                onSelectTool={(tool) => {
-                  setDashboardTarget(tool);
-                  setDashboardTargetSignal((prev) => prev + 1);
-                  setActiveScreen('dashboard');
-                }}
-              />
-            ) : activeScreen === 'platform' && isSuperAdmin ? (
+            {activeScreen === 'platform' && isSuperAdmin ? (
               <SuperAdminControlCenter
                 user={user}
                 onStartImpersonation={async ({ clientId, clientName }) => {
@@ -371,6 +372,59 @@ export default function App() {
                   setActiveScreen('dashboard');
                 }}
               />
+            ) : (isAdminLikeUser || user.role === 'employee') ? (
+              <>
+                {isAdminLikeUser ? (
+                  <AdminDashboard
+                    user={user}
+                    brand={brand}
+                    backSignal={dashboardBackSignal}
+                    initialView={isAdminView(dashboardTarget) ? dashboardTarget : undefined}
+                    initialViewSignal={dashboardTargetSignal}
+                  />
+                ) : (
+                  <EmployeeDashboard
+                    user={user}
+                    brand={brand}
+                    backSignal={dashboardBackSignal}
+                    initialView={isEmployeeView(dashboardTarget) ? dashboardTarget : undefined}
+                    initialViewSignal={dashboardTargetSignal}
+                  />
+                )}
+                {activeScreen === 'profile' && (
+                  <div className="fixed inset-0 z-[131] bg-black/50 backdrop-blur-sm p-4 overflow-y-auto">
+                    <div className="mx-auto max-w-3xl">
+                      <ProfilePage
+                        user={user}
+                        onClose={() => setActiveScreen('dashboard')}
+                        onUserUpdate={(patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev))}
+                      />
+                    </div>
+                  </div>
+                )}
+                {activeScreen === 'tools' && (
+                  <div className="fixed inset-0 z-[131] bg-black/50 backdrop-blur-sm p-4 overflow-y-auto">
+                    <div className="mx-auto max-w-5xl">
+                      <div className="mb-3 flex justify-end">
+                        <button
+                          onClick={() => setActiveScreen('dashboard')}
+                          className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                        >
+                          Close
+                        </button>
+                      </div>
+                      <ToolsPage
+                        user={user}
+                        onSelectTool={(tool) => {
+                          setDashboardTarget(tool);
+                          setDashboardTargetSignal((prev) => prev + 1);
+                          setActiveScreen('dashboard');
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
             ) : isAdminLikeUser ? (
               <AdminDashboard
                 user={user}
@@ -414,9 +468,12 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <nav className="fixed inset-x-0 bottom-0 z-[130] border-t border-slate-200 bg-white/95 backdrop-blur">
+      <nav
+        className="fixed inset-x-0 bottom-0 z-[130] border-t border-slate-200 bg-white/95 backdrop-blur"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+      >
         <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-around px-2">
-          <button onClick={() => setActiveScreen('dashboard')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
+          <button onClick={handleHomeNavigation} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
             <Home className="h-5 w-5" />
             <span>Home</span>
           </button>
@@ -426,7 +483,7 @@ export default function App() {
           </button>
           <button onClick={() => setActiveScreen('tools')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
             <Wrench className="h-5 w-5" />
-            <span>Tools</span>
+            <span>Backup</span>
           </button>
           {isSuperAdmin && (
             <button onClick={() => setActiveScreen('platform')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
