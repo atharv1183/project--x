@@ -1732,26 +1732,6 @@ export default function AdminDashboard({
         });
       }
 
-      if (assignedEmployee && createdLeadId) {
-        await addDoc(collection(db, 'notifications'), {
-          userId: assignedEmployee.uid,
-          title: 'New Lead Assigned',
-          message: `${actorLabel} assigned lead "${leadName}" to you.`,
-          leadId: createdLeadId,
-          read: false,
-          createdAt: serverTimestamp(),
-        });
-        await addAuditLog(db, {
-          action: 'lead_added',
-          actorId: user.uid,
-          actorName: user.name,
-          actorRole: user.role,
-          targetType: 'lead',
-          targetId: createdLeadId,
-          description: `Lead "${leadName}" added and assigned to ${assignedEmployee.name}`,
-          newValue: { name: leadName, phone: normalizedLeadPhone, assignedTo: assignedEmployee.uid },
-        });
-      }
       await batch.commit();
 
       showSaveToast(`${name} added successfully`, `${memberRole === 'manager' ? 'Manager' : 'Employee'} account created`);
