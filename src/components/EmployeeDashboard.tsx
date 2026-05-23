@@ -167,6 +167,8 @@ export default function EmployeeDashboard({
   const [leadTransfers, setLeadTransfers] = useState<LeadTransfer[]>([]);
   const [selectedLeadIndex, setSelectedLeadIndex] = useState<number | null>(null);
   const [followups, setFollowups] = useState<Followup[]>([]);
+  const [selectedAssignedLead, setSelectedAssignedLead] = useState<Lead | null>(null);
+  const [selectedAssignedLeadFollowups, setSelectedAssignedLeadFollowups] = useState<Followup[]>([]);
   const [loading, setLoading] = useState(false);
 
   // New Requirement Form State
@@ -266,6 +268,11 @@ export default function EmployeeDashboard({
       return;
     }
 
+    if (selectedAssignedLead) {
+      setSelectedAssignedLead(null);
+      return;
+    }
+
     if (selectedLeadIndex !== null) {
       setSelectedLeadIndex(null);
       return;
@@ -274,7 +281,7 @@ export default function EmployeeDashboard({
     if (activeTab !== 'today') {
       setActiveTab('today');
     }
-  }, [backSignal, showAddLead, showReqModal, showNotifications, showTransferModal, showHistory, selectedLeadIndex, activeTab]);
+  }, [backSignal, showAddLead, showReqModal, showNotifications, showTransferModal, showHistory, selectedAssignedLead, selectedLeadIndex, activeTab]);
 
   useEffect(() => {
     if (!initialView) return;
@@ -852,6 +859,21 @@ export default function EmployeeDashboard({
   }, [currentLead?.id]);
 
   useEffect(() => {
+    if (!selectedAssignedLead) {
+      setSelectedAssignedLeadFollowups([]);
+      return;
+    }
+    const qFollowups = query(
+      collection(db, 'leads', selectedAssignedLead.id, 'followups'),
+      orderBy('date', 'desc')
+    );
+    const unsubscribe = onSnapshot(qFollowups, (snapshot) => {
+      setSelectedAssignedLeadFollowups(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Followup)));
+    });
+    return () => unsubscribe();
+  }, [selectedAssignedLead?.id]);
+
+  useEffect(() => {
     setSelectedStatus(null);
     setShowHistory(false);
     setKycFiles({ aadhaar: null, pan: null });
@@ -1395,7 +1417,11 @@ export default function EmployeeDashboard({
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {employeeAssignedLeadsFiltered.map((lead) => (
-                    <tr key={lead.id} className="hover:bg-slate-50/50 transition-colors">
+                    <tr
+                      key={lead.id}
+                      className="hover:bg-slate-50/50 transition-colors cursor-pointer"
+                      onClick={() => setSelectedAssignedLead(lead)}
+                    >
                       <td className="px-6 py-4 text-sm font-black text-slate-800">{lead.name}</td>
                       <td className="px-6 py-4 text-sm font-bold text-slate-600">{lead.phone}</td>
                       <td className="px-6 py-4 text-sm font-bold text-slate-600">{lead.source || '-'}</td>
@@ -2018,7 +2044,7 @@ export default function EmployeeDashboard({
 
       <AnimatePresence>
         {showHistory && currentLead && (
-          <div className="fixed inset-0 z-[102] bg-black/60 backdrop-blur-sm md:hidden flex items-end">
+          <div className="fixed inset-0 z-[132] bg-black/60 backdrop-blur-sm md:hidden flex items-end">
             <motion.div
               initial={{ opacity: 0, y: 24 }}
               animate={{ opacity: 1, y: 0 }}
@@ -2056,6 +2082,71 @@ export default function EmployeeDashboard({
       </AnimatePresence>
 
       {/* Site Visit Workflows */}
+      <AnimatePresence>
+        {selectedAssignedLead && (
+          <div className="fixed inset-0 z-[132] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 16 }}
+              className="w-full max-w-3xl bg-white rounded-[28px] shadow-2xl overflow-hidden max-h-[92vh] flex flex-col"
+            >
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-black text-slate-900">{selectedAssignedLead.name}</h3>
+                  <p className="text-xs font-bold text-slate-500 mt-1">{selectedAssignedLead.phone}</p>
+                </div>
+                <button
+                  onClick={() => setSelectedAssignedLead(null)}
+                  className="p-2 rounded-full hover:bg-slate-100 text-slate-500"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5 overflow-y-auto space-y-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Source</p>
+                    <p className="mt-1 text-sm font-bold text-slate-800">{selectedAssignedLead.source || '-'}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Status</p>
+                    <p className="mt-1 text-sm font-bold text-slate-800 uppercase">{(selectedAssignedLead.status || 'pending').replace('_', ' ')}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Created</p>
+                    <p className="mt-1 text-sm font-bold text-slate-800">{formatDateValue(selectedAssignedLead.createdAt, 'MMM dd, yyyy hh:mm a', 'N/A')}</p>
+                  </div>
+                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Last Follow-up</p>
+                    <p className="mt-1 text-sm font-bold text-slate-800">{formatDateValue(selectedAssignedLead.lastInteractionAt, 'MMM dd, yyyy hh:mm a', 'N/A')}</p>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-100 bg-white p-4">
+                  <h4 className="font-black text-slate-900 text-xs uppercase tracking-widest flex items-center gap-2">
+                    <History size={14} className="text-slate-500" /> Interaction Timeline
+                  </h4>
+                  <div className="mt-4 relative space-y-4 before:absolute before:left-2.5 before:top-1 before:bottom-1 before:w-0.5 before:bg-slate-200">
+                    {selectedAssignedLeadFollowups.map((f) => (
+                      <div key={f.id} className="relative pl-7">
+                        <div className="absolute left-0.5 top-1.5 w-2.5 h-2.5 rounded-full bg-blue-500 border-2 border-white shadow-sm" />
+                        <p className="text-[11px] font-black text-slate-400">{formatDateValue(f.date, 'MMM dd, hh:mm a')}</p>
+                        <p className="mt-1 text-sm font-medium text-slate-700 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">{f.remark}</p>
+                      </div>
+                    ))}
+                    {selectedAssignedLeadFollowups.length === 0 && (
+                      <p className="text-sm text-slate-400 italic py-4">No follow-up activity yet.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {showTransferModal && (
           <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">

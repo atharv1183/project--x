@@ -1655,11 +1655,6 @@ export default function AdminDashboard({
       alert('Only admin can add managers.');
       return;
     }
-    if (memberRole === 'employee' && !selectedManager) {
-      alert('Please assign a manager for this employee.');
-      return;
-    }
-
     setLoading(true);
     let provisionApp: ReturnType<typeof initializeApp> | null = null;
     let provisionAuth: ReturnType<typeof getAuth> | null = null;
@@ -3501,8 +3496,8 @@ export default function AdminDashboard({
       )}
 
       {showAddBroker && isSuperAdmin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
+        <div className="fixed inset-0 z-[132] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl max-h-[92vh] overflow-y-auto">
             <h3 className="text-2xl font-bold mb-6 text-gray-900">{editingBrokerId ? 'Edit Broker' : 'Add Broker'}</h3>
             <form onSubmit={handleAddBroker} className="space-y-4">
               <div>

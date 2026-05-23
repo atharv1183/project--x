@@ -157,10 +157,27 @@ export default function App() {
         setBrand({ logoUrl: '', companyName: 'EstatePulse', tagline: '' });
         return;
       }
-      const ownerUid = user.managerId || user.uid;
       try {
-        const ownerDoc = await getDoc(doc(db, 'users', ownerUid));
-        const ownerData = ownerDoc.exists() ? (ownerDoc.data() as any) : {};
+        // Walk up the reporting chain and pick the first user with branding.
+        // This ensures admin branding is visible to all users under that admin.
+        const visited = new Set<string>();
+        const chain: Array<any> = [];
+        let cursorUid: string | undefined = user.uid;
+
+        while (cursorUid && !visited.has(cursorUid)) {
+          visited.add(cursorUid);
+          const currentDoc = await getDoc(doc(db, 'users', cursorUid));
+          if (!currentDoc.exists()) break;
+          const currentData = { uid: cursorUid, ...(currentDoc.data() as any) };
+          chain.push(currentData);
+          cursorUid = currentData.managerId;
+        }
+
+        const brandedOwner = chain.find((item) =>
+          Boolean((item.brandLogoUrl || '').trim() || (item.brandCompanyName || '').trim() || (item.brandTagline || '').trim())
+        );
+        const ownerData = brandedOwner || chain[0] || {};
+
         setBrand({
           logoUrl: ownerData?.brandLogoUrl || '',
           companyName: ownerData?.brandCompanyName || (user as any).clientName || 'EstatePulse',

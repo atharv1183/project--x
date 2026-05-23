@@ -473,10 +473,8 @@ export default function SalesPerformanceDashboard({
   const visibleEmployees = useMemo(() => {
     const baseEmployees = employees.filter((employee) => employee.role === 'employee' || employee.role === 'manager');
     if (scope === 'employee') {
-      const map = new Map<string, User>();
-      baseEmployees.forEach((employee) => map.set(employee.uid, employee));
-      map.set(user.uid, { ...user, role: 'employee' as const });
-      return Array.from(map.values()).filter((employee) => employee.role === 'employee');
+      // Employee panel should always reflect the logged-in employee's own performance.
+      return [{ ...user, role: 'employee' as const }];
     }
     if (scope === 'manager') {
       const scoped = baseEmployees.filter((employee) => employee.uid === user.uid || employee.managerId === user.uid);
@@ -623,6 +621,10 @@ export default function SalesPerformanceDashboard({
   const scoreRankedMetrics = useMemo(() => [...employeeMetrics].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)), [employeeMetrics]);
   const currentUserRank = scoreRankedMetrics.findIndex((metric) => metric.uid === user.uid) + 1;
   const currentUserMetric = scoreRankedMetrics.find((metric) => metric.uid === user.uid) || null;
+
+  useEffect(() => {
+    setPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
 
   const alerts = useMemo(() => {
     const now = Date.now();
