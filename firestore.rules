@@ -19,6 +19,16 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['super_admin', 'admin', 'client_admin'];
     }
 
+    function isManager() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'manager';
+    }
+
+    function isAdminLike() {
+      return isAdmin() || isManager();
+    }
+
     function isSuperAdmin() {
       return isSignedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
@@ -138,48 +148,52 @@ service cloud.firestore {
 
     // Inventory
     match /inventory/{itemId} {
-      allow list: if isSignedIn() && (
-        isAdmin() || 
+      allow list: if (
+        (resource.data.visibilityScope == 'all' && resource.data.status == 'approved')
+        || (isSignedIn() && (
+        isAdminLike() || 
         resource.data.status == 'approved' || 
         resource.data.submitterId == request.auth.uid
+      ))
       );
-      allow get: if isSignedIn();
+      allow get: if (resource.data.visibilityScope == 'all' && resource.data.status == 'approved') || isSignedIn();
       allow create: if isSignedIn() && (
-        (isAdmin() && request.resource.data.status == 'approved') || 
-        (!isAdmin() && (request.resource.data.status == 'pending_approval' || request.resource.data.status == 'draft'))
+        (isAdminLike() && request.resource.data.status == 'approved') || 
+        (!isAdminLike() && (request.resource.data.status == 'pending_approval' || request.resource.data.status == 'draft'))
       ) && isValidInventory(request.resource.data);
       allow update: if isSignedIn() && (
-        isAdmin() || 
+        isAdminLike() || 
         (resource.data.submitterId == request.auth.uid && (resource.data.status == 'draft' || resource.data.status == 'rejected' || resource.data.status == 'pending_approval'))
       );
-      allow delete: if isAdmin() || (isSignedIn() && resource.data.submitterId == request.auth.uid && resource.data.status == 'draft');
+      allow delete: if isAdminLike() || (isSignedIn() && resource.data.submitterId == request.auth.uid && resource.data.status == 'draft');
     }
 
     // Admin-only broker directory
     match /brokers/{brokerId} {
-      allow read: if isAdmin();
-      allow create, update: if isAdmin() && isValidBroker(request.resource.data);
-      allow delete: if isAdmin();
+      allow read: if isAdminLike();
+      allow create, update: if isAdminLike() && isValidBroker(request.resource.data);
+      allow delete: if isAdminLike();
     }
 
     // Requirements
     match /requirements/{reqId} {
       allow list: if isSignedIn() && (
         resource.data.employeeId == request.auth.uid || 
-        isAdmin()
+        isAdminLike()
       );
-      allow get: if isSignedIn() && (isAdmin() || resource.data.employeeId == request.auth.uid);
+      allow get: if isSignedIn() && (isAdminLike() || resource.data.employeeId == request.auth.uid);
       allow create: if isSignedIn() && isValidRequirement(request.resource.data);
-      allow delete: if isSignedIn() && (isAdmin() || resource.data.employeeId == request.auth.uid);
+      allow update: if isSignedIn() && (isAdminLike() || resource.data.employeeId == request.auth.uid);
+      allow delete: if isSignedIn() && (isAdminLike() || resource.data.employeeId == request.auth.uid);
     }
 
     // Employee invites
     match /employeeInvites/{phone} {
-      allow get: if isAdmin() || (isSignedIn() && request.auth.token.email == phone + '@estatepulse.com');
-      allow list: if isAdmin();
-      allow create: if isAdmin() && isValidEmployeeInvite(request.resource.data);
-      allow update: if (isAdmin() && isValidEmployeeInvite(request.resource.data)) || isInviteClaimUpdate();
-      allow delete: if isAdmin();
+      allow get: if isAdminLike() || (isSignedIn() && request.auth.token.email == phone + '@estatepulse.com');
+      allow list: if isAdminLike();
+      allow create: if isAdminLike() && isValidEmployeeInvite(request.resource.data);
+      allow update: if (isAdminLike() && isValidEmployeeInvite(request.resource.data)) || isInviteClaimUpdate();
+      allow delete: if isAdminLike();
     }
 
     // Employee directory with only non-sensitive fields
@@ -187,24 +201,24 @@ service cloud.firestore {
       allow get, list: if isSignedIn();
       allow create: if isValidEmployeeDirectory(request.resource.data)
         && (
-          isAdmin()
+          isAdminLike()
           || (
             request.auth.uid == userId
             && request.resource.data.phone + '@estatepulse.com' == request.auth.token.email
           )
         );
-      allow update: if isAdmin() && isValidEmployeeDirectory(request.resource.data);
-      allow delete: if isAdmin();
+      allow update: if isAdminLike() && isValidEmployeeDirectory(request.resource.data);
+      allow delete: if isAdminLike();
     }
 
     // Users
     match /users/{userId} {
-      allow get: if isAdmin() || request.auth.uid == userId;
-      allow list: if isAdmin();
+      allow get: if isAdminLike() || request.auth.uid == userId;
+      allow list: if isAdminLike();
       allow create: if isSignedIn()
         && isValidUser(request.resource.data)
         && (
-          isAdmin() ||
+          isAdminLike() ||
           (
             request.auth.uid == userId
             && request.resource.data.role == 'employee'
@@ -212,16 +226,28 @@ service cloud.firestore {
             && request.resource.data.phone + '@estatepulse.com' == request.auth.token.email
           )
         );
-      allow update: if isAdmin() || (request.auth.uid == userId && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone']));
-      allow delete: if isAdmin() || (isSignedIn() && resource.data.phone + "@estatepulse.com" == request.auth.token.email);
+      allow update: if isAdminLike()
+        || (
+          request.auth.uid == userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name',
+            'phone',
+            'profileImageUrl',
+            'brandLogoUrl',
+            'brandCompanyName',
+            'brandTagline',
+            'updatedAt'
+          ])
+        );
+      allow delete: if isAdminLike() || (isSignedIn() && resource.data.phone + "@estatepulse.com" == request.auth.token.email);
     }
 
     // Leads
     match /leads/{leadId} {
-      allow get: if isSignedIn() && (isAdmin() || canViewLead(resource.data));
-      allow list: if isSignedIn() && (isAdmin() || canViewLead(resource.data));
+      allow get: if isSignedIn() && (isAdminLike() || canViewLead(resource.data));
+      allow list: if isSignedIn() && (isAdminLike() || canViewLead(resource.data));
       allow create: if isValidLead(request.resource.data) && (
-        isAdmin() ||
+        isAdminLike() ||
         (
           request.resource.data.assignedTo == request.auth.uid
           && request.resource.data.source == 'Employee Added'
@@ -231,9 +257,9 @@ service cloud.firestore {
           && request.resource.data.addedByRole == 'employee'
         )
       );
-      allow update: if (isAdmin() || isOwner(resource.data)) && (
-        // Admin can update anything valid
-        (isAdmin() && isValidLead(request.resource.data)) ||
+      allow update: if (isAdminLike() || isOwner(resource.data)) && (
+        // Admin/manager can update lead payloads used by dashboard workflows.
+        (isAdminLike()) ||
         // Employee can update status, follow-up info, and transfer lead
         (isOwner(resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'nextFollowupAt', 'lastRemark', 'siteVisitPhoto', 'siteVisitLocation', 'siteVisitAt', 'assignedTo']) 
          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdAt', 'phone']))
@@ -242,14 +268,14 @@ service cloud.firestore {
 
     // Followups
     match /leads/{leadId}/followups/{followupId} {
-      allow read: if isAdmin() || isOwner(get(/databases/$(database)/documents/leads/$(leadId)).data);
-      allow create: if (isAdmin() || isOwner(get(/databases/$(database)/documents/leads/$(leadId)).data)) && isValidFollowup(request.resource.data);
+      allow read: if isAdminLike() || isOwner(get(/databases/$(database)/documents/leads/$(leadId)).data);
+      allow create: if (isAdminLike() || isOwner(get(/databases/$(database)/documents/leads/$(leadId)).data)) && isValidFollowup(request.resource.data);
     }
 
     // System allocation
     match /system/{docId} {
-      allow read: if isAdmin();
-      allow write: if isAdmin();
+      allow read: if isAdminLike();
+      allow write: if isAdminLike();
     }
 
     // Platform control plane collections (super admin only)
@@ -272,7 +298,7 @@ service cloud.firestore {
     }
 
     match /platformClients/{clientId} {
-      allow read: if isAdmin();
+      allow read: if isAdminLike();
       allow write: if isSuperAdmin();
 
       match /internalNotes/{docId} {
@@ -305,38 +331,73 @@ service cloud.firestore {
     }
 
     match /auditLogs/{docId} {
-      allow create: if isAdmin();
-      allow read: if isSuperAdmin();
+      allow create: if isAdminLike();
+      allow read: if isSuperAdmin() || (isSignedIn() && resource.data.actorId == request.auth.uid);
       allow update, delete: if false;
     }
 
     // Attendance
     match /attendance/{recordId} {
-      allow list: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow list: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdminLike();
       allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid 
         && request.resource.data.keys().hasAll(['uid', 'employeeName', 'timestamp', 'type', 'location'])
         && request.resource.data.timestamp == request.time;
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdminLike();
     }
 
     // Attendance correction requests
     match /attendanceCorrections/{requestId} {
-      allow list: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
-      allow get: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow list: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdminLike();
+      allow get: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdminLike();
       allow create: if isSignedIn() && isValidAttendanceCorrection(request.resource.data);
-      allow update: if isAdmin()
+      allow update: if isAdminLike()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt', 'reviewRemark'])
         && request.resource.data.status in ['approved', 'rejected'];
-      allow delete: if isAdmin();
+      allow delete: if isAdminLike();
     }
 
     // Notifications
     match /notifications/{notificationId} {
       allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isAdmin();
+      allow create: if isAdminLike();
       allow update: if isSignedIn() && resource.data.userId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
       allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // Lead transfer register
+    match /leadTransfers/{transferId} {
+      allow read: if isSignedIn()
+        && (
+          isAdminLike()
+          || resource.data.fromUid == request.auth.uid
+          || resource.data.toUid == request.auth.uid
+          || resource.data.transferredByUid == request.auth.uid
+        );
+      allow create: if isAdminLike() || (
+        isSignedIn()
+        && request.resource.data.transferredByUid == request.auth.uid
+      );
+      allow update, delete: if isAdminLike();
+    }
+
+    // Per-owner notification preferences
+    match /notificationSettings/{ownerId} {
+      allow get, list: if isSignedIn() && (isAdminLike() || request.auth.uid == ownerId);
+      allow create, update: if isSignedIn() && (isAdminLike() || request.auth.uid == ownerId);
+      allow delete: if isAdminLike();
+    }
+
+    // Support tickets
+    match /supportTickets/{ticketId} {
+      allow read: if isSignedIn() && (isAdminLike() || resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.keys().hasAll(['userId', 'title', 'message', 'status', 'createdAt']);
+      allow update: if isSignedIn() && (
+        isAdminLike() || resource.data.userId == request.auth.uid
+      );
+      allow delete: if isAdminLike() || (isSignedIn() && resource.data.userId == request.auth.uid);
     }
   }
 }

@@ -762,10 +762,16 @@ export default function EmployeeDashboard({
 
     if (!normalizedPhone) return alert('Mobile number is mandatory.');
     if (normalizedPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
-    const duplicateSnapshot = await getDocs(query(collection(db, 'leads'), where('phone', '==', normalizedPhone), limit(1)));
-    if (!duplicateSnapshot.empty) {
-      const existingLead = duplicateSnapshot.docs[0].data() as Lead;
-      return alert(`Lead with mobile ${normalizedPhone} already exists (${existingLead.name || 'Unknown'}).`);
+    // Employee can only query leads visible to themselves per Firestore rules.
+    // So duplicate checks must be scoped to employee-owned/added leads.
+    const [duplicateAssignedSnapshot, duplicateAddedSnapshot] = await Promise.all([
+      getDocs(query(collection(db, 'leads'), where('assignedTo', '==', user.uid), where('phone', '==', normalizedPhone), limit(1))),
+      getDocs(query(collection(db, 'leads'), where('addedById', '==', user.uid), where('phone', '==', normalizedPhone), limit(1))),
+    ]);
+    const duplicateDoc = duplicateAssignedSnapshot.docs[0] || duplicateAddedSnapshot.docs[0];
+    if (duplicateDoc) {
+      const existingLead = duplicateDoc.data() as Lead;
+      return alert(`Lead with mobile ${normalizedPhone} already exists in your records (${existingLead.name || 'Unknown'}).`);
     }
 
     setLoading(true);

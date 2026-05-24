@@ -30,6 +30,9 @@ const isAdminView = (view: DashboardTarget): view is AdminDashboardView =>
 const isEmployeeView = (view: DashboardTarget): view is EmployeeDashboardView =>
   view === 'performance' || view === 'leads' || view === 'pending' || view === 'today' || view === 'upcoming' || view === 'attendance' || view === 'requirements' || view === 'inventory' || view === 'activity_logs';
 
+const defaultScreenForUser = (user: User): 'dashboard' | 'platform' =>
+  user.role === 'super_admin' ? 'platform' : 'dashboard';
+
 export default function App() {
   const pathname = window.location.pathname.toLowerCase();
   const isPublicHeroRoute = pathname === '/' || pathname === '/hero' || pathname === '/website';
@@ -108,7 +111,7 @@ export default function App() {
               }
             }
             setUser(nextUser);
-            setActiveScreen('dashboard');
+            setActiveScreen(defaultScreenForUser(nextUser));
           } else {
             // If user exists in Auth but not in Firestore (shouldn't happen with our logic)
             setUser(null);
@@ -244,6 +247,7 @@ export default function App() {
       <Login
         onLoginSuccess={(u) => {
           setUser(u);
+          setActiveScreen(defaultScreenForUser(u));
           showLoginToast(u.name);
         }}
       />

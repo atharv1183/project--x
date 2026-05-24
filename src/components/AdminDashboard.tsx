@@ -2858,7 +2858,7 @@ export default function AdminDashboard({
 
       {/* Reallocate Leads Modal */}
       {showReallocateModal && reallocateEmployee && (
-        <div className="fixed inset-0 z-[110] bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[140] bg-black/70 backdrop-blur-md flex items-center justify-center p-4 pb-24">
           <motion.div 
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
@@ -2944,7 +2944,7 @@ export default function AdminDashboard({
 
       {/* Lead Detail & Edit Modal */}
       {selectedLead && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[140] flex items-center justify-center p-4 pb-24 bg-black/60 backdrop-blur-sm">
           <motion.div 
             initial={{ opacity: 0, y: 30 }} 
             animate={{ opacity: 1, y: 0 }} 
@@ -3231,7 +3231,7 @@ export default function AdminDashboard({
 
       {/* Edit Employee Modal */}
       {showEditEmployee && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[140] flex items-center justify-center p-4 pb-24 bg-black/60 backdrop-blur-sm">
           <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-2xl font-bold text-gray-900">Edit Member</h3>
@@ -3296,7 +3296,7 @@ export default function AdminDashboard({
 
       {/* Modals */}
       {showTransferModal && (
-        <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 text-left">
+        <div className="fixed inset-0 z-[140] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 pb-24 text-left">
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
