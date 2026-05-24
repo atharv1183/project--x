@@ -215,6 +215,7 @@ export default function EmployeeDashboard({
   const [transferSearch, setTransferSearch] = useState('');
   const [transferRegisterSearch, setTransferRegisterSearch] = useState('');
   const [leadSearchQuery, setLeadSearchQuery] = useState('');
+  const [notInterestedOnly, setNotInterestedOnly] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
@@ -821,15 +822,18 @@ export default function EmployeeDashboard({
   );
   const employeeAssignedLeadsFiltered = useMemo(() => {
     const term = leadSearchQuery.trim().toLowerCase();
-    if (!term) return employeeAssignedLeads;
-    return employeeAssignedLeads.filter((lead) =>
+    const base = notInterestedOnly
+      ? employeeAssignedLeads.filter((lead) => lead.status === 'not_interested')
+      : employeeAssignedLeads;
+    if (!term) return base;
+    return base.filter((lead) =>
       [lead.name, lead.phone, lead.source, lead.status, lead.lastRemark]
         .filter(Boolean)
         .join(' ')
         .toLowerCase()
         .includes(term)
     );
-  }, [employeeAssignedLeads, leadSearchQuery]);
+  }, [employeeAssignedLeads, leadSearchQuery, notInterestedOnly]);
   const searchTerm = leadSearchQuery.trim().toLowerCase();
   const filteredLeads = queueLeads.filter(l => {
     if (!searchTerm) return true;
@@ -1395,9 +1399,20 @@ export default function EmployeeDashboard({
         <div className="space-y-6 pt-3 sm:pt-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">My Assigned Leads</h2>
-            <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-              {employeeAssignedLeadsFiltered.length}
-            </span>
+            <div className="flex items-center gap-2">
+              {notInterestedOnly && (
+                <button
+                  type="button"
+                  onClick={() => setNotInterestedOnly(false)}
+                  className="text-[10px] font-black uppercase tracking-wider text-rose-700 bg-rose-100 px-2.5 py-1 rounded-full"
+                >
+                  Not Interested Filter ON
+                </button>
+              )}
+              <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+                {employeeAssignedLeadsFiltered.length}
+              </span>
+            </div>
           </div>
           <div className="relative">
             <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -1418,6 +1433,19 @@ export default function EmployeeDashboard({
                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Phone</th>
                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Source</th>
                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Status</th>
+                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">
+                      <button
+                        type="button"
+                        onClick={() => setNotInterestedOnly((prev) => !prev)}
+                        className={cn(
+                          "inline-flex items-center gap-1",
+                          notInterestedOnly ? "text-rose-600" : "text-slate-400"
+                        )}
+                        title="Toggle only not interested leads"
+                      >
+                        Not Interested {notInterestedOnly ? '(ON)' : ''}
+                      </button>
+                    </th>
                     <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Created</th>
                   </tr>
                 </thead>
@@ -1432,12 +1460,20 @@ export default function EmployeeDashboard({
                       <td className="px-6 py-4 text-sm font-bold text-slate-600">{lead.phone}</td>
                       <td className="px-6 py-4 text-sm font-bold text-slate-600">{lead.source || '-'}</td>
                       <td className="px-6 py-4 text-xs font-black text-slate-700 uppercase">{(lead.status || 'pending').replace('_', ' ')}</td>
+                      <td className="px-6 py-4">
+                        <span className={cn(
+                          "px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
+                          lead.status === 'not_interested' ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-500"
+                        )}>
+                          {lead.status === 'not_interested' ? 'Yes' : 'No'}
+                        </span>
+                      </td>
                       <td className="px-6 py-4 text-xs font-bold text-slate-500">{formatDateValue(lead.createdAt, 'MMM dd, yyyy hh:mm a', 'N/A')}</td>
                     </tr>
                   ))}
                   {employeeAssignedLeadsFiltered.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-6 py-16 text-center text-sm font-bold text-slate-400">No assigned leads found.</td>
+                      <td colSpan={6} className="px-6 py-16 text-center text-sm font-bold text-slate-400">No assigned leads found.</td>
                     </tr>
                   )}
                 </tbody>
