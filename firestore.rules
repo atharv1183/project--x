@@ -35,6 +35,14 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super_admin';
     }
 
+    function requesterClientId() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clientId;
+    }
+
+    function isSameClient(resourceData) {
+      return resourceData.clientId is string && requesterClientId() is string && resourceData.clientId == requesterClientId();
+    }
+
     function isOwner(resourceData) {
       return isSignedIn() && resourceData.assignedTo == request.auth.uid;
     }
@@ -114,11 +122,12 @@ service cloud.firestore {
     }
 
     function isValidInventory(data) {
-      return data.keys().hasAll(['title', 'type', 'rate', 'location', 'status', 'submitterId', 'submitterName', 'createdAt', 'updatedAt'])
+      return data.keys().hasAll(['title', 'type', 'rate', 'location', 'status', 'submitterId', 'submitterName', 'createdAt', 'updatedAt', 'clientId'])
         && data.title is string && data.title.size() > 0
         && data.type in ['zameen', 'plot', 'house', 'others']
         && data.status in ['draft', 'pending_approval', 'approved', 'rejected']
-        && data.submitterId == request.auth.uid;
+        && data.submitterId == request.auth.uid
+        && data.clientId is string;
     }
 
     function isValidAttendanceCorrection(data) {
@@ -148,24 +157,30 @@ service cloud.firestore {
 
     // Inventory
     match /inventory/{itemId} {
-      allow list: if (
-        (resource.data.visibilityScope == 'all' && resource.data.status == 'approved')
-        || (isSignedIn() && (
-        isAdminLike() || 
-        resource.data.status == 'approved' || 
-        resource.data.submitterId == request.auth.uid
-      ))
-      );
-      allow get: if (resource.data.visibilityScope == 'all' && resource.data.status == 'approved') || isSignedIn();
+      allow list: if isSuperAdmin() || (
+        isSignedIn()
+        && isSameClient(resource.data)
+        && (
+          isAdminLike()
+          || resource.data.status == 'approved'
+          || resource.data.submitterId == request.auth.uid
+        )
+      ) || (resource.data.visibilityScope == 'all' && resource.data.status == 'approved');
+      allow get: if isSuperAdmin() || (isSignedIn() && isSameClient(resource.data)) || (resource.data.visibilityScope == 'all' && resource.data.status == 'approved');
       allow create: if isSignedIn() && (
+        (isSuperAdmin() && request.resource.data.clientId is string) ||
+        ((request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()) && (
         (isAdminLike() && request.resource.data.status == 'approved') || 
         (!isAdminLike() && (request.resource.data.status == 'pending_approval' || request.resource.data.status == 'draft'))
+      ))
       ) && isValidInventory(request.resource.data);
       allow update: if isSignedIn() && (
-        isAdminLike() || 
-        (resource.data.submitterId == request.auth.uid && (resource.data.status == 'draft' || resource.data.status == 'rejected' || resource.data.status == 'pending_approval'))
+        (isSuperAdmin() || (isSameClient(resource.data) && (
+          isAdminLike() ||
+          (resource.data.submitterId == request.auth.uid && (resource.data.status == 'draft' || resource.data.status == 'rejected' || resource.data.status == 'pending_approval'))
+        )))
       );
-      allow delete: if isAdminLike() || (isSignedIn() && resource.data.submitterId == request.auth.uid && resource.data.status == 'draft');
+      allow delete: if isSuperAdmin() || (isSameClient(resource.data) && (isAdminLike() || (isSignedIn() && resource.data.submitterId == request.auth.uid && resource.data.status == 'draft')));
     }
 
     // Admin-only broker directory
@@ -178,13 +193,14 @@ service cloud.firestore {
     // Requirements
     match /requirements/{reqId} {
       allow list: if isSignedIn() && (
-        resource.data.employeeId == request.auth.uid || 
-        isAdminLike()
+        resource.data.employeeId == request.auth.uid ||
+        (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data)))
       );
-      allow get: if isSignedIn() && (isAdminLike() || resource.data.employeeId == request.auth.uid);
-      allow create: if isSignedIn() && isValidRequirement(request.resource.data);
-      allow update: if isSignedIn() && (isAdminLike() || resource.data.employeeId == request.auth.uid);
-      allow delete: if isSignedIn() && (isAdminLike() || resource.data.employeeId == request.auth.uid);
+      allow get: if isSignedIn() && ((isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || resource.data.employeeId == request.auth.uid);
+      allow create: if isSignedIn() && isValidRequirement(request.resource.data)
+        && (isSuperAdmin() || (request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()));
+      allow update: if isSignedIn() && ((isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || resource.data.employeeId == request.auth.uid);
+      allow delete: if isSignedIn() && ((isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || resource.data.employeeId == request.auth.uid);
     }
 
     // Employee invites
@@ -213,12 +229,12 @@ service cloud.firestore {
 
     // Users
     match /users/{userId} {
-      allow get: if isAdminLike() || request.auth.uid == userId;
+      allow get: if (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || request.auth.uid == userId;
       allow list: if isAdminLike();
       allow create: if isSignedIn()
         && isValidUser(request.resource.data)
         && (
-          isAdminLike() ||
+          (isAdminLike() && (isSuperAdmin() || (request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()))) ||
           (
             request.auth.uid == userId
             && request.resource.data.role == 'employee'
@@ -226,7 +242,7 @@ service cloud.firestore {
             && request.resource.data.phone + '@estatepulse.com' == request.auth.token.email
           )
         );
-      allow update: if isAdminLike()
+      allow update: if (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data)))
         || (
           request.auth.uid == userId
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -239,15 +255,15 @@ service cloud.firestore {
             'updatedAt'
           ])
         );
-      allow delete: if isAdminLike() || (isSignedIn() && resource.data.phone + "@estatepulse.com" == request.auth.token.email);
+      allow delete: if (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || (isSignedIn() && resource.data.phone + "@estatepulse.com" == request.auth.token.email);
     }
 
     // Leads
     match /leads/{leadId} {
-      allow get: if isSignedIn() && (isAdminLike() || canViewLead(resource.data));
-      allow list: if isSignedIn() && (isAdminLike() || canViewLead(resource.data));
+      allow get: if isSignedIn() && ((isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || canViewLead(resource.data));
+      allow list: if isSignedIn() && ((isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || canViewLead(resource.data));
       allow create: if isValidLead(request.resource.data) && (
-        isAdminLike() ||
+        (isAdminLike() && (isSuperAdmin() || (request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()))) ||
         (
           request.resource.data.assignedTo == request.auth.uid
           && request.resource.data.source == 'Employee Added'
@@ -257,9 +273,9 @@ service cloud.firestore {
           && request.resource.data.addedByRole == 'employee'
         )
       );
-      allow update: if (isAdminLike() || isOwner(resource.data)) && (
+      allow update: if (((isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || isOwner(resource.data))) && (
         // Admin/manager can update lead payloads used by dashboard workflows.
-        (isAdminLike()) ||
+        (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) ||
         // Employee can update status, follow-up info, and transfer lead
         (isOwner(resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'nextFollowupAt', 'lastRemark', 'siteVisitPhoto', 'siteVisitLocation', 'siteVisitAt', 'assignedTo']) 
          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdAt', 'phone']))
@@ -338,22 +354,24 @@ service cloud.firestore {
 
     // Attendance
     match /attendance/{recordId} {
-      allow list: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdminLike();
+      allow list: if (isSignedIn() && resource.data.uid == request.auth.uid) || (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data)));
       allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid 
         && request.resource.data.keys().hasAll(['uid', 'employeeName', 'timestamp', 'type', 'location'])
+        && (isSuperAdmin() || (request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()))
         && request.resource.data.timestamp == request.time;
-      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdminLike();
+      allow read: if (isSignedIn() && resource.data.uid == request.auth.uid) || (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data)));
     }
 
     // Attendance correction requests
     match /attendanceCorrections/{requestId} {
-      allow list: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdminLike();
-      allow get: if (isSignedIn() && resource.data.uid == request.auth.uid) || isAdminLike();
-      allow create: if isSignedIn() && isValidAttendanceCorrection(request.resource.data);
-      allow update: if isAdminLike()
+      allow list: if (isSignedIn() && resource.data.uid == request.auth.uid) || (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data)));
+      allow get: if (isSignedIn() && resource.data.uid == request.auth.uid) || (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data)));
+      allow create: if isSignedIn() && isValidAttendanceCorrection(request.resource.data)
+        && (isSuperAdmin() || (request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()));
+      allow update: if (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data)))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt', 'reviewRemark'])
         && request.resource.data.status in ['approved', 'rejected'];
-      allow delete: if isAdminLike();
+      allow delete: if isAdminLike() && (isSuperAdmin() || isSameClient(resource.data));
     }
 
     // Notifications
@@ -369,16 +387,16 @@ service cloud.firestore {
     match /leadTransfers/{transferId} {
       allow read: if isSignedIn()
         && (
-          isAdminLike()
+          (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data)))
           || resource.data.fromUid == request.auth.uid
           || resource.data.toUid == request.auth.uid
           || resource.data.transferredByUid == request.auth.uid
         );
-      allow create: if isAdminLike() || (
+      allow create: if (isAdminLike() && (isSuperAdmin() || (request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()))) || (
         isSignedIn()
         && request.resource.data.transferredByUid == request.auth.uid
       );
-      allow update, delete: if isAdminLike();
+      allow update, delete: if isAdminLike() && (isSuperAdmin() || isSameClient(resource.data));
     }
 
     // Per-owner notification preferences

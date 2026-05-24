@@ -192,6 +192,8 @@ function buildProjectViewLink(itemId: string, view: 'list' | 'icon'): string {
 export default function InventoryManagement({ user, onBack }: InventoryManagementProps) {
   const isAdmin = user.role === 'admin' || user.role === 'manager';
   const isSuperAdmin = user.role === 'admin';
+  const tenantClientId = String((user as any).clientId || '');
+  const shouldScopeByClient = user.role !== 'super_admin' && tenantClientId.length > 0;
   type AreaUnit = keyof typeof AREA_CONVERSIONS;
   type ProjectUnitDraft = Omit<ProjectUnit, 'areaValue' | 'rate' | 'bhk' | 'bathrooms'> & {
     newPhotos: File[];
@@ -286,7 +288,9 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     let unsubscribePersonal: () => void;
     
     if (isAdmin) {
-      const q = query(collection(db, 'inventory'), orderBy('createdAt', 'desc'));
+      const q = shouldScopeByClient
+        ? query(collection(db, 'inventory'), where('clientId', '==', tenantClientId), orderBy('createdAt', 'desc'))
+        : query(collection(db, 'inventory'), orderBy('createdAt', 'desc'));
       unsubscribeApproved = onSnapshot(q, (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InventoryItem));
         setItems(data);
@@ -296,15 +300,13 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       // For employees, we need two separate listeners to satisfy security rules 
       // which block broad listing of all items (including others' drafts).
       
-      const qApproved = query(
-        collection(db, 'inventory'), 
-        where('status', '==', 'approved')
-      );
+      const qApproved = shouldScopeByClient
+        ? query(collection(db, 'inventory'), where('status', '==', 'approved'), where('clientId', '==', tenantClientId))
+        : query(collection(db, 'inventory'), where('status', '==', 'approved'));
       
-      const qPersonal = query(
-        collection(db, 'inventory'),
-        where('submitterId', '==', user.uid)
-      );
+      const qPersonal = shouldScopeByClient
+        ? query(collection(db, 'inventory'), where('submitterId', '==', user.uid), where('clientId', '==', tenantClientId))
+        : query(collection(db, 'inventory'), where('submitterId', '==', user.uid));
 
       const approvedItems: InventoryItem[] = [];
       const personalItems: InventoryItem[] = [];
@@ -337,7 +339,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         unsubscribePersonal();
       };
     }
-  }, [isAdmin, user.uid]);
+  }, [isAdmin, shouldScopeByClient, tenantClientId, user.uid]);
 
   useEffect(() => {
     if (!isSuperAdmin) {
@@ -692,6 +694,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           status: isDraftSubmission ? 'draft' : selectedListingStatus,
           submitterId: user.uid,
           submitterName: user.name,
+          clientId: tenantClientId || null,
+          clientName: (user as any).clientName || null,
           createdAt: serverTimestamp(),
         });
         await addAuditLog(db, {

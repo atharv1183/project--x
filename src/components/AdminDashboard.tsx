@@ -150,6 +150,8 @@ export default function AdminDashboard({
   initialView,
   initialViewSignal = 0,
 }: AdminDashboardProps) {
+  const tenantClientId = String((user as any).clientId || '');
+  const shouldScopeByClient = user.role !== 'super_admin' && tenantClientId.length > 0;
   const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin';
   const isManager = user.role === 'manager';
   const [activeView, setActiveView] = useState<AdminView>(initialView ?? 'performance');
@@ -621,6 +623,7 @@ export default function AdminDashboard({
         employeeId: user.uid
       });
       await addDoc(collection(db, 'leadTransfers'), {
+        clientId: (selectedLead as any).clientId || (user as any).clientId || null,
         leadId: selectedLead.id,
         leadName: selectedLead.name,
         fromUid: selectedLead.assignedTo,
@@ -743,7 +746,9 @@ export default function AdminDashboard({
   };
 
   useEffect(() => {
-    const qEmployees = query(collection(db, 'users'), where('role', 'in', ['employee', 'manager', 'suspended']));
+    const qEmployees = shouldScopeByClient
+      ? query(collection(db, 'users'), where('clientId', '==', tenantClientId), where('role', 'in', ['employee', 'manager', 'suspended']))
+      : query(collection(db, 'users'), where('role', 'in', ['employee', 'manager', 'suspended']));
     const unsubscribeEmployees = onSnapshot(qEmployees, (snapshot) => {
       const nextEmployees = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as User));
       setEmployees(nextEmployees);
@@ -766,7 +771,9 @@ export default function AdminDashboard({
       }
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
 
-    const qLeads = query(collection(db, 'leads'), orderBy('createdAt', 'desc'));
+    const qLeads = shouldScopeByClient
+      ? query(collection(db, 'leads'), where('clientId', '==', tenantClientId), orderBy('createdAt', 'desc'))
+      : query(collection(db, 'leads'), orderBy('createdAt', 'desc'));
     const unsubscribeLeads = onSnapshot(qLeads, (snapshot) => {
       const allLeads = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead));
       rawLeadsRef.current = allLeads;
@@ -780,7 +787,9 @@ export default function AdminDashboard({
       );
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'leads'));
 
-    const qAttendance = query(collection(db, 'attendance'), orderBy('timestamp', 'desc'), limit(2000));
+    const qAttendance = shouldScopeByClient
+      ? query(collection(db, 'attendance'), where('clientId', '==', tenantClientId), orderBy('timestamp', 'desc'), limit(2000))
+      : query(collection(db, 'attendance'), orderBy('timestamp', 'desc'), limit(2000));
     const unsubscribeAttendance = onSnapshot(qAttendance, (snapshot) => {
       const allLogs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Attendance));
       rawAttendanceRef.current = allLogs;
@@ -792,7 +801,9 @@ export default function AdminDashboard({
       setAttendance(allLogs.filter((log) => scopeIds.has(log.uid)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendance'));
 
-    const qReqs = query(collection(db, 'requirements'), orderBy('createdAt', 'desc'));
+    const qReqs = shouldScopeByClient
+      ? query(collection(db, 'requirements'), where('clientId', '==', tenantClientId), orderBy('createdAt', 'desc'))
+      : query(collection(db, 'requirements'), orderBy('createdAt', 'desc'));
     const unsubscribeReqs = onSnapshot(qReqs, (snapshot) => {
       const allRequirements = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Requirement));
       rawRequirementsRef.current = allRequirements;
@@ -804,7 +815,9 @@ export default function AdminDashboard({
       setRequirements(allRequirements.filter((req) => scopeIds.has(req.employeeId)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'requirements'));
 
-    const qTransfers = query(collection(db, 'leadTransfers'), orderBy('createdAt', 'desc'), limit(2000));
+    const qTransfers = shouldScopeByClient
+      ? query(collection(db, 'leadTransfers'), where('clientId', '==', tenantClientId), orderBy('createdAt', 'desc'), limit(2000))
+      : query(collection(db, 'leadTransfers'), orderBy('createdAt', 'desc'), limit(2000));
     const unsubscribeTransfers = onSnapshot(qTransfers, (snapshot) => {
       const allTransfers = snapshot.docs.map((transferDoc) => ({ id: transferDoc.id, ...transferDoc.data() } as LeadTransfer));
       rawLeadTransfersRef.current = allTransfers;
@@ -838,7 +851,7 @@ export default function AdminDashboard({
       unsubscribeTransfers();
       unsubscribeAttendanceCorrections();
     };
-  }, [isManager, user.uid]);
+  }, [isManager, user.uid, shouldScopeByClient, tenantClientId]);
 
   useEffect(() => {
     if (!isSuperAdmin) {
@@ -1340,6 +1353,7 @@ export default function AdminDashboard({
       });
       const { latitude, longitude } = position.coords;
       await addDoc(collection(db, 'attendance'), {
+        clientId: (user as any).clientId || null,
         uid: auth.currentUser.uid,
         employeeName: user.name,
         timestamp: serverTimestamp(),
@@ -1573,6 +1587,8 @@ export default function AdminDashboard({
         }
 
         const createdLeadRef = await addDoc(collection(db, 'leads'), {
+          clientId: (user as any).clientId || null,
+          clientName: (user as any).clientName || null,
           name: leadName,
           phone: normalizedLeadPhone,
           source: leadForm.source,
@@ -1601,6 +1617,8 @@ export default function AdminDashboard({
           const newLeadRef = doc(collection(db, 'leads'));
           createdLeadId = newLeadRef.id;
           transaction.set(newLeadRef, {
+            clientId: (user as any).clientId || null,
+            clientName: (user as any).clientName || null,
             name: leadName,
             phone: normalizedLeadPhone,
             source: leadForm.source,
@@ -1711,6 +1729,8 @@ export default function AdminDashboard({
         email,
         role: memberRole,
         phone: normalizedPhone,
+        clientId: (user as any).clientId || null,
+        clientName: (user as any).clientName || null,
         managerId: memberRole === 'employee' ? (selectedManager?.uid || null) : null,
         managerName: memberRole === 'employee' ? (selectedManager?.name || null) : null,
         createdAt: serverTimestamp(),
@@ -1813,6 +1833,7 @@ export default function AdminDashboard({
         });
       } else {
         const brokerRef = await addDoc(collection(db, 'brokers'), {
+          clientId: (user as any).clientId || null,
           name,
           phone,
           email: brokerForm.email.trim(),

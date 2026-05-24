@@ -446,6 +446,7 @@ export default function EmployeeDashboard({
       const { latitude, longitude } = position.coords;
 
       await addDoc(collection(db, 'attendance'), {
+        clientId: (user as any).clientId || null,
         uid: auth.currentUser.uid,
         employeeName: user.name,
         timestamp: serverTimestamp(),
@@ -671,6 +672,7 @@ export default function EmployeeDashboard({
         });
       } else {
         const reqRef = await addDoc(collection(db, 'requirements'), {
+          clientId: (user as any).clientId || null,
           ...reqForm,
           phone: normalizedPhone,
           employeeId: user.uid,
@@ -778,6 +780,8 @@ export default function EmployeeDashboard({
     setLoading(true);
     try {
       const leadRef = await addDoc(collection(db, 'leads'), {
+        clientId: (user as any).clientId || null,
+        clientName: (user as any).clientName || null,
         name: leadForm.name || 'Anonymous',
         phone: normalizedPhone,
         source: 'Employee Added',
@@ -935,6 +939,7 @@ export default function EmployeeDashboard({
     const key = `${row.date.getFullYear()}-${String(row.date.getMonth() + 1).padStart(2, '0')}-${String(row.date.getDate()).padStart(2, '0')}`;
     try {
       await addDoc(collection(db, 'attendanceCorrections'), {
+        clientId: (user as any).clientId || null,
         uid: user.uid,
         employeeName: user.name,
         dateKey: key,
@@ -1140,6 +1145,7 @@ export default function EmployeeDashboard({
         employeeId: user.uid
       });
       await addDoc(collection(db, 'leadTransfers'), {
+        clientId: (currentLead as any).clientId || (user as any).clientId || null,
         leadId: currentLead.id,
         leadName: currentLead.name,
         fromUid: user.uid,
