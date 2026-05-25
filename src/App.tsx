@@ -87,41 +87,47 @@ export default function App() {
       }
 
       unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-        if (firebaseUser) {
-          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-          if (userDoc.exists()) {
-            const nextUser = { uid: firebaseUser.uid, ...userDoc.data() } as User;
-            if ((nextUser as any).clientId) {
-              const clientDoc = await getDoc(doc(db, 'platformClients', String((nextUser as any).clientId)));
-              if (clientDoc.exists()) {
-                const clientData = clientDoc.data() as any;
-                const expiryMs = clientData?.subscriptionExpiryDate
-                  ? new Date(clientData.subscriptionExpiryDate).getTime()
-                  : 0;
-                const isExpired = Number.isFinite(expiryMs) && expiryMs > 0 && expiryMs < Date.now();
-                const blockedByState = ['expired', 'suspended', 'deleted_permanently', 'archived'].includes(String(clientData?.state || ''));
-                if (isExpired || blockedByState) {
-                  await signOut(auth);
-                  setUser(null);
-                  setActiveScreen('dashboard');
-                  alert('Your company subscription is expired or suspended. Please contact platform admin.');
-                  setLoading(false);
-                  return;
+        try {
+          if (firebaseUser) {
+            const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+            if (userDoc.exists()) {
+              const nextUser = { uid: firebaseUser.uid, ...userDoc.data() } as User;
+              if ((nextUser as any).clientId) {
+                const clientDoc = await getDoc(doc(db, 'platformClients', String((nextUser as any).clientId)));
+                if (clientDoc.exists()) {
+                  const clientData = clientDoc.data() as any;
+                  const expiryMs = clientData?.subscriptionExpiryDate
+                    ? new Date(clientData.subscriptionExpiryDate).getTime()
+                    : 0;
+                  const isExpired = Number.isFinite(expiryMs) && expiryMs > 0 && expiryMs < Date.now();
+                  const blockedByState = ['expired', 'suspended', 'deleted_permanently', 'archived'].includes(String(clientData?.state || ''));
+                  if (isExpired || blockedByState) {
+                    await signOut(auth);
+                    setUser(null);
+                    setActiveScreen('dashboard');
+                    alert('Your company subscription is expired or suspended. Please contact platform admin.');
+                    return;
+                  }
                 }
               }
+              setUser(nextUser);
+              setActiveScreen(defaultScreenForUser(nextUser));
+            } else {
+              // If user exists in Auth but not in Firestore (shouldn't happen with our logic)
+              setUser(null);
+              setActiveScreen('dashboard');
             }
-            setUser(nextUser);
-            setActiveScreen(defaultScreenForUser(nextUser));
           } else {
-            // If user exists in Auth but not in Firestore (shouldn't happen with our logic)
             setUser(null);
             setActiveScreen('dashboard');
           }
-        } else {
+        } catch (error) {
+          console.error('Auth bootstrap failed. Falling back to login screen.', error);
           setUser(null);
           setActiveScreen('dashboard');
+        } finally {
+          setLoading(false);
         }
-        setLoading(false);
       });
     };
 
@@ -143,14 +149,21 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     const q = query(collection(db, 'platformAnnouncements'), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs
-        .map((item) => ({ id: item.id, ...item.data() } as PlatformAnnouncement))
-        .filter((item) => item.active)
-        .filter((item) => item.targetType === 'all' || (item.targetClientIds || []).length > 0)
-        .slice(0, 3);
-      setActiveAnnouncements(data);
-    });
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const data = snapshot.docs
+          .map((item) => ({ id: item.id, ...item.data() } as PlatformAnnouncement))
+          .filter((item) => item.active)
+          .filter((item) => item.targetType === 'all' || (item.targetClientIds || []).length > 0)
+          .slice(0, 3);
+        setActiveAnnouncements(data);
+      },
+      (error) => {
+        console.error('Failed to load platform announcements.', error);
+        setActiveAnnouncements([]);
+      }
+    );
     return () => unsub();
   }, [user]);
 
