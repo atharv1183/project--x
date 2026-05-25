@@ -8,6 +8,7 @@ import {
   updateDoc, 
   deleteDoc, 
   doc, 
+  getDoc,
   serverTimestamp, 
   orderBy,
   Timestamp 
@@ -192,7 +193,7 @@ function buildProjectViewLink(itemId: string, view: 'list' | 'icon'): string {
 export default function InventoryManagement({ user, onBack }: InventoryManagementProps) {
   const isAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin' || user.role === 'manager';
   const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin';
-  const tenantClientId = String((user as any).clientId || '');
+  const [tenantClientId, setTenantClientId] = useState<string>(String((user as any).clientId || ''));
   const shouldScopeByClient = user.role !== 'super_admin' && tenantClientId.length > 0;
   const requiresTenantContext = user.role !== 'super_admin';
   type AreaUnit = keyof typeof AREA_CONVERSIONS;
@@ -283,6 +284,32 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   });
   const [videoLinks, setVideoLinks] = useState<string[]>([]);
   const [videoLinkInput, setVideoLinkInput] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+    const hydrateTenantContext = async () => {
+      const fromSession = String((user as any).clientId || '');
+      if (fromSession) {
+        if (mounted) setTenantClientId(fromSession);
+        return;
+      }
+      if (user.role === 'super_admin' || !auth.currentUser) {
+        if (mounted) setTenantClientId('');
+        return;
+      }
+      try {
+        const latestUserDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+        const latestClientId = latestUserDoc.exists() ? String((latestUserDoc.data() as any)?.clientId || '') : '';
+        if (mounted) setTenantClientId(latestClientId);
+      } catch {
+        if (mounted) setTenantClientId('');
+      }
+    };
+    void hydrateTenantContext();
+    return () => {
+      mounted = false;
+    };
+  }, [user]);
 
   useEffect(() => {
     if (requiresTenantContext && !tenantClientId) {
@@ -475,7 +502,30 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
   const handleSubmit = async (e: FormEvent, isDraftSubmission: boolean = false) => {
     if (e) e.preventDefault();
-    if (requiresTenantContext && !tenantClientId) {
+    let effectiveTenantClientId = tenantClientId;
+    let effectiveClientName = String((user as any).clientName || '');
+
+    if (requiresTenantContext && auth.currentUser) {
+      try {
+        const latestUserDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+        if (latestUserDoc.exists()) {
+          const latestData = latestUserDoc.data() as any;
+          const latestClientId = String(latestData?.clientId || '');
+          const latestClientName = String(latestData?.clientName || '');
+          if (latestClientId) {
+            effectiveTenantClientId = latestClientId;
+            setTenantClientId(latestClientId);
+          }
+          if (latestClientName) {
+            effectiveClientName = latestClientName;
+          }
+        }
+      } catch {
+        // fallback to current session values
+      }
+    }
+
+    if (requiresTenantContext && !effectiveTenantClientId) {
       alert('Your account is missing company mapping. Please contact super admin.');
       return;
     }
@@ -706,26 +756,15 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           addDoc(collection(db, 'inventory'), {
             ...payload,
             status,
-            submitterId: user.uid,
+            submitterId: auth.currentUser?.uid || user.uid,
             submitterName: user.name,
-            clientId: tenantClientId,
-            clientName: (user as any).clientName || '',
+            clientId: effectiveTenantClientId,
+            clientName: effectiveClientName,
             createdAt: serverTimestamp(),
           });
 
         const intendedStatus: InventoryStatus = isDraftSubmission ? 'draft' : selectedListingStatus;
-        let inventoryRef;
-        try {
-          inventoryRef = await createDoc(intendedStatus);
-        } catch (createError: any) {
-          const isPermissionDenied = String(createError?.code || '').includes('permission-denied');
-          const shouldRetryAsApproved =
-            isPermissionDenied && isAdmin && !isDraftSubmission && intendedStatus === 'pending_approval';
-          if (!shouldRetryAsApproved) {
-            throw createError;
-          }
-          inventoryRef = await createDoc('approved');
-        }
+        const inventoryRef = await createDoc(intendedStatus);
         await addAuditLog(db, {
           action: 'inventory_added',
           actorId: user.uid,
@@ -771,11 +810,16 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       setVideoLinks([]);
       setVideoLinkInput('');
       
+      const effectiveStatus: InventoryStatus = isDraftSubmission
+        ? 'draft'
+        : formData.approvalStatus === 'approved'
+          ? 'approved'
+          : 'pending_approval';
       const successMessage = isDraftSubmission
         ? 'Listing saved as draft!'
-        : (formData.approvalStatus === 'approved'
+        : effectiveStatus === 'approved'
           ? (editingItem ? 'Listing updated as approved!' : 'Listing saved as approved!')
-          : (editingItem ? 'Listing updated as non-approved!' : 'Listing saved as non-approved!'));
+          : (editingItem ? 'Listing updated as non-approved!' : 'Listing saved as non-approved!');
       if (uploadWarnings.length > 0) {
         alert(`${successMessage}\n\nSome files could not be uploaded.\n${uploadWarnings.join('\n')}`);
       } else {
@@ -807,8 +851,10 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         description: `Inventory status updated to ${status}`,
         newValue: { status, approvedBy: user.name },
       });
+      alert(status === 'approved' ? 'Listing approved successfully.' : 'Listing rejected successfully.');
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `inventory/${id}`);
+      const message = handleFirestoreError(error, OperationType.UPDATE, `inventory/${id}`);
+      alert(message);
     }
   };
 

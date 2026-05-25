@@ -386,9 +386,11 @@ export default function EmployeeDashboard({
 
   useEffect(() => {
     const tenantClientId = String((user as any).clientId || '');
-    const q = tenantClientId
-      ? query(collection(db, 'employeeDirectory'), where('role', '==', 'employee'), where('clientId', '==', tenantClientId))
-      : query(collection(db, 'employeeDirectory'), where('role', '==', 'employee'));
+    if (!tenantClientId) {
+      setEmployees([]);
+      return;
+    }
+    const q = query(collection(db, 'employeeDirectory'), where('role', '==', 'employee'), where('clientId', '==', tenantClientId));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setEmployees(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as User)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'employeeDirectory'));

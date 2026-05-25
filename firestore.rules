@@ -42,6 +42,14 @@ service cloud.firestore {
     function isSameClient(resourceData) {
       return resourceData.clientId is string && requesterClientId() is string && resourceData.clientId == requesterClientId();
     }
+    
+    function isSameClientBySubmitter(resourceData) {
+      return resourceData.submitterId is string
+        && requesterClientId() is string
+        && exists(/databases/$(database)/documents/users/$(resourceData.submitterId))
+        && get(/databases/$(database)/documents/users/$(resourceData.submitterId)).data.clientId is string
+        && get(/databases/$(database)/documents/users/$(resourceData.submitterId)).data.clientId == requesterClientId();
+    }
 
     function isOwner(resourceData) {
       return isSignedIn() && resourceData.assignedTo == request.auth.uid;
@@ -161,14 +169,14 @@ service cloud.firestore {
     match /inventory/{itemId} {
       allow list: if isSuperAdmin() || (
         isSignedIn()
-        && isSameClient(resource.data)
+        && (isSameClient(resource.data) || isSameClientBySubmitter(resource.data))
         && (
           isAdminLike()
           || resource.data.status == 'approved'
           || resource.data.submitterId == request.auth.uid
         )
       ) || (resource.data.visibilityScope == 'all' && resource.data.status == 'approved');
-      allow get: if isSuperAdmin() || (isSignedIn() && isSameClient(resource.data)) || (resource.data.visibilityScope == 'all' && resource.data.status == 'approved');
+      allow get: if isSuperAdmin() || (isSignedIn() && (isSameClient(resource.data) || isSameClientBySubmitter(resource.data))) || (resource.data.visibilityScope == 'all' && resource.data.status == 'approved');
       allow create: if isSignedIn() && (
         (isSuperAdmin() && request.resource.data.clientId is string) ||
         ((request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()) && (
@@ -177,12 +185,12 @@ service cloud.firestore {
       ))
       ) && isValidInventory(request.resource.data);
       allow update: if isSignedIn() && (
-        (isSuperAdmin() || (isSameClient(resource.data) && (
+        (isSuperAdmin() || ((isSameClient(resource.data) || isSameClientBySubmitter(resource.data)) && (
           isAdminLike() ||
           (resource.data.submitterId == request.auth.uid && (resource.data.status == 'draft' || resource.data.status == 'rejected' || resource.data.status == 'pending_approval'))
         )))
       );
-      allow delete: if isSuperAdmin() || (isSameClient(resource.data) && (isAdminLike() || (isSignedIn() && resource.data.submitterId == request.auth.uid && resource.data.status == 'draft')));
+      allow delete: if isSuperAdmin() || ((isSameClient(resource.data) || isSameClientBySubmitter(resource.data)) && (isAdminLike() || (isSignedIn() && resource.data.submitterId == request.auth.uid && resource.data.status == 'draft')));
     }
 
     // Admin-only broker directory
@@ -320,7 +328,10 @@ service cloud.firestore {
     }
 
     match /platformClients/{clientId} {
-      allow read: if isSuperAdmin() || (isSignedIn() && requesterClientId() is string && requesterClientId() == clientId);
+      allow read: if isSuperAdmin()
+        || (isSignedIn() && requesterClientId() is string && requesterClientId() == clientId)
+        || (isSignedIn() && resource.data.adminUid is string && resource.data.adminUid == request.auth.uid)
+        || (isSignedIn() && resource.data.adminEmail is string && resource.data.adminEmail == request.auth.token.email);
       allow write: if isSuperAdmin();
 
       match /internalNotes/{docId} {

@@ -151,7 +151,7 @@ export default function AdminDashboard({
   initialViewSignal = 0,
 }: AdminDashboardProps) {
   const tenantClientId = String((user as any).clientId || '');
-  const shouldScopeByClient = user.role !== 'super_admin' && tenantClientId.length > 0;
+  const shouldScopeByClient = user.role !== 'super_admin';
   const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin';
   const isManager = user.role === 'manager';
   const [activeView, setActiveView] = useState<AdminView>(initialView ?? 'performance');

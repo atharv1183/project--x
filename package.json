@@ -13,7 +13,8 @@
     "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
     "reset:admin-password": "node scripts/reset-admin-password.mjs",
     "backfill:client-ids": "node scripts/backfill-client-ids.mjs",
-    "repair:company-users": "node scripts/repair-company-users-and-leads.mjs"
+    "repair:company-users": "node scripts/repair-company-users-and-leads.mjs",
+    "restore:apna-ghar": "node scripts/restore-apna-ghar-legacy.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

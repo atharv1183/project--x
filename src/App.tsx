@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, signInWithCustomToken, signOut } from 'firebase/auth';
-import { collection, doc, getDoc, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { PlatformAnnouncement, User } from './types';
 import Login from './components/Login';
@@ -91,8 +91,19 @@ export default function App() {
           if (firebaseUser) {
             const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
             if (userDoc.exists()) {
-              const nextUser = { uid: firebaseUser.uid, ...userDoc.data() } as User;
-              if ((nextUser as any).clientId) {
+            const nextUser = { uid: firebaseUser.uid, ...userDoc.data() } as User;
+            if (!(nextUser as any).clientId && nextUser.role !== 'super_admin') {
+              const byUid = await getDocs(query(collection(db, 'platformClients'), where('adminUid', '==', firebaseUser.uid), limit(1)));
+              const byEmail = byUid.empty
+                ? await getDocs(query(collection(db, 'platformClients'), where('adminEmail', '==', firebaseUser.email || ''), limit(1)))
+                : byUid;
+              const resolvedDoc = byEmail.docs[0];
+              if (resolvedDoc) {
+                (nextUser as any).clientId = resolvedDoc.id;
+                (nextUser as any).clientName = String((resolvedDoc.data() as any)?.name || (nextUser as any).clientName || '');
+              }
+            }
+            if ((nextUser as any).clientId) {
                 const clientDoc = await getDoc(doc(db, 'platformClients', String((nextUser as any).clientId)));
                 if (clientDoc.exists()) {
                   const clientData = clientDoc.data() as any;
