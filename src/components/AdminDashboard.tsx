@@ -786,7 +786,7 @@ export default function AdminDashboard({
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
 
     const qLeads = shouldScopeByClient
-      ? query(collection(db, 'leads'), where('clientId', '==', tenantClientId), orderBy('createdAt', 'desc'))
+      ? query(collection(db, 'leads'), where('clientId', '==', tenantClientId))
       : query(collection(db, 'leads'), orderBy('createdAt', 'desc'));
     const unsubscribeLeads = onSnapshot(qLeads, (snapshot) => {
       const allLeads = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead));
@@ -802,7 +802,7 @@ export default function AdminDashboard({
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'leads'));
 
     const qAttendance = shouldScopeByClient
-      ? query(collection(db, 'attendance'), where('clientId', '==', tenantClientId), orderBy('timestamp', 'desc'), limit(2000))
+      ? query(collection(db, 'attendance'), where('clientId', '==', tenantClientId), limit(2000))
       : query(collection(db, 'attendance'), orderBy('timestamp', 'desc'), limit(2000));
     const unsubscribeAttendance = onSnapshot(qAttendance, (snapshot) => {
       const allLogs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Attendance));
@@ -816,7 +816,7 @@ export default function AdminDashboard({
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendance'));
 
     const qReqs = shouldScopeByClient
-      ? query(collection(db, 'requirements'), where('clientId', '==', tenantClientId), orderBy('createdAt', 'desc'))
+      ? query(collection(db, 'requirements'), where('clientId', '==', tenantClientId))
       : query(collection(db, 'requirements'), orderBy('createdAt', 'desc'));
     const unsubscribeReqs = onSnapshot(qReqs, (snapshot) => {
       const allRequirements = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Requirement));
@@ -830,7 +830,7 @@ export default function AdminDashboard({
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'requirements'));
 
     const qTransfers = shouldScopeByClient
-      ? query(collection(db, 'leadTransfers'), where('clientId', '==', tenantClientId), orderBy('createdAt', 'desc'), limit(2000))
+      ? query(collection(db, 'leadTransfers'), where('clientId', '==', tenantClientId), limit(2000))
       : query(collection(db, 'leadTransfers'), orderBy('createdAt', 'desc'), limit(2000));
     const unsubscribeTransfers = onSnapshot(qTransfers, (snapshot) => {
       const allTransfers = snapshot.docs.map((transferDoc) => ({ id: transferDoc.id, ...transferDoc.data() } as LeadTransfer));
@@ -874,7 +874,7 @@ export default function AdminDashboard({
     }
 
     const qBrokers = shouldScopeByClient
-      ? query(collection(db, 'brokers'), where('clientId', '==', tenantClientId), orderBy('name', 'asc'))
+      ? query(collection(db, 'brokers'), where('clientId', '==', tenantClientId))
       : query(collection(db, 'brokers'), orderBy('name', 'asc'));
     const unsubscribe = onSnapshot(qBrokers, (snapshot) => {
       setBrokers(snapshot.docs.map((brokerDoc) => ({ id: brokerDoc.id, ...brokerDoc.data() } as Broker)));
@@ -1894,40 +1894,6 @@ export default function AdminDashboard({
     }
   };
 
-  const deleteAssignedLeadsForTestingUsers = async () => {
-    const targetNames = ['tester for ee', 'testing manager'];
-    const targetUsers = employees.filter((emp) => targetNames.includes((emp.name || '').trim().toLowerCase()));
-    if (targetUsers.length === 0) {
-      alert('No users named "Tester for EE" or "Testing Manager" were found.');
-      return;
-    }
-
-    const targetIds = new Set(targetUsers.map((userItem) => userItem.uid));
-    const leadsToDelete = leads.filter((lead) => targetIds.has(lead.assignedTo));
-    if (leadsToDelete.length === 0) {
-      alert('No leads are currently assigned to Tester for EE or Testing Manager.');
-      return;
-    }
-
-    if (!confirm(`Delete ${leadsToDelete.length} leads assigned to Tester for EE / Testing Manager? This cannot be undone.`)) return;
-    if (!confirm('Please confirm again: permanently delete those assigned leads and their follow-ups now?')) return;
-
-    setDataToolsBusy('clear_testing_assigned_leads');
-    try {
-      let deletedCount = 0;
-      for (const lead of leadsToDelete) {
-        await deleteAllFollowupsForLead(lead.id);
-        await deleteDoc(doc(db, 'leads', lead.id));
-        deletedCount += 1;
-      }
-      alert(`Deleted ${deletedCount} assigned leads for Tester for EE / Testing Manager.`);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, 'leads');
-    } finally {
-      setDataToolsBusy(null);
-    }
-  };
-
   const deleteBroker = async (brokerId: string) => {
     if (!isSuperAdmin) return alert('Only admin can delete brokers.');
     if (!confirm('Delete this broker from the broker list? Existing inventory assignments will keep the saved broker name.')) return;
@@ -2304,20 +2270,6 @@ export default function AdminDashboard({
               <span className="text-sm font-normal text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{filteredLeads.length}</span>
             </h2>
             <div className="flex gap-2">
-              <button
-                onClick={deleteAssignedLeadsForTestingUsers}
-                disabled={dataToolsBusy === 'clear_testing_assigned_leads'}
-                className={cn(
-                  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all shadow-md active:scale-95",
-                  dataToolsBusy === 'clear_testing_assigned_leads'
-                    ? "bg-gray-300 text-gray-600 cursor-not-allowed"
-                    : "bg-rose-600 hover:bg-rose-700 text-white"
-                )}
-                title="Delete leads assigned to Tester for EE and Testing Manager"
-              >
-                <Trash2 size={16} />
-                {dataToolsBusy === 'clear_testing_assigned_leads' ? 'Deleting...' : 'Delete Tester Leads'}
-              </button>
               <button 
                 onClick={() => {
                   if (leadAssignableMembers.length === 0) {

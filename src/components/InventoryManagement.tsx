@@ -194,6 +194,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin';
   const tenantClientId = String((user as any).clientId || '');
   const shouldScopeByClient = user.role !== 'super_admin' && tenantClientId.length > 0;
+  const requiresTenantContext = user.role !== 'super_admin';
   type AreaUnit = keyof typeof AREA_CONVERSIONS;
   type ProjectUnitDraft = Omit<ProjectUnit, 'areaValue' | 'rate' | 'bhk' | 'bathrooms'> & {
     newPhotos: File[];
@@ -284,15 +285,23 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   const [videoLinkInput, setVideoLinkInput] = useState('');
 
   useEffect(() => {
+    if (requiresTenantContext && !tenantClientId) {
+      setItems([]);
+      alert('Your account is missing company mapping. Please contact super admin.');
+      return;
+    }
+
     let unsubscribeApproved: () => void;
     let unsubscribePersonal: () => void;
     
     if (isAdmin) {
       const q = shouldScopeByClient
-        ? query(collection(db, 'inventory'), where('clientId', '==', tenantClientId), orderBy('createdAt', 'desc'))
+        ? query(collection(db, 'inventory'), where('clientId', '==', tenantClientId))
         : query(collection(db, 'inventory'), orderBy('createdAt', 'desc'));
       unsubscribeApproved = onSnapshot(q, (snapshot) => {
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InventoryItem));
+        const data = snapshot.docs
+          .map(doc => ({ id: doc.id, ...doc.data() } as InventoryItem))
+          .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
         setItems(data);
       }, (error) => handleFirestoreError(error, OperationType.LIST, 'inventory'));
       return () => unsubscribeApproved();
@@ -339,7 +348,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         unsubscribePersonal();
       };
     }
-  }, [isAdmin, shouldScopeByClient, tenantClientId, user.uid]);
+  }, [isAdmin, requiresTenantContext, shouldScopeByClient, tenantClientId, user.uid]);
 
   useEffect(() => {
     if (!isSuperAdmin) {
@@ -466,6 +475,10 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
   const handleSubmit = async (e: FormEvent, isDraftSubmission: boolean = false) => {
     if (e) e.preventDefault();
+    if (requiresTenantContext && !tenantClientId) {
+      alert('Your account is missing company mapping. Please contact super admin.');
+      return;
+    }
     const isProjectListing = formData.listingMode === 'project';
 
     if (!formData.title || !formData.location) {
@@ -689,15 +702,30 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           newValue: updatePayload,
         });
       } else {
-        const inventoryRef = await addDoc(collection(db, 'inventory'), {
-          ...payload,
-          status: isDraftSubmission ? 'draft' : selectedListingStatus,
-          submitterId: user.uid,
-          submitterName: user.name,
-          clientId: tenantClientId || null,
-          clientName: (user as any).clientName || null,
-          createdAt: serverTimestamp(),
-        });
+        const createDoc = async (status: InventoryStatus) =>
+          addDoc(collection(db, 'inventory'), {
+            ...payload,
+            status,
+            submitterId: user.uid,
+            submitterName: user.name,
+            clientId: tenantClientId,
+            clientName: (user as any).clientName || '',
+            createdAt: serverTimestamp(),
+          });
+
+        const intendedStatus: InventoryStatus = isDraftSubmission ? 'draft' : selectedListingStatus;
+        let inventoryRef;
+        try {
+          inventoryRef = await createDoc(intendedStatus);
+        } catch (createError: any) {
+          const isPermissionDenied = String(createError?.code || '').includes('permission-denied');
+          const shouldRetryAsApproved =
+            isPermissionDenied && isAdmin && !isDraftSubmission && intendedStatus === 'pending_approval';
+          if (!shouldRetryAsApproved) {
+            throw createError;
+          }
+          inventoryRef = await createDoc('approved');
+        }
         await addAuditLog(db, {
           action: 'inventory_added',
           actorId: user.uid,

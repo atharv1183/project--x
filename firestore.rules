@@ -172,7 +172,7 @@ service cloud.firestore {
       allow create: if isSignedIn() && (
         (isSuperAdmin() && request.resource.data.clientId is string) ||
         ((request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()) && (
-        (isAdminLike() && request.resource.data.status == 'approved') || 
+        (isAdminLike() && (request.resource.data.status == 'approved' || request.resource.data.status == 'pending_approval' || request.resource.data.status == 'draft')) || 
         (!isAdminLike() && (request.resource.data.status == 'pending_approval' || request.resource.data.status == 'draft'))
       ))
       ) && isValidInventory(request.resource.data);

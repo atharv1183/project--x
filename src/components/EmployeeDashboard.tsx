@@ -572,16 +572,20 @@ export default function EmployeeDashboard({
         const lastAt = Number(localStorage.getItem(key) || 0);
         if (Date.now() - lastAt < intervalMs) continue;
 
-        await addDoc(collection(db, 'notifications'), {
-          userId: user.uid,
-          title: queueTab === 'overdue' ? 'Overdue Lead Reminder' : 'Today Lead Reminder',
-          message: queueTab === 'overdue'
-            ? `Lead "${lead.name}" is overdue for follow-up.`
-            : `Lead "${lead.name}" needs follow-up today.`,
-          leadId: lead.id,
-          read: false,
-          createdAt: serverTimestamp(),
-        });
+        try {
+          await addDoc(collection(db, 'notifications'), {
+            userId: user.uid,
+            title: queueTab === 'overdue' ? 'Overdue Lead Reminder' : 'Today Lead Reminder',
+            message: queueTab === 'overdue'
+              ? `Lead "${lead.name}" is overdue for follow-up.`
+              : `Lead "${lead.name}" needs follow-up today.`,
+            leadId: lead.id,
+            read: false,
+            createdAt: serverTimestamp(),
+          });
+        } catch {
+          // Employee roles may not have create access to notifications; keep UI flow uninterrupted.
+        }
         localStorage.setItem(key, String(Date.now()));
       }
     };
@@ -802,16 +806,20 @@ export default function EmployeeDashboard({
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      await addAuditLog(db, {
-        action: 'lead_added',
-        actorId: user.uid,
-        actorName: user.name,
-        actorRole: user.role,
-        targetType: 'lead',
-        targetId: leadRef.id,
-        description: `Lead added by employee: ${leadForm.name || 'Anonymous'}`,
-        newValue: { name: leadForm.name || 'Anonymous', phone: normalizedPhone, assignedTo: user.uid },
-      });
+      try {
+        await addAuditLog(db, {
+          action: 'lead_added',
+          actorId: user.uid,
+          actorName: user.name,
+          actorRole: user.role,
+          targetType: 'lead',
+          targetId: leadRef.id,
+          description: `Lead added by employee: ${leadForm.name || 'Anonymous'}`,
+          newValue: { name: leadForm.name || 'Anonymous', phone: normalizedPhone, assignedTo: user.uid },
+        });
+      } catch {
+        // Non-blocking: lead creation succeeded even if audit log write is denied by rules.
+      }
 
       setLeadForm({ name: '', phone: '', source: 'Employee Added' });
       setShowAddLead(false);
