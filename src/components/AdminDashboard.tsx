@@ -152,7 +152,7 @@ export default function AdminDashboard({
 }: AdminDashboardProps) {
   const tenantClientId = String((user as any).clientId || '');
   const shouldScopeByClient = user.role !== 'super_admin' && tenantClientId.length > 0;
-  const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin';
+  const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin';
   const isManager = user.role === 'manager';
   const [activeView, setActiveView] = useState<AdminView>(initialView ?? 'performance');
   const [leadTableSort, setLeadTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'client', dir: 'asc' });
@@ -342,7 +342,9 @@ export default function AdminDashboard({
   const exportLeadsData = async () => {
     setDataToolsBusy('export_leads');
     try {
-      const leadsSnapshot = await getDocs(collection(db, 'leads'));
+      const leadsSnapshot = shouldScopeByClient
+        ? await getDocs(query(collection(db, 'leads'), where('clientId', '==', tenantClientId)))
+        : await getDocs(collection(db, 'leads'));
       const records = [];
       for (const leadDoc of leadsSnapshot.docs) {
         const followupsSnapshot = await getDocs(query(collection(db, 'leads', leadDoc.id, 'followups'), orderBy('date', 'asc')));
@@ -371,7 +373,9 @@ export default function AdminDashboard({
   const exportInventoryData = async () => {
     setDataToolsBusy('export_inventory');
     try {
-      const snapshot = await getDocs(collection(db, 'inventory'));
+      const snapshot = shouldScopeByClient
+        ? await getDocs(query(collection(db, 'inventory'), where('clientId', '==', tenantClientId)))
+        : await getDocs(collection(db, 'inventory'));
       const records = snapshot.docs.map((d) => ({
         id: d.id,
         data: serializeFirestoreValue(d.data()),
@@ -442,7 +446,13 @@ export default function AdminDashboard({
         return;
       }
 
-      const importedCount = await commitBatchedWrites(targetCollection, records);
+      const sanitizedRecords = shouldScopeByClient
+        ? records.map((record: any) => ({
+            ...record,
+            data: { ...(record?.data || {}), clientId: tenantClientId, clientName: (user as any).clientName || null },
+          }))
+        : records;
+      const importedCount = await commitBatchedWrites(targetCollection, sanitizedRecords);
       alert(`Imported ${importedCount} ${targetCollection} records successfully.`);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Import failed. Please verify the JSON file format.');
@@ -470,7 +480,9 @@ export default function AdminDashboard({
     try {
       let deletedCount = 0;
       while (true) {
-        const snapshot = await getDocs(query(collection(db, 'inventory'), limit(300)));
+        const snapshot = shouldScopeByClient
+          ? await getDocs(query(collection(db, 'inventory'), where('clientId', '==', tenantClientId), limit(300)))
+          : await getDocs(query(collection(db, 'inventory'), limit(300)));
         if (snapshot.empty) break;
         const batch = writeBatch(db);
         snapshot.docs.forEach((docItem) => {
@@ -495,7 +507,9 @@ export default function AdminDashboard({
     try {
       let deletedLeads = 0;
       while (true) {
-        const leadsSnapshot = await getDocs(query(collection(db, 'leads'), limit(120)));
+        const leadsSnapshot = shouldScopeByClient
+          ? await getDocs(query(collection(db, 'leads'), where('clientId', '==', tenantClientId), limit(120)))
+          : await getDocs(query(collection(db, 'leads'), limit(120)));
         if (leadsSnapshot.empty) break;
 
         for (const leadDoc of leadsSnapshot.docs) {
@@ -859,13 +873,15 @@ export default function AdminDashboard({
       return;
     }
 
-    const qBrokers = query(collection(db, 'brokers'), orderBy('name', 'asc'));
+    const qBrokers = shouldScopeByClient
+      ? query(collection(db, 'brokers'), where('clientId', '==', tenantClientId), orderBy('name', 'asc'))
+      : query(collection(db, 'brokers'), orderBy('name', 'asc'));
     const unsubscribe = onSnapshot(qBrokers, (snapshot) => {
       setBrokers(snapshot.docs.map((brokerDoc) => ({ id: brokerDoc.id, ...brokerDoc.data() } as Broker)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'brokers'));
 
     return () => unsubscribe();
-  }, [isSuperAdmin]);
+  }, [isSuperAdmin, shouldScopeByClient, tenantClientId]);
 
   useEffect(() => {
     const qLogs = query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(2000));
@@ -1070,6 +1086,7 @@ export default function AdminDashboard({
           name: showEditEmployee.name,
           phone: showEditEmployee.phone,
           role: 'employee',
+          clientId: tenantClientId || null,
           managerId: selectedManager?.uid || null,
           managerName: selectedManager?.name || null,
           updatedAt: serverTimestamp(),
@@ -1604,7 +1621,7 @@ export default function AdminDashboard({
         createdLeadId = createdLeadRef.id;
       } else {
         await runTransaction(db, async (transaction) => {
-          const allocationRef = doc(db, 'system', 'allocation');
+          const allocationRef = doc(db, 'system', `allocation_${tenantClientId || 'global'}`);
           const allocationDoc = await transaction.get(allocationRef);
           
           let nextIndex = 0;
@@ -1652,6 +1669,10 @@ export default function AdminDashboard({
 
   const handleAddEmployee = async (e: FormEvent) => {
     e.preventDefault();
+    if (!tenantClientId && user.role !== 'super_admin') {
+      alert('Company mapping missing for your account. Please contact super admin.');
+      return;
+    }
     const name = employeeForm.name.trim();
     const normalizedPhone = normalizePhone(employeeForm.phone);
     const memberRole = employeeForm.role;
@@ -1693,6 +1714,8 @@ export default function AdminDashboard({
           email,
           role: memberRole,
           phone: normalizedPhone,
+          clientId: tenantClientId || null,
+          clientName: (user as any).clientName || null,
           managerId: memberRole === 'employee' ? (selectedManager?.uid || null) : null,
           managerName: memberRole === 'employee' ? (selectedManager?.name || null) : null,
           updatedAt: serverTimestamp(),
@@ -1702,6 +1725,7 @@ export default function AdminDashboard({
             name,
             phone: normalizedPhone,
             role: 'employee',
+            clientId: tenantClientId || null,
             managerId: selectedManager?.uid || null,
             managerName: selectedManager?.name || null,
             updatedAt: serverTimestamp(),
@@ -1741,6 +1765,7 @@ export default function AdminDashboard({
           name,
           phone: normalizedPhone,
           role: 'employee',
+          clientId: tenantClientId || null,
           managerId: selectedManager?.uid || null,
           managerName: selectedManager?.name || null,
           updatedAt: serverTimestamp(),
@@ -1815,6 +1840,7 @@ export default function AdminDashboard({
           phone,
           email: brokerForm.email.trim(),
           company: brokerForm.company.trim(),
+          clientId: tenantClientId || null,
           state,
           city,
           locality,

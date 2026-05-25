@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { BarChart3, Calendar, Clock, Database, Download, FileText, LayoutGrid, Trash2, TrendingUp, Upload, UserPlus, Users, Wrench } from 'lucide-react';
-import { collection, doc, getDocs, limit, orderBy, query, Timestamp, writeBatch } from 'firebase/firestore';
+import { collection, doc, getDocs, limit, orderBy, query, Timestamp, where, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { handleFirestoreError } from '../lib/utils';
 import { OperationType, User } from '../types';
@@ -59,8 +59,10 @@ type ToolsPageProps = {
 };
 
 export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
-  const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin';
-  const cards = (user.role === 'super_admin' || user.role === 'admin') ? adminTools : user.role === 'manager' ? managerTools : employeeTools;
+  const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin';
+  const tenantClientId = String((user as any).clientId || '');
+  const shouldScopeByClient = user.role !== 'super_admin' && tenantClientId.length > 0;
+  const cards = (user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin') ? adminTools : user.role === 'manager' ? managerTools : employeeTools;
   const leadsImportInputRef = useRef<HTMLInputElement | null>(null);
   const inventoryImportInputRef = useRef<HTMLInputElement | null>(null);
   const [dataToolsBusy, setDataToolsBusy] = useState<string | null>(null);
@@ -133,7 +135,9 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
   const exportLeadsData = async () => {
     setDataToolsBusy('export_leads');
     try {
-      const leadsSnapshot = await getDocs(collection(db, 'leads'));
+      const leadsSnapshot = shouldScopeByClient
+        ? await getDocs(query(collection(db, 'leads'), where('clientId', '==', tenantClientId)))
+        : await getDocs(collection(db, 'leads'));
       const records = [];
       for (const leadDoc of leadsSnapshot.docs) {
         const followupsSnapshot = await getDocs(query(collection(db, 'leads', leadDoc.id, 'followups'), orderBy('date', 'asc')));
@@ -163,7 +167,9 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
   const exportInventoryData = async () => {
     setDataToolsBusy('export_inventory');
     try {
-      const snapshot = await getDocs(collection(db, 'inventory'));
+      const snapshot = shouldScopeByClient
+        ? await getDocs(query(collection(db, 'inventory'), where('clientId', '==', tenantClientId)))
+        : await getDocs(collection(db, 'inventory'));
       const records = snapshot.docs.map((d) => ({
         id: d.id,
         data: serializeFirestoreValue(d.data()),
@@ -235,7 +241,13 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
         return;
       }
 
-      const importedCount = await commitBatchedWrites(targetCollection, records);
+      const sanitizedRecords = shouldScopeByClient
+        ? records.map((record: any) => ({
+            ...record,
+            data: { ...(record?.data || {}), clientId: tenantClientId, clientName: (user as any).clientName || null },
+          }))
+        : records;
+      const importedCount = await commitBatchedWrites(targetCollection, sanitizedRecords);
       pushBackupHistory({ action: 'import', collection: targetCollection, count: importedCount, file: file.name });
       alert(`Imported ${importedCount} ${targetCollection} records successfully.`);
     } catch (error) {
@@ -264,7 +276,9 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
     try {
       let deletedCount = 0;
       while (true) {
-        const snapshot = await getDocs(query(collection(db, 'inventory'), limit(300)));
+        const snapshot = shouldScopeByClient
+          ? await getDocs(query(collection(db, 'inventory'), where('clientId', '==', tenantClientId), limit(300)))
+          : await getDocs(query(collection(db, 'inventory'), limit(300)));
         if (snapshot.empty) break;
         const batch = writeBatch(db);
         snapshot.docs.forEach((docItem) => {
@@ -290,7 +304,9 @@ export default function ToolsPage({ user, onSelectTool }: ToolsPageProps) {
     try {
       let deletedLeads = 0;
       while (true) {
-        const leadsSnapshot = await getDocs(query(collection(db, 'leads'), limit(120)));
+        const leadsSnapshot = shouldScopeByClient
+          ? await getDocs(query(collection(db, 'leads'), where('clientId', '==', tenantClientId), limit(120)))
+          : await getDocs(query(collection(db, 'leads'), limit(120)));
         if (leadsSnapshot.empty) break;
 
         for (const leadDoc of leadsSnapshot.docs) {

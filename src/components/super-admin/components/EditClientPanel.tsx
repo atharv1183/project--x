@@ -26,22 +26,6 @@ export function EditClientPanel({ form, onChange, onSave, onCancel, onDelete }: 
       </select>
       <input value={form.trialDays} onChange={(e) => onChange({ trialDays: e.target.value })} placeholder="Trial Days" className="px-3 py-2 border border-gray-200 rounded-xl text-sm" />
       <input type="date" value={form.subscriptionExpiryDate} onChange={(e) => onChange({ subscriptionExpiryDate: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-xl text-sm" />
-      <div className="md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
-        <p className="text-xs font-black text-amber-800 uppercase tracking-wider">One-Time Password</p>
-        <p className="mt-1 text-sm font-semibold text-amber-900">{form.adminTempPassword || 'Not available'}</p>
-        {form.adminTempPassword && (
-          <button
-            type="button"
-            onClick={async () => {
-              await navigator.clipboard.writeText(form.adminTempPassword);
-              alert('One-time password copied.');
-            }}
-            className="mt-2 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-bold"
-          >
-            Copy Password
-          </button>
-        )}
-      </div>
       <div className="md:col-span-2 flex justify-end gap-2">
         <button type="button" onClick={onDelete} className="px-4 py-2 rounded-xl border border-rose-300 text-sm font-semibold text-rose-700">Delete Company</button>
         <button type="button" onClick={onCancel} className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold text-gray-700">Cancel</button>
@@ -50,4 +34,3 @@ export function EditClientPanel({ form, onChange, onSave, onCancel, onDelete }: 
     </form>
   );
 }
-

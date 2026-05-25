@@ -159,6 +159,7 @@ export default function EmployeeDashboard({
   initialView,
   initialViewSignal = 0,
 }: EmployeeDashboardProps) {
+  const tenantClientId = String((user as any).clientId || '');
   const [activeTab, setActiveTab] = useState<EmployeeView>(initialView ?? 'today');
   const [transferTableSort, setTransferTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'when', dir: 'desc' });
   const [followupSubTab, setFollowupSubTab] = useState<LeadQueueTab>('today');
@@ -384,12 +385,15 @@ export default function EmployeeDashboard({
   };
 
   useEffect(() => {
-    const q = query(collection(db, 'employeeDirectory'), where('role', '==', 'employee'));
+    const tenantClientId = String((user as any).clientId || '');
+    const q = tenantClientId
+      ? query(collection(db, 'employeeDirectory'), where('role', '==', 'employee'), where('clientId', '==', tenantClientId))
+      : query(collection(db, 'employeeDirectory'), where('role', '==', 'employee'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setEmployees(snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as User)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'employeeDirectory'));
     return () => unsubscribe();
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!auth.currentUser) return;
@@ -761,6 +765,10 @@ export default function EmployeeDashboard({
 
   const handleAddLead = async (e: FormEvent) => {
     e.preventDefault();
+    if (!tenantClientId) {
+      alert('Your account is missing company mapping. Please contact admin.');
+      return;
+    }
     const normalizedPhone = normalizePhone(leadForm.phone);
 
     if (!normalizedPhone) return alert('Mobile number is mandatory.');
@@ -768,8 +776,8 @@ export default function EmployeeDashboard({
     // Employee can only query leads visible to themselves per Firestore rules.
     // So duplicate checks must be scoped to employee-owned/added leads.
     const [duplicateAssignedSnapshot, duplicateAddedSnapshot] = await Promise.all([
-      getDocs(query(collection(db, 'leads'), where('assignedTo', '==', user.uid), where('phone', '==', normalizedPhone), limit(1))),
-      getDocs(query(collection(db, 'leads'), where('addedById', '==', user.uid), where('phone', '==', normalizedPhone), limit(1))),
+      getDocs(query(collection(db, 'leads'), where('assignedTo', '==', user.uid), where('phone', '==', normalizedPhone), where('clientId', '==', tenantClientId), limit(1))),
+      getDocs(query(collection(db, 'leads'), where('addedById', '==', user.uid), where('phone', '==', normalizedPhone), where('clientId', '==', tenantClientId), limit(1))),
     ]);
     const duplicateDoc = duplicateAssignedSnapshot.docs[0] || duplicateAddedSnapshot.docs[0];
     if (duplicateDoc) {
@@ -780,7 +788,7 @@ export default function EmployeeDashboard({
     setLoading(true);
     try {
       const leadRef = await addDoc(collection(db, 'leads'), {
-        clientId: (user as any).clientId || null,
+        clientId: tenantClientId,
         clientName: (user as any).clientName || null,
         name: leadForm.name || 'Anonymous',
         phone: normalizedPhone,

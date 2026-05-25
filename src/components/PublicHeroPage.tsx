@@ -30,15 +30,21 @@ function getAreaText(item: InventoryItem): string {
 export default function PublicHeroPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const targetClientId = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return (params.get('clientId') || '').trim();
+  }, []);
 
   useEffect(() => {
-    const q = query(collection(db, 'inventory'), where('visibilityScope', '==', 'all'));
+    const q = targetClientId
+      ? query(collection(db, 'inventory'), where('visibilityScope', '==', 'all'), where('clientId', '==', targetClientId))
+      : query(collection(db, 'inventory'), where('visibilityScope', '==', 'all'));
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         const visible = snapshot.docs
           .map((d) => ({ id: d.id, ...d.data() } as InventoryItem))
-          .filter((item) => item.status === 'approved')
+          .filter((item) => item.status === 'approved' && Boolean((item as any).clientId))
           .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
         setItems(visible);
         setLoading(false);
@@ -47,7 +53,7 @@ export default function PublicHeroPage() {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [targetClientId]);
 
   const featured = useMemo(() => items.slice(0, 6), [items]);
 

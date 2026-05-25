@@ -34,7 +34,6 @@ export type EditClientFormState = {
   state: string;
   trialDays: string;
   subscriptionExpiryDate: string;
-  adminTempPassword: string;
 };
 
 export type PlatformClient = {
@@ -49,7 +48,6 @@ export type PlatformClient = {
   trialDays?: number;
   subscriptionExpiryDate?: string | null;
   billingCycle?: string;
-  adminTempPassword?: string;
 };
 
 export type StatusSort = {

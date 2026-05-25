@@ -190,8 +190,8 @@ function buildProjectViewLink(itemId: string, view: 'list' | 'icon'): string {
 }
 
 export default function InventoryManagement({ user, onBack }: InventoryManagementProps) {
-  const isAdmin = user.role === 'admin' || user.role === 'manager';
-  const isSuperAdmin = user.role === 'admin';
+  const isAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin' || user.role === 'manager';
+  const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin';
   const tenantClientId = String((user as any).clientId || '');
   const shouldScopeByClient = user.role !== 'super_admin' && tenantClientId.length > 0;
   type AreaUnit = keyof typeof AREA_CONVERSIONS;

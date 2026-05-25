@@ -77,10 +77,11 @@ service cloud.firestore {
     }
 
     function isValidEmployeeDirectory(data) {
-      return data.keys().hasAll(['name', 'phone', 'role', 'updatedAt'])
+      return data.keys().hasAll(['name', 'phone', 'role', 'clientId', 'updatedAt'])
         && data.name is string && data.name.size() > 0 && data.name.size() <= 100
         && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15
         && data.role == 'employee'
+        && data.clientId is string
         && data.updatedAt is timestamp;
     }
 
@@ -146,9 +147,10 @@ service cloud.firestore {
     }
 
     function isValidBroker(data) {
-      return data.keys().hasAll(['name', 'phone', 'createdAt'])
+      return data.keys().hasAll(['name', 'phone', 'clientId', 'createdAt'])
         && data.name is string && data.name.size() > 0 && data.name.size() <= 100
-        && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15;
+        && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15
+        && data.clientId is string;
     }
 
     // ---------------------------------------------------------
@@ -185,9 +187,9 @@ service cloud.firestore {
 
     // Admin-only broker directory
     match /brokers/{brokerId} {
-      allow read: if isAdminLike();
-      allow create, update: if isAdminLike() && isValidBroker(request.resource.data);
-      allow delete: if isAdminLike();
+      allow read: if isSuperAdmin() || (isAdminLike() && isSameClient(resource.data));
+      allow create, update: if (isSuperAdmin() || (isAdminLike() && request.resource.data.clientId == requesterClientId())) && isValidBroker(request.resource.data);
+      allow delete: if isSuperAdmin() || (isAdminLike() && isSameClient(resource.data));
     }
 
     // Requirements
@@ -214,23 +216,24 @@ service cloud.firestore {
 
     // Employee directory with only non-sensitive fields
     match /employeeDirectory/{userId} {
-      allow get, list: if isSignedIn();
+      allow get, list: if isSuperAdmin() || (isSignedIn() && isSameClient(resource.data));
       allow create: if isValidEmployeeDirectory(request.resource.data)
         && (
-          isAdminLike()
+          (isAdminLike() && (isSuperAdmin() || request.resource.data.clientId == requesterClientId()))
           || (
             request.auth.uid == userId
+            && request.resource.data.clientId == requesterClientId()
             && request.resource.data.phone + '@estatepulse.com' == request.auth.token.email
           )
         );
-      allow update: if isAdminLike() && isValidEmployeeDirectory(request.resource.data);
-      allow delete: if isAdminLike();
+      allow update: if (isSuperAdmin() || (isAdminLike() && isSameClient(resource.data))) && isValidEmployeeDirectory(request.resource.data);
+      allow delete: if isSuperAdmin() || (isAdminLike() && isSameClient(resource.data));
     }
 
     // Users
     match /users/{userId} {
       allow get: if (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || request.auth.uid == userId;
-      allow list: if isAdminLike();
+      allow list: if isSuperAdmin() || (isAdminLike() && requesterClientId() is string && resource.data.clientId == requesterClientId());
       allow create: if isSignedIn()
         && isValidUser(request.resource.data)
         && (
@@ -265,6 +268,9 @@ service cloud.firestore {
       allow create: if isValidLead(request.resource.data) && (
         (isAdminLike() && (isSuperAdmin() || (request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()))) ||
         (
+          request.resource.data.clientId is string
+          && request.resource.data.clientId == requesterClientId()
+          &&
           request.resource.data.assignedTo == request.auth.uid
           && request.resource.data.source == 'Employee Added'
           && request.resource.data.addedById == request.auth.uid
@@ -290,8 +296,8 @@ service cloud.firestore {
 
     // System allocation
     match /system/{docId} {
-      allow read: if isAdminLike();
-      allow write: if isAdminLike();
+      allow read: if isSuperAdmin() || (isAdminLike() && requesterClientId() is string && docId == 'allocation_' + requesterClientId());
+      allow write: if isSuperAdmin() || (isAdminLike() && requesterClientId() is string && docId == 'allocation_' + requesterClientId());
     }
 
     // Platform control plane collections (super admin only)
@@ -314,7 +320,7 @@ service cloud.firestore {
     }
 
     match /platformClients/{clientId} {
-      allow read: if isAdminLike();
+      allow read: if isSuperAdmin() || (isSignedIn() && requesterClientId() is string && requesterClientId() == clientId);
       allow write: if isSuperAdmin();
 
       match /internalNotes/{docId} {

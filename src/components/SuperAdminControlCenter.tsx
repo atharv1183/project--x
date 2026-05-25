@@ -48,7 +48,6 @@ const INITIAL_EDIT_FORM: EditClientFormState = {
   state: 'trial',
   trialDays: '14',
   subscriptionExpiryDate: '',
-  adminTempPassword: '',
 };
 
 const INITIAL_ADD_FORM: AddClientFormState = {
@@ -153,7 +152,6 @@ export default function SuperAdminControlCenter({ user }: Props) {
       state: client.state || 'trial',
       trialDays: String(client.trialDays || 14),
       subscriptionExpiryDate: client.subscriptionExpiryDate || '',
-      adminTempPassword: client.adminTempPassword || '',
     });
   };
 
@@ -261,7 +259,6 @@ export default function SuperAdminControlCenter({ user }: Props) {
         paymentStatus: 'pending',
         adminUid: provisionedUid,
         adminEmail: loginEmail,
-        adminTempPassword: tempPassword,
         createdBy: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
