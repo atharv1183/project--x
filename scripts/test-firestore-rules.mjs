@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, setDoc, Timestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, setDoc, Timestamp, updateDoc, where } from 'firebase/firestore';
 
 const projectId = process.env.FIREBASE_RULES_TEST_PROJECT_ID || 'demo-estatepulse';
 const rulesPath = path.join(process.cwd(), 'firestore.rules');
@@ -16,6 +16,7 @@ async function seedBaseData(testEnv) {
       email: 'admin@estatepulse.com',
       phone: '9000000000',
       role: 'admin',
+      clientId: 'client_a',
       createdAt: now,
     });
 
@@ -24,6 +25,7 @@ async function seedBaseData(testEnv) {
       email: '1111111111@estatepulse.com',
       phone: '1111111111',
       role: 'employee',
+      clientId: 'client_a',
       createdAt: now,
     });
 
@@ -32,6 +34,7 @@ async function seedBaseData(testEnv) {
       email: '2222222222@estatepulse.com',
       phone: '2222222222',
       role: 'employee',
+      clientId: 'client_a',
       createdAt: now,
     });
 
@@ -39,6 +42,7 @@ async function seedBaseData(testEnv) {
       name: 'Employee One',
       phone: '1111111111',
       role: 'employee',
+      clientId: 'client_a',
       updatedAt: now,
     });
 
@@ -46,7 +50,28 @@ async function seedBaseData(testEnv) {
       name: 'Employee Two',
       phone: '2222222222',
       role: 'employee',
+      clientId: 'client_a',
       updatedAt: now,
+    });
+
+    await setDoc(doc(db, 'leads', 'client_a_lead'), {
+      clientId: 'client_a',
+      name: 'Client A Lead',
+      phone: '7777777777',
+      status: 'pending',
+      source: 'Manual',
+      assignedTo: 'emp1_uid',
+      createdAt: now,
+    });
+
+    await setDoc(doc(db, 'leads', 'client_b_lead_assigned_to_emp1'), {
+      clientId: 'client_b',
+      name: 'Client B Lead',
+      phone: '8888888888',
+      status: 'pending',
+      source: 'Manual',
+      assignedTo: 'emp1_uid',
+      createdAt: now,
     });
 
     await setDoc(doc(db, 'employeeInvites', '1111111111'), {
@@ -91,11 +116,58 @@ async function run() {
   });
 
   add('admin can list users collection', async () => {
-    await assertSucceeds(getDocs(collection(adminDb, 'users')));
+    await assertSucceeds(getDocs(query(collection(adminDb, 'users'), where('clientId', '==', 'client_a'))));
   });
 
   add('employee can list employeeDirectory collection', async () => {
-    await assertSucceeds(getDocs(collection(emp1Db, 'employeeDirectory')));
+    await assertSucceeds(getDocs(query(collection(emp1Db, 'employeeDirectory'), where('clientId', '==', 'client_a'))));
+  });
+
+  add('employee can read own company assigned lead', async () => {
+    await assertSucceeds(getDoc(doc(emp1Db, 'leads', 'client_a_lead')));
+  });
+
+  add('employee cannot read assigned lead from another company', async () => {
+    await assertFails(getDoc(doc(emp1Db, 'leads', 'client_b_lead_assigned_to_emp1')));
+  });
+
+  add('admin cannot read lead from another company', async () => {
+    await assertFails(getDoc(doc(adminDb, 'leads', 'client_b_lead_assigned_to_emp1')));
+  });
+
+  add('employee can edit own assigned lead name and status', async () => {
+    await assertSucceeds(updateDoc(doc(emp1Db, 'leads', 'client_a_lead'), {
+      name: 'Updated Client A Lead',
+      status: 'interested',
+      updatedAt: Timestamp.now(),
+    }));
+  });
+
+  add('employee cannot edit assigned lead phone', async () => {
+    await assertFails(updateDoc(doc(emp1Db, 'leads', 'client_a_lead'), {
+      phone: '9999999999',
+      updatedAt: Timestamp.now(),
+    }));
+  });
+
+  add('admin can save company branding', async () => {
+    await assertSucceeds(
+      setDoc(doc(adminDb, 'clientBranding', 'client_a'), {
+        logoUrl: 'data:image/png;base64,abc',
+        companyName: 'Client A',
+        tagline: 'Trusted homes',
+        updatedAt: Timestamp.now(),
+        updatedBy: 'admin_uid',
+      }),
+    );
+  });
+
+  add('employee can read own company branding', async () => {
+    await assertSucceeds(getDoc(doc(emp1Db, 'clientBranding', 'client_a')));
+  });
+
+  add('employee cannot read another company branding', async () => {
+    await assertFails(getDoc(doc(emp1Db, 'clientBranding', 'client_b')));
   });
 
   add('employee can read own invite by mobile', async () => {

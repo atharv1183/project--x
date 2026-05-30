@@ -105,6 +105,12 @@ function normalizePhone(value: string): string {
   return value.replace(/\D/g, '');
 }
 
+function getWhatsAppUrl(phone?: string | null): string {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return '#';
+  return `https://wa.me/${digits.length === 10 ? `91${digits}` : digits}`;
+}
+
 const LOCATION_MAP: Record<string, string[]> = {
   "Madhya Pradesh": ["Bhopal", "Indore", "Jabalpur", "Gwalior", "Ujjain"],
   Maharashtra: ["Mumbai", "Pune", "Nagpur", "Nashik"],
@@ -159,6 +165,7 @@ export default function EmployeeDashboard({
   initialView,
   initialViewSignal = 0,
 }: EmployeeDashboardProps) {
+  const [brandLogoFailed, setBrandLogoFailed] = useState(false);
   const tenantClientId = String((user as any).clientId || '');
   const [activeTab, setActiveTab] = useState<EmployeeView>(initialView ?? 'today');
   const [transferTableSort, setTransferTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'when', dir: 'desc' });
@@ -170,11 +177,13 @@ export default function EmployeeDashboard({
   const [followups, setFollowups] = useState<Followup[]>([]);
   const [selectedAssignedLead, setSelectedAssignedLead] = useState<Lead | null>(null);
   const [selectedAssignedLeadFollowups, setSelectedAssignedLeadFollowups] = useState<Followup[]>([]);
+  const [assignedLeadEditName, setAssignedLeadEditName] = useState('');
+  const [assignedLeadEditStatus, setAssignedLeadEditStatus] = useState<Lead['status']>('pending');
   const [loading, setLoading] = useState(false);
 
   // New Requirement Form State
   const [showAddLead, setShowAddLead] = useState(false);
-  const [leadForm, setLeadForm] = useState({ name: '', phone: '', source: 'Employee Added' });
+  const [leadForm, setLeadForm] = useState({ name: '', phone: '', source: 'Executive Added' });
   const [showReqModal, setShowReqModal] = useState(false);
   const [editingRequirementId, setEditingRequirementId] = useState<string | null>(null);
   const [reqForm, setReqForm] = useState({
@@ -298,6 +307,10 @@ export default function EmployeeDashboard({
     }
     setSelectedLeadIndex(null);
   }, [initialView, initialViewSignal]);
+
+  useEffect(() => {
+    setBrandLogoFailed(false);
+  }, [brand?.logoUrl]);
 
   useEffect(() => {
     const el = tabsScrollRef.current;
@@ -499,8 +512,13 @@ export default function EmployeeDashboard({
   ];
 
   useEffect(() => {
-    const qAssigned = query(collection(db, 'leads'), where('assignedTo', '==', user.uid));
-    const qAddedBy = query(collection(db, 'leads'), where('addedById', '==', user.uid));
+    if (!tenantClientId) {
+      setLeads([]);
+      return;
+    }
+
+    const qAssigned = query(collection(db, 'leads'), where('assignedTo', '==', user.uid), where('clientId', '==', tenantClientId));
+    const qAddedBy = query(collection(db, 'leads'), where('addedById', '==', user.uid), where('clientId', '==', tenantClientId));
 
     const assignedLeads: Lead[] = [];
     const addedByLeads: Lead[] = [];
@@ -529,7 +547,7 @@ export default function EmployeeDashboard({
       unsubscribeAssigned();
       unsubscribeAddedBy();
     };
-  }, [user.uid]);
+  }, [user.uid, tenantClientId]);
 
   useEffect(() => {
     const ownerId = user.managerId || user.uid;
@@ -598,8 +616,13 @@ export default function EmployeeDashboard({
   }, [leads, notificationSettings, user.uid]);
 
   useEffect(() => {
-    const qFrom = query(collection(db, 'leadTransfers'), where('fromUid', '==', user.uid));
-    const qTo = query(collection(db, 'leadTransfers'), where('toUid', '==', user.uid));
+    if (!tenantClientId) {
+      setLeadTransfers([]);
+      return;
+    }
+
+    const qFrom = query(collection(db, 'leadTransfers'), where('fromUid', '==', user.uid), where('clientId', '==', tenantClientId));
+    const qTo = query(collection(db, 'leadTransfers'), where('toUid', '==', user.uid), where('clientId', '==', tenantClientId));
     const fromTransfers: LeadTransfer[] = [];
     const toTransfers: LeadTransfer[] = [];
 
@@ -626,7 +649,7 @@ export default function EmployeeDashboard({
       unsubFrom();
       unsubTo();
     };
-  }, [user.uid]);
+  }, [user.uid, tenantClientId]);
 
   useEffect(() => {
     const qLogs = query(collection(db, 'auditLogs'), where('actorId', '==', user.uid));
@@ -798,7 +821,7 @@ export default function EmployeeDashboard({
         clientName: (user as any).clientName || null,
         name: leadForm.name || 'Anonymous',
         phone: normalizedPhone,
-        source: 'Employee Added',
+        source: 'Executive Added',
         status: 'pending',
         assignedTo: user.uid,
         addedById: user.uid,
@@ -816,14 +839,14 @@ export default function EmployeeDashboard({
           actorRole: user.role,
           targetType: 'lead',
           targetId: leadRef.id,
-          description: `Lead added by employee: ${leadForm.name || 'Anonymous'}`,
+          description: `Lead added by executive: ${leadForm.name || 'Anonymous'}`,
           newValue: { name: leadForm.name || 'Anonymous', phone: normalizedPhone, assignedTo: user.uid },
         });
       } catch {
         // Non-blocking: lead creation succeeded even if audit log write is denied by rules.
       }
 
-      setLeadForm({ name: '', phone: '', source: 'Employee Added' });
+      setLeadForm({ name: '', phone: '', source: 'Executive Added' });
       setShowAddLead(false);
       alert('Lead added successfully!');
     } catch (error) {
@@ -895,6 +918,8 @@ export default function EmployeeDashboard({
       setSelectedAssignedLeadFollowups([]);
       return;
     }
+    setAssignedLeadEditName(selectedAssignedLead.name || '');
+    setAssignedLeadEditStatus(selectedAssignedLead.status || 'pending');
     const qFollowups = query(
       collection(db, 'leads', selectedAssignedLead.id, 'followups'),
       orderBy('date', 'desc')
@@ -903,7 +928,7 @@ export default function EmployeeDashboard({
       setSelectedAssignedLeadFollowups(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Followup)));
     });
     return () => unsubscribe();
-  }, [selectedAssignedLead?.id]);
+  }, [selectedAssignedLead?.id, selectedAssignedLead?.name, selectedAssignedLead?.status]);
 
   useEffect(() => {
     setSelectedStatus(null);
@@ -1113,6 +1138,76 @@ export default function EmployeeDashboard({
     }
   };
 
+  const handleUpdateAssignedLeadDetails = async () => {
+    if (!selectedAssignedLead) return;
+    if (selectedAssignedLead.assignedTo !== user.uid) return alert('This lead is not assigned to you.');
+
+    const nextName = assignedLeadEditName.trim();
+    const nextStatus = assignedLeadEditStatus;
+    if (!nextName) return alert('Lead name is required.');
+
+    const statusChanged = nextStatus !== selectedAssignedLead.status;
+    const nameChanged = nextName !== selectedAssignedLead.name;
+    if (!statusChanged && !nameChanged) return alert('No changes to save.');
+
+    setLoading(true);
+    try {
+      const leadRef = doc(db, 'leads', selectedAssignedLead.id);
+      const updateData: any = {
+        name: nextName,
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      };
+      if (statusChanged) {
+        updateData.lastInteractionAt = serverTimestamp();
+        updateData.lastRemark = `Status changed to ${nextStatus.replace('_', ' ')}`;
+        if (nextStatus === 'not_interested') {
+          updateData.nextFollowupAt = deleteField();
+        }
+      }
+
+      await updateDoc(leadRef, updateData);
+
+      if (statusChanged || nameChanged) {
+        const changes: string[] = [];
+        if (nameChanged) changes.push(`name changed from "${selectedAssignedLead.name}" to "${nextName}"`);
+        if (statusChanged) changes.push(`status changed from ${(selectedAssignedLead.status || 'pending').replace('_', ' ')} to ${nextStatus.replace('_', ' ')}`);
+        await addDoc(collection(db, 'leads', selectedAssignedLead.id, 'followups'), {
+          date: serverTimestamp(),
+          remark: changes.join('; '),
+          employeeId: user.uid,
+        });
+      }
+
+      await addAuditLog(db, {
+        action: 'assigned_lead_modified',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: selectedAssignedLead.id,
+        description: `Assigned lead updated: ${nextName}`,
+        oldValue: { name: selectedAssignedLead.name, status: selectedAssignedLead.status },
+        newValue: { name: nextName, status: nextStatus },
+      });
+
+      const localUpdate = {
+        ...selectedAssignedLead,
+        name: nextName,
+        status: nextStatus,
+        lastRemark: statusChanged ? `Status changed to ${nextStatus.replace('_', ' ')}` : selectedAssignedLead.lastRemark,
+        nextFollowupAt: nextStatus === 'not_interested' ? undefined : selectedAssignedLead.nextFollowupAt,
+      } as Lead;
+      setSelectedAssignedLead(localUpdate);
+      setLeads((prev) => prev.map((lead) => (lead.id === selectedAssignedLead.id ? { ...lead, ...localUpdate } : lead)));
+      alert('Lead updated successfully.');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `leads/${selectedAssignedLead.id}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSiteVisit = async () => {
     if (!capturedImage || !location) return alert('Photo and Location are mandatory');
     if (!currentLead || currentLead.assignedTo !== user.uid) return alert('This lead is not assigned to you. You can only view it.');
@@ -1147,6 +1242,7 @@ export default function EmployeeDashboard({
   const handleTransfer = async (targetEmployee: User) => {
     if (!currentLead) return;
     if (currentLead.assignedTo !== user.uid) return alert('This lead is not assigned to you. You can only view it.');
+    if (!tenantClientId || (targetEmployee as any).clientId !== tenantClientId) return alert('You can transfer leads only within your company.');
     if (!confirm(`Transfer lead to ${targetEmployee.name}?`)) return;
     setLoading(true);
 
@@ -1250,11 +1346,20 @@ export default function EmployeeDashboard({
           <div className="px-3 py-2 border-b border-white/10">
             <div className="flex items-center gap-2">
               <span className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-lg bg-blue-600 text-white">
-                {brand?.logoUrl ? <img src={brand.logoUrl} alt="Brand" className="h-full w-full object-cover" /> : <UserIcon size={16} />}
+                {brand?.logoUrl?.trim() && !brandLogoFailed ? (
+                  <img
+                    src={brand.logoUrl.trim()}
+                    alt="Brand"
+                    className="h-full w-full object-cover"
+                    onError={() => setBrandLogoFailed(true)}
+                  />
+                ) : (
+                  <UserIcon size={16} />
+                )}
               </span>
               <p className="text-lg font-black tracking-tight">{brand?.companyName || 'EstatePulse'}</p>
             </div>
-            <p className="text-[10px] uppercase tracking-widest text-white/70">Employee</p>
+            <p className="text-[10px] uppercase tracking-widest text-white/70">Executive</p>
             {brand?.tagline ? <p className="mt-1 text-[10px] text-white/70">{brand.tagline}</p> : null}
           </div>
           <nav className="mt-3 flex-1 space-y-1">
@@ -1424,6 +1529,13 @@ export default function EmployeeDashboard({
           <div className="flex items-center justify-between">
             <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">My Assigned Leads</h2>
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAddLead(true)}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white shadow-lg shadow-blue-100 hover:bg-blue-700"
+              >
+                <PlusCircle size={14} /> Add Lead
+              </button>
               {notInterestedOnly && (
                 <button
                   type="button"
@@ -1481,7 +1593,21 @@ export default function EmployeeDashboard({
                       onClick={() => setSelectedAssignedLead(lead)}
                     >
                       <td className="px-6 py-4 text-sm font-black text-slate-800">{lead.name}</td>
-                      <td className="px-6 py-4 text-sm font-bold text-slate-600">{lead.phone}</td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-bold text-slate-600">{lead.phone}</span>
+                          <a
+                            href={getWhatsAppUrl(lead.phone)}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(event) => event.stopPropagation()}
+                            className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"
+                            title="Chat on WhatsApp"
+                          >
+                            <MessageSquare size={10} /> WhatsApp
+                          </a>
+                        </div>
+                      </td>
                       <td className="px-6 py-4 text-sm font-bold text-slate-600">{lead.source || '-'}</td>
                       <td className="px-6 py-4 text-xs font-black text-slate-700 uppercase">{(lead.status || 'pending').replace('_', ' ')}</td>
                       <td className="px-6 py-4">
@@ -1555,8 +1681,19 @@ export default function EmployeeDashboard({
 
                 <div>
                   <h3 className="font-black text-slate-900 text-lg tracking-tight">{req.name}</h3>
-                  <div className="flex items-center gap-2 text-slate-400 font-bold text-xs mt-1">
-                    <Phone size={14} /> {req.phone}
+                  <div className="flex flex-wrap items-center gap-2 text-slate-400 font-bold text-xs mt-1">
+                    <span className="inline-flex items-center gap-2">
+                      <Phone size={14} /> {req.phone}
+                    </span>
+                    <a
+                      href={getWhatsAppUrl(req.phone)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"
+                      title="Chat on WhatsApp"
+                    >
+                      <MessageSquare size={10} /> WhatsApp
+                    </a>
                   </div>
                 </div>
 
@@ -1732,11 +1869,21 @@ export default function EmployeeDashboard({
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="font-black text-slate-800 truncate tracking-tight text-sm sm:text-base">{lead.name}</p>
-                  <div className="flex items-center gap-2 mt-0.5">
+                  <div className="flex flex-wrap items-center gap-2 mt-0.5">
                     <Phone size={10} className="text-slate-300" />
                     <p className="text-[10px] text-slate-400 font-bold tracking-tight">
                       {lead.phone}
                     </p>
+                    <a
+                      href={getWhatsAppUrl(lead.phone)}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(event) => event.stopPropagation()}
+                      className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"
+                      title="Chat on WhatsApp"
+                    >
+                      WA
+                    </a>
                   </div>
                   {lead.lastInteractionAt && (
                     <div className="flex items-center gap-1 mt-1">
@@ -1823,6 +1970,15 @@ export default function EmployeeDashboard({
                       <div className="flex flex-wrap items-center gap-2 sm:gap-4 mt-2">
                         <a href={`tel:${currentLead.phone}`} className="bg-white px-3 py-1.5 rounded-full shadow-sm border border-slate-100 text-blue-600 font-black text-[10px] sm:text-[11px] uppercase tracking-widest hover:bg-blue-50 transition-all flex items-center gap-2">
                           <Phone size={12} /> {currentLead.phone}
+                        </a>
+                        <a
+                          href={getWhatsAppUrl(currentLead.phone)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="bg-emerald-50 px-3 py-1.5 rounded-full shadow-sm border border-emerald-100 text-emerald-700 font-black text-[10px] sm:text-[11px] uppercase tracking-widest hover:bg-emerald-100 transition-all flex items-center gap-2"
+                          title="Chat on WhatsApp"
+                        >
+                          <MessageSquare size={12} /> WhatsApp
                         </a>
                         <div className="flex items-center gap-2 text-slate-400 font-bold text-[9px] sm:text-[10px] uppercase tracking-widest">
                           <Clock size={12} /> Added {formatDateValue(currentLead.createdAt, 'MMM dd', 'Unknown')}
@@ -2160,7 +2316,18 @@ export default function EmployeeDashboard({
               <div className="p-5 border-b border-slate-100 flex items-center justify-between">
                 <div>
                   <h3 className="text-xl font-black text-slate-900">{selectedAssignedLead.name}</h3>
-                  <p className="text-xs font-bold text-slate-500 mt-1">{selectedAssignedLead.phone}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <p className="text-xs font-bold text-slate-500">{selectedAssignedLead.phone}</p>
+                    <a
+                      href={getWhatsAppUrl(selectedAssignedLead.phone)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"
+                      title="Chat on WhatsApp"
+                    >
+                      <MessageSquare size={10} /> WhatsApp
+                    </a>
+                  </div>
                 </div>
                 <button
                   onClick={() => setSelectedAssignedLead(null)}
@@ -2171,6 +2338,40 @@ export default function EmployeeDashboard({
               </div>
 
               <div className="p-5 overflow-y-auto space-y-5">
+                <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_220px_auto] sm:items-end">
+                    <div>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1">Lead Name</label>
+                      <input
+                        type="text"
+                        value={assignedLeadEditName}
+                        onChange={(event) => setAssignedLeadEditName(event.target.value)}
+                        className="w-full rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm font-bold text-slate-800 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1">Status</label>
+                      <select
+                        value={assignedLeadEditStatus}
+                        onChange={(event) => setAssignedLeadEditStatus(event.target.value as Lead['status'])}
+                        className="w-full rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm font-bold text-slate-800 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                      >
+                        <option value="pending">Pending</option>
+                        <option value="interested">Interested</option>
+                        <option value="not_interested">Not Interested</option>
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleUpdateAssignedLeadDetails}
+                      disabled={loading || selectedAssignedLead.assignedTo !== user.uid}
+                      className="rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-blue-100 hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {loading ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Source</p>
@@ -2232,7 +2433,7 @@ export default function EmployeeDashboard({
                 <div className="relative">
                   <input
                     type="text"
-                    placeholder="Search employee by name..."
+                    placeholder="Search executive by name..."
                     value={transferSearch}
                     onChange={e => setTransferSearch(e.target.value)}
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition-all h-12 text-sm"
@@ -2260,7 +2461,7 @@ export default function EmployeeDashboard({
                       </button>
                     ))}
                   {employees.length <= 1 && (
-                    <div className="text-center py-8 text-gray-400 font-medium">No other employees found.</div>
+                    <div className="text-center py-8 text-gray-400 font-medium">No other executives found.</div>
                   )}
                 </div>
               </div>

@@ -72,6 +72,7 @@ function cn(...inputs: ClassValue[]) {
 }
 
 type AdminView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'brokers' | 'transfer_register' | 'notification_center' | 'activity_logs';
+type LeadQueueTab = 'overdue' | 'today' | 'upcoming';
 
 type AdminDashboardProps = {
   user: User;
@@ -143,6 +144,23 @@ const parseTimestamp = (value: any): Date | null => {
   return Number.isNaN(converted.getTime()) ? null : converted;
 };
 
+const getWhatsAppUrl = (phone?: string | null) => {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return '#';
+  return `https://wa.me/${digits.length === 10 ? `91${digits}` : digits}`;
+};
+
+const isOpenFollowupLead = (lead: Lead) => lead.status !== 'deal_approved' && lead.status !== 'not_interested';
+
+const getLeadQueueTab = (lead: Lead, todayStart: Date, todayEnd: Date): LeadQueueTab | null => {
+  if (!isOpenFollowupLead(lead)) return null;
+
+  const followupAt = parseTimestamp((lead as any).nextFollowupAt);
+  if (!followupAt || followupAt < todayStart) return 'overdue';
+  if (followupAt >= todayStart && followupAt <= todayEnd) return 'today';
+  return 'upcoming';
+};
+
 export default function AdminDashboard({
   user,
   brand,
@@ -150,6 +168,7 @@ export default function AdminDashboard({
   initialView,
   initialViewSignal = 0,
 }: AdminDashboardProps) {
+  const [brandLogoFailed, setBrandLogoFailed] = useState(false);
   const tenantClientId = String((user as any).clientId || '');
   const shouldScopeByClient = user.role !== 'super_admin';
   const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin';
@@ -543,7 +562,7 @@ export default function AdminDashboard({
       const reallocationPool = leadAssignableMembers.filter((e) => e.uid !== reallocateEmployee.uid);
 
       if (reallocationPool.length === 0 && reallocateToMethod === 'auto') {
-        throw new Error('No other active employees available for automatic reallocation.');
+        throw new Error('No other active executives available for automatic reallocation.');
       }
 
       leadsToReallocate.forEach((lead, index) => {
@@ -619,8 +638,11 @@ export default function AdminDashboard({
     return false;
   };
 
-  const handleTransfer = async (targetEmployee: { uid: string; name: string }) => {
+  const handleTransfer = async (targetEmployee: { uid: string; name: string; clientId?: string }) => {
     if (!selectedLead) return;
+    if (shouldScopeByClient && (!tenantClientId || targetEmployee.clientId !== tenantClientId || (selectedLead as any).clientId !== tenantClientId)) {
+      return alert('You can transfer leads only within your company.');
+    }
     if (!confirm(`Transfer lead to ${targetEmployee.name}?`)) return;
     setLoading(true);
 
@@ -976,6 +998,10 @@ export default function AdminDashboard({
   }, [initialView, initialViewSignal]);
 
   useEffect(() => {
+    setBrandLogoFailed(false);
+  }, [brand?.logoUrl]);
+
+  useEffect(() => {
     const el = tabsScrollRef.current;
     if (!el) return;
 
@@ -1062,7 +1088,7 @@ export default function AdminDashboard({
           actorRole: user.role,
           targetType: 'user',
           targetId: showEditEmployee.uid,
-          description: `Employee removed: ${showEditEmployee.name}`,
+          description: `Executive removed: ${showEditEmployee.name}`,
           oldValue: currentUser || null,
           newValue: { role: 'deleted' },
         });
@@ -1101,7 +1127,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'user',
         targetId: showEditEmployee.uid,
-        description: `Employee updated: ${showEditEmployee.name}`,
+        description: `Executive updated: ${showEditEmployee.name}`,
         oldValue: currentUser || null,
         newValue: {
           name: showEditEmployee.name,
@@ -1133,18 +1159,9 @@ export default function AdminDashboard({
   todayStart.setHours(0, 0, 0, 0);
   const todayEnd = new Date();
   todayEnd.setHours(23, 59, 59, 999);
-  const upcomingCount = leads.filter((lead) => {
-    const d = parseTimestamp((lead as any).nextFollowupAt);
-    return Boolean(d && d > todayEnd);
-  }).length;
-  const overdueCount = leads.filter((lead) => {
-    const d = parseTimestamp((lead as any).nextFollowupAt);
-    return Boolean(d && d < todayStart && lead.status !== 'deal_approved' && lead.status !== 'not_interested');
-  }).length;
-  const todayFollowupsCount = leads.filter((lead) => {
-    const d = parseTimestamp((lead as any).nextFollowupAt);
-    return Boolean(d && d >= todayStart && d <= todayEnd);
-  }).length;
+  const upcomingCount = leads.filter((lead) => getLeadQueueTab(lead, todayStart, todayEnd) === 'upcoming').length;
+  const overdueCount = leads.filter((lead) => getLeadQueueTab(lead, todayStart, todayEnd) === 'overdue').length;
+  const todayFollowupsCount = leads.filter((lead) => getLeadQueueTab(lead, todayStart, todayEnd) === 'today').length;
   const weekStart = new Date(todayStart);
   weekStart.setDate(weekStart.getDate() - weekStart.getDay());
   const weekSiteVisits = leads.filter((lead) => {
@@ -1160,24 +1177,11 @@ export default function AdminDashboard({
     if (filter === 'total') return true;
 
     if (filter === 'overdue') {
-      const followupAt = parseTimestamp((lead as any).nextFollowupAt);
-      return Boolean(
-        followupAt &&
-        followupAt < todayStart &&
-        lead.status !== 'deal_approved' &&
-        lead.status !== 'not_interested'
-      );
+      return getLeadQueueTab(lead, todayStart, todayEnd) === 'overdue';
     }
 
     if (filter === 'today') {
-      const followupAt = parseTimestamp((lead as any).nextFollowupAt);
-      return Boolean(
-        followupAt &&
-        followupAt >= todayStart &&
-        followupAt <= todayEnd &&
-        lead.status !== 'deal_approved' &&
-        lead.status !== 'not_interested'
-      );
+      return getLeadQueueTab(lead, todayStart, todayEnd) === 'today';
     }
 
     if (filter === 'site_visits') {
@@ -1523,7 +1527,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'user',
         targetId: empId,
-        description: `Employee removed${emp?.name ? ` (${emp.name})` : ''}`,
+        description: `Executive removed${emp?.name ? ` (${emp.name})` : ''}`,
         oldValue: emp || null,
       });
     } catch (error) {
@@ -1566,7 +1570,7 @@ export default function AdminDashboard({
     alert(
       `Current password for ${emp.name} cannot be viewed.\n\n` +
       `Reason: passwords are securely hashed in Firebase Auth and are not retrievable.\n\n` +
-      `Use "Reset Password" to set a temporary password and share it with the employee.`
+      `Use "Reset Password" to set a temporary password and share it with the executive.`
     );
   };
 
@@ -1590,17 +1594,17 @@ export default function AdminDashboard({
       let createdLeadId = '';
       const leadName = leadForm.name || 'Anonymous';
       if (assignableMembers.length === 0) {
-        throw new Error('No active employees available for allocation. Add or activate an employee first.');
+        throw new Error('No active executives available for allocation. Add or activate an executive first.');
       }
 
       if (leadAllocationMode === 'manual') {
         if (!manualLeadAssigneeId) {
-          throw new Error('Select an active employee for manual allocation.');
+          throw new Error('Select an active executive for manual allocation.');
         }
 
         assignedEmployee = assignableMembers.find(e => e.uid === manualLeadAssigneeId) || null;
         if (!assignedEmployee) {
-          throw new Error('Selected employee is not active. Please choose another employee.');
+          throw new Error('Selected executive is not active. Please choose another executive.');
         }
 
         const createdLeadRef = await addDoc(collection(db, 'leads'), {
@@ -1735,7 +1739,7 @@ export default function AdminDashboard({
         }
         await batch.commit();
 
-        showSaveToast(`${name} restored successfully`, `${memberRole === 'manager' ? 'Manager' : 'Employee'} account reactivated`);
+        showSaveToast(`${name} restored successfully`, `${memberRole === 'manager' ? 'Manager' : 'Executive'} account reactivated`);
         setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: isManager ? user.uid : '' });
         setShowAddEmployee(false);
         return;
@@ -1774,7 +1778,7 @@ export default function AdminDashboard({
 
       await batch.commit();
 
-      showSaveToast(`${name} added successfully`, `${memberRole === 'manager' ? 'Manager' : 'Employee'} account created`);
+      showSaveToast(`${name} added successfully`, `${memberRole === 'manager' ? 'Manager' : 'Executive'} account created`);
       await addAuditLog(db, {
         action: 'employee_added',
         actorId: user.uid,
@@ -1782,7 +1786,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'user',
         targetId: provisionedUser?.uid,
-        description: `${memberRole === 'manager' ? 'Manager' : 'Employee'} added: ${name}`,
+        description: `${memberRole === 'manager' ? 'Manager' : 'Executive'} added: ${name}`,
         newValue: { name, phone: normalizedPhone, role: memberRole, managerId: selectedManager?.uid || null },
       });
       setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: isManager ? user.uid : '' });
@@ -1798,9 +1802,9 @@ export default function AdminDashboard({
       } else if (code === 'auth/weak-password') {
         alert('Unable to set initial password. Please use a valid mobile number.');
       } else if (error instanceof Error) {
-        alert(error.message || 'Failed to add employee. Please try again.');
+        alert(error.message || 'Failed to add executive. Please try again.');
       } else {
-        alert('Failed to add employee. Please try again.');
+        alert('Failed to add executive. Please try again.');
       }
     } finally {
       try {
@@ -2067,7 +2071,16 @@ export default function AdminDashboard({
           <div className="px-3 py-2 border-b border-white/10">
             <div className="flex items-center gap-2">
               <span className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-lg bg-blue-600 text-white">
-                {brand?.logoUrl ? <img src={brand.logoUrl} alt="Brand" className="h-full w-full object-cover" /> : <Home size={16} />}
+                {brand?.logoUrl?.trim() && !brandLogoFailed ? (
+                  <img
+                    src={brand.logoUrl.trim()}
+                    alt="Brand"
+                    className="h-full w-full object-cover"
+                    onError={() => setBrandLogoFailed(true)}
+                  />
+                ) : (
+                  <Home size={16} />
+                )}
               </span>
               <p className="text-lg font-black tracking-tight">{brand?.companyName || 'EstatePulse'}</p>
             </div>
@@ -2273,7 +2286,7 @@ export default function AdminDashboard({
               <button 
                 onClick={() => {
                   if (leadAssignableMembers.length === 0) {
-                    alert('Please add at least one employee first to enable lead allocation.');
+                    alert('Please add at least one executive first to enable lead allocation.');
                     return;
                   }
                   setLeadAllocationMode('auto');
@@ -2286,7 +2299,7 @@ export default function AdminDashboard({
                   ? "bg-gray-400 cursor-not-allowed text-white" 
                   : "bg-blue-600 hover:bg-blue-700 text-white"
                 )}
-                title={leadAssignableMembers.length === 0 ? "Add an employee first" : "Add new client"}
+                title={leadAssignableMembers.length === 0 ? "Add an executive first" : "Add new client"}
               >
                 <Plus size={18} />
                 Add Lead
@@ -2352,7 +2365,19 @@ export default function AdminDashboard({
                           </div>
                           <div>
                             <p className="font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">{lead.name}</p>
-                            <p className="text-sm text-gray-500">{lead.phone}</p>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <p className="text-sm text-gray-500">{lead.phone}</p>
+                              <a
+                                href={getWhatsAppUrl(lead.phone)}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(event) => event.stopPropagation()}
+                                className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"
+                                title="Chat on WhatsApp"
+                              >
+                                <MessageSquare size={11} /> WhatsApp
+                              </a>
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -2410,6 +2435,18 @@ export default function AdminDashboard({
                         </div>
                       </td>
                       <td className="px-6 py-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                        <a
+                          href={getWhatsAppUrl(lead.phone)}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(event) => event.stopPropagation()}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                          title="Chat on WhatsApp"
+                          aria-label={`Chat with ${lead.name} on WhatsApp`}
+                        >
+                          <MessageSquare size={15} />
+                        </a>
                         {lead.status === 'deal_pending' && (
                           <button 
                             onClick={(event) => {
@@ -2428,12 +2465,13 @@ export default function AdminDashboard({
                             <CheckCircle2 size={14} /> Approved
                           </span>
                         )}
+                        </div>
                       </td>
                     </tr>
                   ))}
                   {filteredLeads.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="px-6 py-12 text-center text-gray-400 font-medium">
+                      <td colSpan={8} className="px-6 py-12 text-center text-gray-400 font-medium">
                         No leads found in this category.
                       </td>
                     </tr>
@@ -2465,7 +2503,7 @@ export default function AdminDashboard({
             <div>
               <h2 className="text-2xl font-bold text-gray-900">Team</h2>
               <p className="text-xs text-gray-500 mt-1">
-                Add managers and employees. Employee accounts can be assigned under managers.
+                Add managers and executives. Executive accounts can be assigned under managers.
               </p>
             </div>
             <button 
@@ -2546,7 +2584,7 @@ export default function AdminDashboard({
                           <button 
                             onClick={() => deleteEmployee(emp.uid)}
                             className="py-2 px-3 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-colors border border-red-100"
-                            title="Delete Employee"
+                            title="Delete Executive"
                           >
                             <XCircle size={16} />
                           </button>
@@ -2561,7 +2599,7 @@ export default function AdminDashboard({
               <div className="col-span-full py-20 text-center bg-gray-50 rounded-3xl border border-dashed border-gray-200">
                 <Users size={48} className="mx-auto text-gray-300 mb-4" />
                 <p className="text-gray-500 font-bold">No team members found.</p>
-                <p className="text-xs text-gray-400 mt-1">Add your first manager or employee to get started.</p>
+                <p className="text-xs text-gray-400 mt-1">Add your first manager or executive to get started.</p>
                 <button
                   onClick={() => {
                     setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: isManager ? user.uid : '' });
@@ -2598,7 +2636,7 @@ export default function AdminDashboard({
                     <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setRequirementTableSort((p) => ({ key: 'type', dir: p.key === 'type' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Type{sortIndicator(requirementTableSort.key, 'type', requirementTableSort.dir)}</button></th>
                     <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setRequirementTableSort((p) => ({ key: 'budgetArea', dir: p.key === 'budgetArea' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Budget/Area{sortIndicator(requirementTableSort.key, 'budgetArea', requirementTableSort.dir)}</button></th>
                     <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setRequirementTableSort((p) => ({ key: 'location', dir: p.key === 'location' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Location{sortIndicator(requirementTableSort.key, 'location', requirementTableSort.dir)}</button></th>
-                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setRequirementTableSort((p) => ({ key: 'employee', dir: p.key === 'employee' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Employee{sortIndicator(requirementTableSort.key, 'employee', requirementTableSort.dir)}</button></th>
+                    <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest"><button type="button" onClick={() => setRequirementTableSort((p) => ({ key: 'employee', dir: p.key === 'employee' && p.dir === 'asc' ? 'desc' : 'asc' }))}>Executive{sortIndicator(requirementTableSort.key, 'employee', requirementTableSort.dir)}</button></th>
                     <th className="px-8 py-5 text-[10px] font-black uppercase text-slate-400 tracking-widest text-right">Actions</th>
                   </tr>
                 </thead>
@@ -2612,9 +2650,20 @@ export default function AdminDashboard({
                           </div>
                           <div>
                             <p className="font-black text-slate-900">{req.name}</p>
-                            <p className="text-xs text-slate-400 font-bold flex items-center gap-1">
-                              <Phone size={12} /> {req.phone}
-                            </p>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <p className="text-xs text-slate-400 font-bold flex items-center gap-1">
+                                <Phone size={12} /> {req.phone}
+                              </p>
+                              <a
+                                href={getWhatsAppUrl(req.phone)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"
+                                title="Chat on WhatsApp"
+                              >
+                                <MessageSquare size={10} /> WhatsApp
+                              </a>
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -2913,7 +2962,7 @@ export default function AdminDashboard({
                     onChange={e => setTargetEmployeeId(e.target.value)}
                     className="w-full px-6 py-4 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-gray-700"
                   >
-                    <option value="">-- Choose Employee --</option>
+                    <option value="">-- Choose Executive --</option>
                     {leadAssignableMembers
                       .filter(e => e.uid !== reallocateEmployee.uid)
                       .map(e => <option key={e.uid} value={e.uid}>{e.name} ({leads.filter(l => l.assignedTo === e.uid).length} leads)</option>)}
@@ -2956,7 +3005,18 @@ export default function AdminDashboard({
                 </div>
                 <div>
                   <h3 className="text-xl font-bold text-gray-900">{selectedLead.name}</h3>
-                  <p className="text-sm text-gray-500">{selectedLead.phone}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <p className="text-sm text-gray-500">{selectedLead.phone}</p>
+                    <a
+                      href={getWhatsAppUrl(selectedLead.phone)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"
+                      title="Chat on WhatsApp"
+                    >
+                      <MessageSquare size={12} /> WhatsApp
+                    </a>
+                  </div>
                 </div>
               </div>
               <button onClick={() => { setSelectedLead(null); setIsEditing(false); }} className="p-2 hover:bg-red-100 rounded-full text-gray-400 hover:text-red-500 transition-colors">
@@ -3228,7 +3288,7 @@ export default function AdminDashboard({
         </div>
       )}
 
-      {/* Edit Employee Modal */}
+      {/* Edit Executive Modal */}
       {showEditEmployee && (
         <div className="fixed inset-0 z-[140] flex items-center justify-center p-4 pb-24 bg-black/60 backdrop-blur-sm">
           <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl">
@@ -3263,7 +3323,7 @@ export default function AdminDashboard({
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                 >
                   <option value="manager" disabled={!isSuperAdmin}>Manager</option>
-                  <option value="employee">Active Employee</option>
+                  <option value="employee">Active Executive</option>
                   <option value="suspended">Suspended</option>
                 </select>
               </div>
@@ -3310,7 +3370,7 @@ export default function AdminDashboard({
             <div className="p-6 space-y-4">
               <div className="relative">
                 <input
-                  placeholder="Search employee..."
+                  placeholder="Search executive..."
                   value={transferSearch}
                   onChange={e => setTransferSearch(e.target.value)}
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
@@ -3400,14 +3460,14 @@ export default function AdminDashboard({
               </div>
               {leadAllocationMode === 'manual' && (
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">Assign To (Active Employee)</label>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">Assign To (Active Executive)</label>
                   <select
                     required
                     value={manualLeadAssigneeId}
                     onChange={e => setManualLeadAssigneeId(e.target.value)}
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                   >
-                    <option value="">Select employee</option>
+                    <option value="">Select executive</option>
                     {leadAssignableMembers
                       .map(emp => (
                         <option key={emp.uid} value={emp.uid}>{emp.name} ({emp.phone})</option>
@@ -3442,7 +3502,7 @@ export default function AdminDashboard({
                   onChange={e => setEmployeeForm({ ...employeeForm, role: e.target.value as 'employee' | 'manager', managerId: isManager ? user.uid : '' })}
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                 >
-                  <option value="employee">Employee</option>
+                  <option value="employee">Executive</option>
                   {isSuperAdmin && <option value="manager">Manager</option>}
                 </select>
               </div>

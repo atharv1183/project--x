@@ -1,7 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { auth, db } from '../lib/firebase';
 import { EmailAuthProvider, reauthenticateWithCredential, updateEmail, updatePassword } from 'firebase/auth';
-import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { addDoc, collection, doc, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
 import { User } from '../types';
 import { ArrowLeft, Camera, Lock, Mail, Phone, Shield, UserCircle2 } from 'lucide-react';
 import { addAuditLog } from '../lib/audit';
@@ -66,6 +66,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
   const [selectedTicketId, setSelectedTicketId] = useState<string>('');
   const canEditBrand = user.role === 'admin' || user.role === 'client_admin' || user.role === 'manager' || user.role === 'super_admin';
   const isCompanyAdminLike = user.role === 'admin' || user.role === 'client_admin' || user.role === 'manager';
+  const isCompanyBrandOwner = user.role === 'admin' || user.role === 'client_admin';
 
   const isStandalone = useMemo(() => {
     if (typeof window === 'undefined') return false;
@@ -139,6 +140,22 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
     reader.readAsDataURL(file);
   };
 
+  const handleBrandLogoUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 1024 * 1024) {
+      setError('Brand logo should be under 1 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setBrandLogoUrl(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleUpdateProfile = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
@@ -184,6 +201,15 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
             }
           : {}),
       });
+      if (isCompanyBrandOwner && (user as any).clientId) {
+        await setDoc(doc(db, 'clientBranding', String((user as any).clientId)), {
+          logoUrl: brandLogoUrl.trim(),
+          companyName: brandCompanyName.trim(),
+          tagline: brandTagline.trim(),
+          updatedAt: serverTimestamp(),
+          updatedBy: user.uid,
+        }, { merge: true });
+      }
       onUserUpdate?.({
         phone: normalizedPhone,
         email: email.trim().toLowerCase(),
@@ -388,14 +414,27 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
             <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4 space-y-3">
               <p className="text-sm font-bold text-blue-900">Self Brand</p>
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Company Logo URL</label>
-                <input
-                  type="text"
-                  value={brandLogoUrl}
-                  onChange={(e) => setBrandLogoUrl(e.target.value)}
-                  placeholder="https://... or base64 data URL"
-                  className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
-                />
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Company Logo</label>
+                <div className="flex items-center gap-3">
+                  <label className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-semibold text-gray-700 cursor-pointer hover:bg-gray-100">
+                    <Camera size={14} /> Upload Logo
+                    <input type="file" accept="image/*" className="hidden" onChange={handleBrandLogoUpload} />
+                  </label>
+                  {brandLogoUrl ? (
+                    <>
+                      <div className="w-10 h-10 rounded-lg overflow-hidden border border-gray-200 bg-gray-100">
+                        <img src={brandLogoUrl} alt="Logo preview" className="w-full h-full object-cover" />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setBrandLogoUrl('')}
+                        className="px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-100"
+                      >
+                        Remove
+                      </button>
+                    </>
+                  ) : null}
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Company Name</label>

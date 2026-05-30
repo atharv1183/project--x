@@ -31,7 +31,7 @@ const adminTools: ToolCard[] = [
   { id: 'attendance', title: 'Attendance', description: 'Check team clock-in and clock-out logs.', icon: Clock },
   { id: 'inventory', title: 'Inventory', description: 'View and manage property inventory.', icon: LayoutGrid },
   { id: 'requirements', title: 'Requirements', description: 'Track customer needs and requests.', icon: FileText },
-  { id: 'employees', title: 'Team', description: 'Manage employee accounts and status.', icon: UserPlus },
+  { id: 'employees', title: 'Team', description: 'Manage executive accounts and status.', icon: UserPlus },
 ];
 
 const managerTools: ToolCard[] = [
@@ -40,7 +40,7 @@ const managerTools: ToolCard[] = [
   { id: 'attendance', title: 'Attendance', description: 'Track your and your team clock-in/out logs.', icon: Clock },
   { id: 'inventory', title: 'Inventory', description: 'View and manage property inventory.', icon: LayoutGrid },
   { id: 'requirements', title: 'Requirements', description: 'Track customer needs for your team.', icon: FileText },
-  { id: 'employees', title: 'Team', description: 'Manage employees assigned under you.', icon: UserPlus },
+  { id: 'employees', title: 'Team', description: 'Manage executives assigned under you.', icon: UserPlus },
 ];
 
 const employeeTools: ToolCard[] = [

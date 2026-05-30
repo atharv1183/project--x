@@ -435,7 +435,7 @@ export default function MonthlyAttendanceReport({
   const exportRows = rows.map((row) => ({
     Date: row.date.toLocaleDateString(),
     Day: row.day,
-    Employee: row.employeeName,
+    Executive: row.employeeName,
     Login: formatTime(row.loginTime),
     Logout: formatTime(row.logoutTime),
     WorkingHours: formatHours(row.workingMinutes),
@@ -446,7 +446,7 @@ export default function MonthlyAttendanceReport({
 
   const exportReport = (kind: 'excel') => {
     if (employeeId === 'all') {
-      alert('Please select a specific employee before exporting Excel.');
+      alert('Please select a specific executive before exporting Excel.');
       return;
     }
     if (!Number.isFinite(month) || !Number.isFinite(year)) {
@@ -454,11 +454,11 @@ export default function MonthlyAttendanceReport({
       return;
     }
     if (rows.length === 0) {
-      alert('No attendance rows found for the selected employee, month and year.');
+      alert('No attendance rows found for the selected executive, month and year.');
       return;
     }
     const excelHtml = toExcelHtml(exportRows);
-    const employeeName = cleanMembers.find((member) => member.uid === employeeId)?.name || 'employee';
+    const employeeName = cleanMembers.find((member) => member.uid === employeeId)?.name || 'executive';
     const safeEmployeeName = employeeName.replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '').toLowerCase();
     downloadText(`attendance-${safeEmployeeName}-${MONTHS[month]}-${year}.xls`, excelHtml, 'application/vnd.ms-excel;charset=utf-8');
   };
@@ -529,7 +529,7 @@ export default function MonthlyAttendanceReport({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-blue-700">
-            <CalendarDays size={13} /> Employee Monthly Attendance Report
+            <CalendarDays size={13} /> Executive Monthly Attendance Report
           </div>
           <h2 className="mt-2 text-2xl sm:text-3xl font-black tracking-tight text-slate-900">Real Estate CRM Attendance</h2>
           <p className="mt-1 text-sm font-medium text-slate-500">Presence, punctuality, working hours, overtime, and productivity summary.</p>
@@ -557,9 +557,9 @@ export default function MonthlyAttendanceReport({
       <section className="rounded-3xl border border-slate-100 bg-white p-4 sm:p-5 shadow-sm print:hidden">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-6">
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Employee Name</label>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Executive Name</label>
             <select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-bold text-slate-700">
-              <option value="all">All Employees</option>
+              <option value="all">All Executives</option>
               {cleanMembers.map((member) => <option key={member.uid} value={member.uid}>{member.name}</option>)}
             </select>
           </div>
@@ -601,10 +601,10 @@ export default function MonthlyAttendanceReport({
 
       <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {[
-          ['Total Employees Present', employeeSummaries.filter((item) => item.present > 0).length, Users],
-          ['Highest Attendance Employee', highestAttendance ? `${highestAttendance.member.name} (${highestAttendance.percent.toFixed(0)}%)` : '-', CheckCircle2],
-          ['Most Late Employee', mostLate ? `${mostLate.member.name} (${mostLate.late})` : '-', AlertTriangle],
-          ['Lowest Attendance Employee', lowestAttendance ? `${lowestAttendance.member.name} (${lowestAttendance.percent.toFixed(0)}%)` : '-', XCircle],
+          ['Total Executives Present', employeeSummaries.filter((item) => item.present > 0).length, Users],
+          ['Highest Attendance Executive', highestAttendance ? `${highestAttendance.member.name} (${highestAttendance.percent.toFixed(0)}%)` : '-', CheckCircle2],
+          ['Most Late Executive', mostLate ? `${mostLate.member.name} (${mostLate.late})` : '-', AlertTriangle],
+          ['Lowest Attendance Executive', lowestAttendance ? `${lowestAttendance.member.name} (${lowestAttendance.percent.toFixed(0)}%)` : '-', XCircle],
           ['Team Attendance %', `${teamAttendancePercent.toFixed(1)}%`, ShieldCheck],
         ].map(([label, value, Icon]) => (
           <div key={label as string} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
@@ -628,11 +628,11 @@ export default function MonthlyAttendanceReport({
 
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Employee Information</h3>
+          <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Executive Information</h3>
           <div className="mt-4 grid grid-cols-1 gap-3 text-sm">
             {[
-              ['Employee ID', selectedEmployee?.uid || 'Team Report'],
-              ['Employee Name', selectedEmployee?.name || 'All selected employees'],
+              ['Executive ID', selectedEmployee?.uid || 'Team Report'],
+              ['Executive Name', selectedEmployee?.name || 'All selected executives'],
               ['Designation', selectedEmployee ? getDesignation(selectedEmployee) : 'Mixed'],
               ['Department', selectedEmployee ? getDepartment(selectedEmployee) : department === 'all' ? 'All Departments' : department],
               ['Branch', selectedEmployee ? getBranch(selectedEmployee) : branch === 'all' ? 'All Branches' : branch],
@@ -704,7 +704,7 @@ export default function MonthlyAttendanceReport({
             <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">{canApproveCorrections ? 'Admin Controls' : 'Attendance Corrections'}</h3>
             <p className="mt-1 text-xs font-medium text-slate-500">
               {canApproveCorrections
-                ? 'Review employee correction requests, lock the month, and add admin remarks.'
+                ? 'Review executive correction requests, lock the month, and add admin remarks.'
                 : 'Request login/logout changes here. Admin approval is required before changes affect the report.'}
             </p>
           </div>
@@ -747,7 +747,7 @@ export default function MonthlyAttendanceReport({
                 {[
                   ['date', 'Date'],
                   ['day', 'Day'],
-                  ...(employeeId === 'all' ? [['employee', 'Employee'] as [string, string]] : []),
+                  ...(employeeId === 'all' ? [['employee', 'Executive'] as [string, string]] : []),
                   ['loginTime', 'Login Time'],
                   ['loginLocation', 'Login Location'],
                   ['logoutTime', 'Logout Time'],

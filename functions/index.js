@@ -143,3 +143,71 @@ exports.resetUserPassword = onCall(async (request) => {
 
   return { ok: true };
 });
+
+exports.createInventoryListing = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
+
+  const uid = request.auth.uid;
+  const userSnap = await db.collection('users').doc(uid).get();
+  if (!userSnap.exists) throw new HttpsError('permission-denied', 'User profile not found.');
+
+  const user = userSnap.data() || {};
+  const role = String(user.role || '');
+  const userClientId = String(user.clientId || '');
+  const isAdminLike = ['super_admin', 'admin', 'client_admin', 'manager'].includes(role);
+  if (!isAdminLike) throw new HttpsError('permission-denied', 'Only admin roles can create listings.');
+
+  const input = request.data || {};
+  const payload = (input.payload && typeof input.payload === 'object') ? input.payload : null;
+  if (!payload) throw new HttpsError('invalid-argument', 'payload is required.');
+
+  const title = String(payload.title || '').trim();
+  const location = String(payload.location || '').trim();
+  const type = String(payload.type || '').trim();
+  const status = String(payload.status || '').trim();
+  const submitterId = String(payload.submitterId || '').trim();
+  const submitterName = String(payload.submitterName || '').trim();
+  const clientId = String(payload.clientId || '').trim();
+  const clientName = String(payload.clientName || '').trim();
+
+  if (!title || !location || !type) {
+    throw new HttpsError('invalid-argument', 'title, location and type are required.');
+  }
+  if (!['draft', 'pending_approval', 'approved', 'rejected'].includes(status)) {
+    throw new HttpsError('invalid-argument', 'Invalid status.');
+  }
+  if (!submitterId || submitterId !== uid) {
+    throw new HttpsError('permission-denied', 'submitterId mismatch.');
+  }
+  if (!clientId) throw new HttpsError('invalid-argument', 'clientId is required.');
+  if (role !== 'super_admin' && clientId !== userClientId) {
+    throw new HttpsError('permission-denied', 'Cross-company create is not allowed.');
+  }
+
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const docRef = await db.collection('inventory').add({
+    ...payload,
+    title,
+    location,
+    type,
+    status,
+    submitterId: uid,
+    submitterName: submitterName || String(user.name || request.auth.token.name || request.auth.token.email || uid),
+    clientId,
+    clientName,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const autoApprove = Boolean(input.autoApprove);
+  if (autoApprove) {
+    await docRef.update({
+      status: 'approved',
+      approvedBy: String(user.name || request.auth.token.name || request.auth.token.email || uid),
+      approvalAt: now,
+      updatedAt: now,
+    });
+  }
+
+  return { id: docRef.id, autoApproved: autoApprove };
+});

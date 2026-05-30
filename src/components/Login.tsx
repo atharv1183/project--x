@@ -3,7 +3,7 @@ import { auth, db } from '../lib/firebase';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { User } from '../types';
-import { LogIn, Building2, Phone, Lock, Eye, EyeOff } from 'lucide-react';
+import { LogIn, Phone, Lock, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface LoginProps {
@@ -83,10 +83,14 @@ export default function Login({ onLoginSuccess }: LoginProps) {
         className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden"
       >
         <div className="bg-blue-600 p-8 text-center">
-          <div className="inline-flex items-center justify-center p-3 bg-white/20 rounded-xl mb-4">
-            <Building2 className="text-white w-8 h-8" />
+          <div className="inline-flex items-center justify-center bg-white rounded-xl mb-4 overflow-hidden shadow-sm">
+            <img
+              src="/logo.jpg"
+              alt="Estate Plus CRM"
+              className="h-16 w-auto object-contain"
+            />
           </div>
-          <h2 className="text-2xl font-bold text-white tracking-tight">EstatePulse</h2>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Estate Plus CRM</h2>
           <p className="text-blue-100 text-sm mt-1">Lead Management System</p>
         </div>
 
@@ -136,7 +140,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               </div>
             </div>
             <p className="text-xs text-gray-500">
-              New employee accounts start with password equal to mobile number. Change it after login from Profile.
+              New executive accounts start with password equal to mobile number. Change it after login from Profile.
             </p>
           </div>
 

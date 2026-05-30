@@ -90,11 +90,12 @@ const Index = () => {
       {/* NAV */}
       <header className="fixed top-0 inset-x-0 z-50 glass">
         <nav className="max-w-7xl mx-auto flex items-center justify-between px-6 py-4">
-          <a href="#top" className="flex items-center gap-2 font-bold text-lg">
-            <div className="w-9 h-9 rounded-xl bg-gradient-primary grid place-items-center text-primary-foreground shadow-glow">
-              <Building2 className="w-5 h-5" />
-            </div>
-            <span>Estate<span className="text-primary">Plus</span></span>
+          <a href="#top" className="flex items-center transition-transform duration-300 hover:-translate-y-0.5">
+            <img
+              src="/logo.jpg"
+              alt="Estate Plus"
+              className="h-14 w-auto rounded-lg object-contain brightness-125 contrast-125 saturate-150 drop-shadow-[0_10px_18px_rgba(16,185,129,0.18)]"
+            />
           </a>
           <div className="hidden md:flex gap-8 text-sm font-medium text-muted-foreground">
             <a href="#features" className="hover:text-primary transition">Features</a>
@@ -126,10 +127,23 @@ const Index = () => {
               A modern operating ecosystem for brokers, builders, channel partners and enterprises — from lead management to marketing automation in one place.
             </p>
             <div className="reveal flex flex-wrap gap-4" style={{ transitionDelay: "240ms" }}>
-              <Button size="lg" className="bg-gradient-primary hover:opacity-90 shadow-elegant text-base h-12 px-7">
+              <Button
+                size="lg"
+                className="bg-gradient-primary hover:opacity-90 shadow-elegant text-base h-12 px-7"
+                onClick={() => {
+                  window.location.href = "/book-demo";
+                }}
+              >
                 Book a Free Demo <ArrowRight className="ml-1" />
               </Button>
-              <Button size="lg" variant="outline" className="h-12 px-7 text-base border-2">
+              <Button
+                size="lg"
+                variant="outline"
+                className="h-12 px-7 text-base border-2"
+                onClick={() => {
+                  window.location.href = "#pricing";
+                }}
+              >
                 Explore Plans
               </Button>
             </div>
@@ -345,6 +359,9 @@ const Index = () => {
                   size="lg"
                   className={`w-full ${p.featured ? "bg-gradient-primary hover:opacity-90 shadow-elegant" : ""}`}
                   variant={p.featured ? "default" : "outline"}
+                  onClick={() => {
+                    window.location.href = "/get-started";
+                  }}
                 >
                   Get Started <ArrowRight />
                 </Button>
@@ -368,7 +385,13 @@ const Index = () => {
                 Join enterprises scaling with structure, visibility and accountability.
               </p>
               <div className="flex flex-wrap justify-center gap-4">
-                <Button size="lg" className="bg-gradient-accent text-accent-foreground hover:opacity-90 h-12 px-8 text-base font-bold">
+                <Button
+                  size="lg"
+                  className="bg-gradient-accent text-accent-foreground hover:opacity-90 h-12 px-8 text-base font-bold"
+                  onClick={() => {
+                    window.location.href = "/book-demo";
+                  }}
+                >
                   Book a Free Demo <ArrowRight />
                 </Button>
                 <Button size="lg" variant="outline" className="h-12 px-8 text-base border-white/30 bg-white/10 text-white hover:bg-white/20">
@@ -384,11 +407,14 @@ const Index = () => {
       <footer className="bg-secondary text-secondary-foreground py-14">
         <div className="max-w-7xl mx-auto px-6 grid md:grid-cols-4 gap-10">
           <div>
-            <div className="flex items-center gap-2 font-bold text-lg mb-4">
-              <div className="w-9 h-9 rounded-xl bg-gradient-primary grid place-items-center">
-                <Building2 className="w-5 h-5" />
-              </div>
-              <span>Estate<span className="text-primary-glow">Plus</span></span>
+            <div className="inline-flex items-center rounded-2xl bg-white px-3 py-2 mb-4 shadow-[0_12px_28px_rgba(0,0,0,0.22)] ring-1 ring-white/20">
+              <span className="rounded-xl bg-gradient-to-br from-white via-emerald-50 to-white p-1.5">
+                <img
+                  src="/logo.jpg"
+                  alt="Estate Plus"
+                  className="h-12 w-auto rounded-lg object-contain"
+                />
+              </span>
             </div>
             <p className="text-sm text-white/60">Simplifying Real Estate Operations through Technology.</p>
           </div>
@@ -407,8 +433,8 @@ const Index = () => {
           <div>
             <h4 className="font-bold mb-4">Contact</h4>
             <ul className="space-y-3 text-sm text-white/60">
-              <li className="flex items-center gap-2"><Phone className="w-4 h-4 text-primary-glow" /> +91 00000 00000</li>
-              <li className="flex items-center gap-2"><Mail className="w-4 h-4 text-primary-glow" /> hello@estateplus.io</li>
+              <li className="flex items-center gap-2"><Phone className="w-4 h-4 text-primary-glow" /> 850499720</li>
+              <li className="flex items-center gap-2"><Mail className="w-4 h-4 text-primary-glow" /> Growth@estatepluscrm.in</li>
               <li className="flex items-center gap-2"><MapPin className="w-4 h-4 text-primary-glow" /> India</li>
             </ul>
           </div>

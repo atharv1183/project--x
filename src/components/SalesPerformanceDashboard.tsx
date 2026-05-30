@@ -648,7 +648,7 @@ export default function SalesPerformanceDashboard({
 
   const exportRows = sortedMetrics.map((metric, index) => ({
     Rank: index + 1,
-    Employee: metric.name,
+    Executive: metric.name,
     Score: metric.score.toFixed(2),
     Deals: metric.deals,
     SiteVisits: metric.visits,
@@ -708,27 +708,31 @@ export default function SalesPerformanceDashboard({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
           <Trophy size={18} className="text-amber-500" />
-          <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Top Performer Table</h3>
+          <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">
+            {scope === 'employee' ? 'My Performance Table' : 'Top Performer Table'}
+          </h3>
         </div>
-        <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            value={employeeSearch}
-            onChange={(event) => {
-              setEmployeeSearch(event.target.value);
-              setPage(1);
-            }}
-            className="w-full sm:w-72 rounded-2xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm font-medium outline-none"
-            placeholder="Search employee..."
-          />
-        </div>
+        {scope !== 'employee' && (
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              value={employeeSearch}
+              onChange={(event) => {
+                setEmployeeSearch(event.target.value);
+                setPage(1);
+              }}
+              className="w-full sm:w-72 rounded-2xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm font-medium outline-none"
+              placeholder="Search executive..."
+            />
+          </div>
+        )}
       </div>
       <div className="mt-4 overflow-x-auto">
         {scope === 'employee' && currentUserMetric && (
           <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
             <div className="rounded-2xl bg-blue-50 p-4">
-              <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">Your Rank</p>
-              <p className="mt-2 text-2xl font-black text-slate-900">#{currentUserRank || '-'}</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">Assigned Leads</p>
+              <p className="mt-2 text-2xl font-black text-slate-900">{currentUserMetric.total}</p>
             </div>
             <div className="rounded-2xl bg-slate-50 p-4">
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Score</p>
@@ -747,51 +751,73 @@ export default function SalesPerformanceDashboard({
         <table className="w-full text-left">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50">
-              {[
-                ['rank', 'Rank'],
-                ['name', 'Employee Name'],
-                ['score', 'Performance Score'],
-                ['deals', 'Deals Closed'],
-                ['visits', 'Site Visits'],
-                ['interested', 'Interested Leads'],
-              ].map(([key, label]) => (
+              {(scope === 'employee'
+                ? [
+                    ['score', 'Performance Score'],
+                    ['deals', 'Deals Closed'],
+                    ['visits', 'Site Visits'],
+                    ['interested', 'Interested Leads'],
+                    ['pending', 'Pending Leads'],
+                    ['notInterested', 'Not Interested'],
+                  ]
+                : [
+                    ['rank', 'Rank'],
+                    ['name', 'Executive Name'],
+                    ['score', 'Performance Score'],
+                    ['deals', 'Deals Closed'],
+                    ['visits', 'Site Visits'],
+                    ['interested', 'Interested Leads'],
+                  ]
+              ).map(([key, label]) => (
                 <th key={key} className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">
-                  <button type="button" onClick={() => toggleSort(key as SortKey)}>{label}</button>
+                  {scope === 'employee' ? label : <button type="button" onClick={() => toggleSort(key as SortKey)}>{label}</button>}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
-            {pagedMetrics.map((metric) => {
+            {(scope === 'employee' ? employeeMetrics : pagedMetrics).map((metric) => {
               const rank = sortedMetrics.findIndex((item) => item.uid === metric.uid) + 1;
               return (
                 <tr key={metric.uid} className="hover:bg-slate-50">
-                  <td className="px-4 py-4 text-sm font-black text-slate-900">#{rank}</td>
-                  <td className="px-4 py-4">
-                    <button type="button" onClick={() => setDetailEmployee(metric)} className="text-sm font-black text-blue-600 hover:underline">{metric.name}</button>
-                  </td>
+                  {scope !== 'employee' && (
+                    <>
+                      <td className="px-4 py-4 text-sm font-black text-slate-900">#{rank}</td>
+                      <td className="px-4 py-4">
+                        <button type="button" onClick={() => setDetailEmployee(metric)} className="text-sm font-black text-blue-600 hover:underline">{metric.name}</button>
+                      </td>
+                    </>
+                  )}
                   <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.score.toFixed(2)}</td>
                   <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.deals}</td>
                   <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.visits}</td>
                   <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.interested}</td>
+                  {scope === 'employee' && (
+                    <>
+                      <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.pending}</td>
+                      <td className="px-4 py-4 text-sm font-bold text-slate-700">{metric.notInterested}</td>
+                    </>
+                  )}
                 </tr>
               );
             })}
-            {pagedMetrics.length === 0 && (
+            {(scope === 'employee' ? employeeMetrics : pagedMetrics).length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-12 text-center text-sm font-medium text-slate-400">No employee performance data for selected filters.</td>
+                <td colSpan={6} className="px-4 py-12 text-center text-sm font-medium text-slate-400">No executive performance data for selected filters.</td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
-      <div className="mt-4 flex items-center justify-between">
-        <p className="text-xs font-bold text-slate-400">Page {page} of {totalPages}</p>
-        <div className="flex gap-2">
-          <button type="button" disabled={page <= 1} onClick={() => setPage((prev) => Math.max(1, prev - 1))} className="rounded-xl border border-slate-200 p-2 text-slate-600 disabled:opacity-40"><ChevronLeft size={16} /></button>
-          <button type="button" disabled={page >= totalPages} onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))} className="rounded-xl border border-slate-200 p-2 text-slate-600 disabled:opacity-40"><ChevronRight size={16} /></button>
+      {scope !== 'employee' && (
+        <div className="mt-4 flex items-center justify-between">
+          <p className="text-xs font-bold text-slate-400">Page {page} of {totalPages}</p>
+          <div className="flex gap-2">
+            <button type="button" disabled={page <= 1} onClick={() => setPage((prev) => Math.max(1, prev - 1))} className="rounded-xl border border-slate-200 p-2 text-slate-600 disabled:opacity-40"><ChevronLeft size={16} /></button>
+            <button type="button" disabled={page >= totalPages} onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))} className="rounded-xl border border-slate-200 p-2 text-slate-600 disabled:opacity-40"><ChevronRight size={16} /></button>
+          </div>
         </div>
-      </div>
+      )}
     </section>
   );
 
@@ -804,7 +830,7 @@ export default function SalesPerformanceDashboard({
           </div>
           <h2 className="mt-1 text-xl sm:text-2xl font-black tracking-tight text-slate-900">Performance Dashboard</h2>
           <p className="mt-0.5 text-xs font-medium text-slate-500">
-            Real-time sales KPIs, conversion analytics, employee ranking, and follow-up alerts.
+            Real-time sales KPIs, conversion analytics, executive ranking, and follow-up alerts.
           </p>
         </div>
         <div className="flex flex-wrap gap-2 print:hidden">
@@ -825,7 +851,7 @@ export default function SalesPerformanceDashboard({
         <div className="grid grid-cols-1 gap-2 lg:grid-cols-4">
           <div className="space-y-3">
             <MultiSelectDropdown
-              label="Employees"
+              label="Executives"
               values={employeeIds}
               options={visibleEmployees.map((employee) => ({
                 value: employee.uid,
@@ -837,7 +863,7 @@ export default function SalesPerformanceDashboard({
                 setTeamManagerId('');
                 setPage(1);
               }}
-              placeholder="All Employees"
+              placeholder="All Executives"
             />
             {managerOptions.length > 0 && scope !== 'employee' && (
               <select
@@ -993,7 +1019,7 @@ export default function SalesPerformanceDashboard({
         </div>
 
         <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Employee Performance</h3>
+          <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Executive Performance</h3>
           <div className="mt-5 space-y-3">
             {sortedMetrics.slice(0, 6).map((metric) => {
               const maxScore = Math.max(1, ...sortedMetrics.map((item) => item.score));

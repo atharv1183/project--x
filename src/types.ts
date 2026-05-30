@@ -7,6 +7,8 @@ export interface Location {
 
 export interface Lead {
   id: string;
+  clientId?: string;
+  clientName?: string | null;
   name: string;
   phone: string;
   status: LeadStatus;
@@ -75,6 +77,8 @@ export interface AttendanceCorrectionRequest {
 
 export interface User {
   uid: string;
+  clientId?: string;
+  clientName?: string;
   name: string;
   email: string;
   phone: string;
@@ -171,6 +175,7 @@ export interface Requirement {
 
 export interface LeadTransfer {
   id: string;
+  clientId?: string;
   leadId: string;
   leadName: string;
   fromUid: string;

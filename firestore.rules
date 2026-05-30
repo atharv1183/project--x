@@ -42,6 +42,18 @@ service cloud.firestore {
     function isSameClient(resourceData) {
       return resourceData.clientId is string && requesterClientId() is string && resourceData.clientId == requesterClientId();
     }
+
+    function isUserInClient(userId, clientId) {
+      return userId is string
+        && clientId is string
+        && exists(/databases/$(database)/documents/users/$(userId))
+        && get(/databases/$(database)/documents/users/$(userId)).data.clientId is string
+        && get(/databases/$(database)/documents/users/$(userId)).data.clientId == clientId;
+    }
+
+    function isUserInRequesterClient(userId) {
+      return isUserInClient(userId, requesterClientId());
+    }
     
     function isSameClientBySubmitter(resourceData) {
       return resourceData.submitterId is string
@@ -57,9 +69,18 @@ service cloud.firestore {
 
     function canViewLead(resourceData) {
       return isSignedIn()
+        && isSameClient(resourceData)
         && (
           resourceData.assignedTo == request.auth.uid
           || (resourceData.addedById is string && resourceData.addedById == request.auth.uid)
+        );
+    }
+
+    function canAccessLead(resourceData) {
+      return isSignedIn()
+        && (
+          (isAdminLike() && (isSuperAdmin() || isSameClient(resourceData)))
+          || canViewLead(resourceData)
         );
     }
 
@@ -133,10 +154,11 @@ service cloud.firestore {
     function isValidInventory(data) {
       return data.keys().hasAll(['title', 'type', 'rate', 'location', 'status', 'submitterId', 'submitterName', 'createdAt', 'updatedAt', 'clientId'])
         && data.title is string && data.title.size() > 0
-        && data.type in ['zameen', 'plot', 'house', 'others']
+        && data.type is string && data.type.size() > 0
         && data.status in ['draft', 'pending_approval', 'approved', 'rejected']
         && data.submitterId == request.auth.uid
-        && data.clientId is string;
+        && data.clientId is string
+        && data.location is string && data.location.size() > 0;
     }
 
     function isValidAttendanceCorrection(data) {
@@ -161,6 +183,21 @@ service cloud.firestore {
         && data.clientId is string;
     }
 
+    function isValidDemoRequest(data) {
+      return data.keys().hasOnly(['name', 'email', 'phone', 'company', 'role', 'message', 'status', 'source', 'submittedAt', 'pagePath'])
+        && data.keys().hasAll(['name', 'email', 'phone', 'status', 'source', 'submittedAt'])
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 100
+        && data.email is string && data.email.size() > 3 && data.email.size() <= 255
+        && data.phone is string && data.phone.size() >= 7 && data.phone.size() <= 20
+        && data.company is string && data.company.size() <= 120
+        && data.role is string && data.role.size() <= 80
+        && data.message is string && data.message.size() <= 1000
+        && data.status == 'new'
+        && data.source == 'book-demo'
+        && data.submittedAt is timestamp
+        && data.pagePath is string && data.pagePath.size() <= 80;
+    }
+
     // ---------------------------------------------------------
     // COLLECTIONS
     // ---------------------------------------------------------
@@ -177,20 +214,26 @@ service cloud.firestore {
         )
       ) || (resource.data.visibilityScope == 'all' && resource.data.status == 'approved');
       allow get: if isSuperAdmin() || (isSignedIn() && (isSameClient(resource.data) || isSameClientBySubmitter(resource.data))) || (resource.data.visibilityScope == 'all' && resource.data.status == 'approved');
-      allow create: if isSignedIn() && (
-        (isSuperAdmin() && request.resource.data.clientId is string) ||
-        ((request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()) && (
-        (isAdminLike() && (request.resource.data.status == 'approved' || request.resource.data.status == 'pending_approval' || request.resource.data.status == 'draft')) || 
-        (!isAdminLike() && (request.resource.data.status == 'pending_approval' || request.resource.data.status == 'draft'))
-      ))
-      ) && isValidInventory(request.resource.data);
+      allow create: if isSignedIn()
+        && isValidInventory(request.resource.data)
+        && (
+          (isSuperAdmin() && request.resource.data.clientId is string)
+          || (
+            request.resource.data.clientId is string
+            && request.resource.data.clientId == requesterClientId()
+            && (
+              (isAdminLike() && request.resource.data.status in ['approved', 'pending_approval', 'draft'])
+              || (!isAdminLike() && request.resource.data.status in ['pending_approval', 'draft'])
+            )
+          )
+        );
       allow update: if isSignedIn() && (
         (isSuperAdmin() || ((isSameClient(resource.data) || isSameClientBySubmitter(resource.data)) && (
           isAdminLike() ||
           (resource.data.submitterId == request.auth.uid && (resource.data.status == 'draft' || resource.data.status == 'rejected' || resource.data.status == 'pending_approval'))
         )))
       );
-      allow delete: if isSuperAdmin() || ((isSameClient(resource.data) || isSameClientBySubmitter(resource.data)) && (isAdminLike() || (isSignedIn() && resource.data.submitterId == request.auth.uid && resource.data.status == 'draft')));
+      allow delete: if false;
     }
 
     // Admin-only broker directory
@@ -271,13 +314,23 @@ service cloud.firestore {
 
     // Leads
     match /leads/{leadId} {
-      allow get: if isSignedIn() && ((isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || canViewLead(resource.data));
-      allow list: if isSignedIn() && ((isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || canViewLead(resource.data));
+      allow get: if canAccessLead(resource.data);
+      allow list: if canAccessLead(resource.data);
       allow create: if isValidLead(request.resource.data) && (
-        (isAdminLike() && (isSuperAdmin() || (request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()))) ||
+        (isAdminLike()
+          && (
+            isSuperAdmin()
+            || (
+              request.resource.data.clientId is string
+              && request.resource.data.clientId == requesterClientId()
+              && isUserInRequesterClient(request.resource.data.assignedTo)
+            )
+          )
+        ) ||
         (
           request.resource.data.clientId is string
           && request.resource.data.clientId == requesterClientId()
+          && isUserInRequesterClient(request.resource.data.assignedTo)
           &&
           request.resource.data.assignedTo == request.auth.uid
           && request.resource.data.source == 'Employee Added'
@@ -287,19 +340,25 @@ service cloud.firestore {
           && request.resource.data.addedByRole == 'employee'
         )
       );
-      allow update: if (((isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || isOwner(resource.data))) && (
+      allow update: if request.resource.data.clientId == resource.data.clientId
+        && (isSuperAdmin() || isUserInClient(request.resource.data.assignedTo, resource.data.clientId))
+        && (((isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || (isOwner(resource.data) && isSameClient(resource.data)))) && (
         // Admin/manager can update lead payloads used by dashboard workflows.
         (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) ||
         // Employee can update status, follow-up info, and transfer lead
-        (isOwner(resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'nextFollowupAt', 'lastRemark', 'siteVisitPhoto', 'siteVisitLocation', 'siteVisitAt', 'assignedTo']) 
-         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdAt', 'phone']))
+        (isOwner(resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasAny(['name', 'status', 'nextFollowupAt', 'lastRemark', 'siteVisitPhoto', 'siteVisitLocation', 'siteVisitAt', 'assignedTo'])
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdAt', 'phone'])
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['name'])
+            || (request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 100))
+        )
       );
     }
 
     // Followups
     match /leads/{leadId}/followups/{followupId} {
-      allow read: if isAdminLike() || isOwner(get(/databases/$(database)/documents/leads/$(leadId)).data);
-      allow create: if (isAdminLike() || isOwner(get(/databases/$(database)/documents/leads/$(leadId)).data)) && isValidFollowup(request.resource.data);
+      allow read: if canAccessLead(get(/databases/$(database)/documents/leads/$(leadId)).data);
+      allow create: if canAccessLead(get(/databases/$(database)/documents/leads/$(leadId)).data) && isValidFollowup(request.resource.data);
     }
 
     // System allocation
@@ -339,6 +398,23 @@ service cloud.firestore {
       }
     }
 
+    match /clientBranding/{clientId} {
+      allow read: if isSuperAdmin() || (isSignedIn() && requesterClientId() is string && requesterClientId() == clientId);
+      allow create, update: if isSuperAdmin()
+        || (
+          isAdmin()
+          && requesterClientId() is string
+          && requesterClientId() == clientId
+          && request.resource.data.keys().hasOnly(['logoUrl', 'companyName', 'tagline', 'updatedAt', 'updatedBy'])
+          && request.resource.data.logoUrl is string
+          && request.resource.data.companyName is string
+          && request.resource.data.tagline is string
+          && request.resource.data.updatedAt is timestamp
+          && request.resource.data.updatedBy == request.auth.uid
+        );
+      allow delete: if isSuperAdmin();
+    }
+
     match /platformApiKeys/{docId} {
       allow read, write: if isSuperAdmin();
     }
@@ -357,6 +433,29 @@ service cloud.firestore {
 
     match /platformFollowupReminders/{docId} {
       allow read, write: if isSuperAdmin();
+    }
+
+    match /paymentTransactions/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /demoRequests/{docId} {
+      allow create: if isValidDemoRequest(request.resource.data);
+      allow read: if isSuperAdmin();
+      allow update: if isSuperAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'updatedBy'])
+        && request.resource.data.status in ['new', 'contacted', 'closed']
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if isSuperAdmin();
+    }
+
+    match /inventoryBackups/{docId} {
+      allow read: if isSuperAdmin() || (isSignedIn() && isSameClient(resource.data));
+      allow create: if isSignedIn()
+        && request.resource.data.clientId is string
+        && (isSuperAdmin() || request.resource.data.clientId == requesterClientId());
+      allow update, delete: if false;
     }
 
     match /sessionRevocations/{docId} {
@@ -405,12 +504,29 @@ service cloud.firestore {
       allow read: if isSignedIn()
         && (
           (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data)))
-          || resource.data.fromUid == request.auth.uid
-          || resource.data.toUid == request.auth.uid
-          || resource.data.transferredByUid == request.auth.uid
+          || (isSameClient(resource.data) && (
+            resource.data.fromUid == request.auth.uid
+            || resource.data.toUid == request.auth.uid
+            || resource.data.transferredByUid == request.auth.uid
+          ))
         );
-      allow create: if (isAdminLike() && (isSuperAdmin() || (request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()))) || (
+      allow create: if (
+        isAdminLike()
+        && (
+          isSuperAdmin()
+          || (
+            request.resource.data.clientId is string
+            && request.resource.data.clientId == requesterClientId()
+            && isUserInRequesterClient(request.resource.data.fromUid)
+            && isUserInRequesterClient(request.resource.data.toUid)
+          )
+        )
+      ) || (
         isSignedIn()
+        && request.resource.data.clientId is string
+        && request.resource.data.clientId == requesterClientId()
+        && isUserInRequesterClient(request.resource.data.fromUid)
+        && isUserInRequesterClient(request.resource.data.toUid)
         && request.resource.data.transferredByUid == request.auth.uid
       );
       allow update, delete: if isAdminLike() && (isSuperAdmin() || isSameClient(resource.data));

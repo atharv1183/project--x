@@ -16,6 +16,7 @@ import ProfilePage from './components/ProfilePage';
 import ToolsPage, { ToolTarget } from './components/ToolsPage';
 import PublicHeroPage from './components/PublicHeroPage';
 import SuperAdminControlCenter from './components/SuperAdminControlCenter';
+import BookDemo from './pages/BookDemo';
 import { functions } from './lib/firebase';
 import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -36,6 +37,7 @@ const defaultScreenForUser = (user: User): 'dashboard' | 'platform' =>
 export default function App() {
   const pathname = window.location.pathname.toLowerCase();
   const isPublicHeroRoute = pathname === '/' || pathname === '/hero' || pathname === '/website';
+  const isBookDemoRoute = pathname === '/book-demo' || pathname === '/get-started';
   const [user, setUser] = useState<User | null>(null);
   const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile' | 'tools' | 'platform'>('dashboard');
   const [activeAnnouncements, setActiveAnnouncements] = useState<PlatformAnnouncement[]>([]);
@@ -48,6 +50,7 @@ export default function App() {
     companyName: 'EstatePulse',
     tagline: '',
   });
+  const [brandLogoFailed, setBrandLogoFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loginToastName, setLoginToastName] = useState<string | null>(null);
   const loginToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -67,7 +70,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (isPublicHeroRoute) {
+    if (isPublicHeroRoute || isBookDemoRoute) {
       setLoading(false);
       return;
     }
@@ -145,7 +148,7 @@ export default function App() {
     void initAuth();
 
     return () => unsubscribe();
-  }, [isPublicHeroRoute]);
+  }, [isBookDemoRoute, isPublicHeroRoute]);
 
   useEffect(() => {
     const raw = localStorage.getItem('super_admin_impersonation');
@@ -193,16 +196,27 @@ export default function App() {
 
         while (cursorUid && !visited.has(cursorUid)) {
           visited.add(cursorUid);
-          const currentDoc = await getDoc(doc(db, 'users', cursorUid));
-          if (!currentDoc.exists()) break;
+          const currentDoc = await getDoc(doc(db, 'users', cursorUid)).catch(() => null);
+          if (!currentDoc?.exists()) break;
           const currentData = { uid: cursorUid, ...(currentDoc.data() as any) };
           chain.push(currentData);
           cursorUid = currentData.managerId;
         }
 
-        const brandedOwner = chain.find((item) =>
+        let brandedOwner = chain.find((item) =>
           Boolean((item.brandLogoUrl || '').trim() || (item.brandCompanyName || '').trim() || (item.brandTagline || '').trim())
         );
+        if (!brandedOwner && (user as any).clientId) {
+          const brandDoc = await getDoc(doc(db, 'clientBranding', String((user as any).clientId))).catch(() => null);
+          if (brandDoc?.exists()) {
+            const brandData = brandDoc.data() as any;
+            brandedOwner = {
+              brandLogoUrl: brandData.logoUrl || '',
+              brandCompanyName: brandData.companyName || '',
+              brandTagline: brandData.tagline || '',
+            };
+          }
+        }
         const ownerData = brandedOwner || chain[0] || {};
 
         setBrand({
@@ -224,6 +238,10 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    setBrandLogoFailed(false);
+  }, [brand.logoUrl]);
 
   const handleLogout = async () => {
     await signOut(auth);
@@ -258,6 +276,10 @@ export default function App() {
     return <PublicHeroPage />;
   }
 
+  if (isBookDemoRoute) {
+    return <BookDemo />;
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -287,8 +309,13 @@ export default function App() {
       <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="bg-blue-600 p-2 rounded-lg w-9 h-9 flex items-center justify-center overflow-hidden">
-            {brand.logoUrl ? (
-              <img src={brand.logoUrl} alt="Brand" className="w-full h-full object-cover" />
+            {brand.logoUrl.trim() && !brandLogoFailed ? (
+              <img
+                src={brand.logoUrl.trim()}
+                alt="Brand"
+                className="w-full h-full object-cover"
+                onError={() => setBrandLogoFailed(true)}
+              />
             ) : (
               <Home className="text-white w-5 h-5" />
             )}

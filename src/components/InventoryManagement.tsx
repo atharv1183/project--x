@@ -6,7 +6,6 @@ import {
   onSnapshot, 
   addDoc, 
   updateDoc, 
-  deleteDoc, 
   doc, 
   getDoc,
   serverTimestamp, 
@@ -284,6 +283,40 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   });
   const [videoLinks, setVideoLinks] = useState<string[]>([]);
   const [videoLinkInput, setVideoLinkInput] = useState('');
+  const tenantAlertShownRef = useRef(false);
+  const [formNotice, setFormNotice] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+
+  const sanitizeBackupData = (value: unknown): unknown => {
+    if (value === undefined) return null;
+    if (value === null || typeof value !== 'object') return value;
+    if (value instanceof Date) return value.toISOString();
+    if (typeof (value as { toDate?: unknown }).toDate === 'function') {
+      return ((value as { toDate: () => Date }).toDate()).toISOString();
+    }
+    if (Array.isArray(value)) return value.map(sanitizeBackupData);
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, sanitizeBackupData(item)])
+    );
+  };
+
+  const writeInventoryBackup = async (inventoryId: string, action: string, snapshot: Record<string, unknown>) => {
+    try {
+      await addDoc(collection(db, 'inventoryBackups'), {
+        inventoryId,
+        action,
+        clientId: String(snapshot.clientId || tenantClientId || ''),
+        clientName: String(snapshot.clientName || (user as any).clientName || ''),
+        title: String(snapshot.title || ''),
+        snapshot: sanitizeBackupData(snapshot),
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        createdAt: serverTimestamp(),
+      });
+    } catch (error) {
+      console.warn('Could not write inventory backup', error);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -314,9 +347,13 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   useEffect(() => {
     if (requiresTenantContext && !tenantClientId) {
       setItems([]);
-      alert('Your account is missing company mapping. Please contact super admin.');
+      if (!tenantAlertShownRef.current) {
+        setFormNotice({ type: 'error', message: 'Your account is missing company mapping. Please contact super admin.' });
+        tenantAlertShownRef.current = true;
+      }
       return;
     }
+    tenantAlertShownRef.current = false;
 
     let unsubscribeApproved: () => void;
     let unsubscribePersonal: () => void;
@@ -328,6 +365,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       unsubscribeApproved = onSnapshot(q, (snapshot) => {
         const data = snapshot.docs
           .map(doc => ({ id: doc.id, ...doc.data() } as InventoryItem))
+          .filter(item => !(item as any).deletedAt)
           .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
         setItems(data);
       }, (error) => handleFirestoreError(error, OperationType.LIST, 'inventory'));
@@ -360,13 +398,19 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
       unsubscribeApproved = onSnapshot(qApproved, (snapshot) => {
         approvedItems.length = 0;
-        snapshot.docs.forEach(doc => approvedItems.push({ id: doc.id, ...doc.data() } as InventoryItem));
+        snapshot.docs.forEach(doc => {
+          const item = { id: doc.id, ...doc.data() } as InventoryItem;
+          if (!(item as any).deletedAt) approvedItems.push(item);
+        });
         updateItems();
       }, (error) => handleFirestoreError(error, OperationType.LIST, 'inventory'));
 
       unsubscribePersonal = onSnapshot(qPersonal, (snapshot) => {
         personalItems.length = 0;
-        snapshot.docs.forEach(doc => personalItems.push({ id: doc.id, ...doc.data() } as InventoryItem));
+        snapshot.docs.forEach(doc => {
+          const item = { id: doc.id, ...doc.data() } as InventoryItem;
+          if (!(item as any).deletedAt) personalItems.push(item);
+        });
         updateItems();
       }, (error) => handleFirestoreError(error, OperationType.LIST, 'inventory'));
 
@@ -376,6 +420,12 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       };
     }
   }, [isAdmin, requiresTenantContext, shouldScopeByClient, tenantClientId, user.uid]);
+
+  useEffect(() => {
+    if (showForm) {
+      setLoading(false);
+    }
+  }, [showForm]);
 
   useEffect(() => {
     if (!isSuperAdmin) {
@@ -526,39 +576,39 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     }
 
     if (requiresTenantContext && !effectiveTenantClientId) {
-      alert('Your account is missing company mapping. Please contact super admin.');
+      setFormNotice({ type: 'error', message: 'Your account is missing company mapping. Please contact super admin.' });
       return;
     }
     const isProjectListing = formData.listingMode === 'project';
 
     if (!formData.title || !formData.location) {
-      alert('Please fill all mandatory fields');
+      setFormNotice({ type: 'error', message: 'Please fill all mandatory fields.' });
       return;
     }
 
     if (!isProjectListing && (!formData.areaValue || !formData.rate)) {
-      alert('Please fill all mandatory fields');
+      setFormNotice({ type: 'error', message: 'Please fill all mandatory fields.' });
       return;
     }
 
     if (!isProjectListing && !editingItem && files.photos.length === 0) {
-      alert('At least one property photo is required');
+      setFormNotice({ type: 'error', message: 'At least one property photo is required.' });
       return;
     }
 
     if (isProjectListing) {
       if (formData.projectUnits.length === 0) {
-        alert('Please add at least one project unit');
+        setFormNotice({ type: 'error', message: 'Please add at least one project unit.' });
         return;
       }
       for (let i = 0; i < formData.projectUnits.length; i += 1) {
         const unit = formData.projectUnits[i];
         if (!unit.title || !unit.areaValue || !unit.rate) {
-          alert(`Please complete title, area and rate for unit ${i + 1}`);
+          setFormNotice({ type: 'error', message: `Please complete title, area and rate for unit ${i + 1}.` });
           return;
         }
         if (!editingItem && unit.photos.length === 0 && unit.newPhotos.length === 0) {
-          alert(`At least one photo is required for unit ${i + 1}`);
+          setFormNotice({ type: 'error', message: `At least one photo is required for unit ${i + 1}.` });
           return;
         }
       }
@@ -568,10 +618,14 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     const hasSinglePhotoUploads = !isProjectListing && files.photos.length > 0;
     const hasVideoUploads = files.videos.length > 0;
     if ((hasSinglePhotoUploads || files.attachments.length > 0 || hasProjectUnitUploads || hasVideoUploads) && !hasCloudinaryConfig) {
-      alert('Cloudinary is not configured. Please set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET in .env.local.');
+      setFormNotice({
+        type: 'error',
+        message: 'Cloudinary is not configured. Please set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET in .env.local.',
+      });
       return;
     }
 
+    setFormNotice(null);
     setLoading(true);
     try {
       const uploadWarnings: string[] = [];
@@ -645,7 +699,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           }
 
           if (unitPhotoUrls.length === 0) {
-            alert(`Could not upload required photos for unit ${i + 1}. Please retry.`);
+            setFormNotice({ type: 'error', message: `Could not upload required photos for unit ${i + 1}. Please retry.` });
             return;
           }
 
@@ -706,7 +760,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         }
 
         if (!editingItem && photoUrls.length === 0) {
-          alert('Could not upload required property photo. Please retry.');
+          setFormNotice({ type: 'error', message: 'Could not upload required property photo. Please retry.' });
           return;
         }
 
@@ -740,6 +794,11 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           status: isDraftSubmission ? 'draft' : selectedListingStatus
         };
         await updateDoc(doc(db, 'inventory', editingItem.id), updatePayload);
+        await writeInventoryBackup(editingItem.id, 'inventory_updated', {
+          ...editingItem,
+          ...updatePayload,
+          id: editingItem.id,
+        });
         await addAuditLog(db, {
           action: 'inventory_modified',
           actorId: user.uid,
@@ -752,19 +811,50 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           newValue: updatePayload,
         });
       } else {
-        const createDoc = async (status: InventoryStatus) =>
-          addDoc(collection(db, 'inventory'), {
+        const createDoc = async (status: InventoryStatus) => {
+          const documentPayload = {
             ...payload,
             status,
             submitterId: auth.currentUser?.uid || user.uid,
             submitterName: user.name,
             clientId: effectiveTenantClientId,
             clientName: effectiveClientName,
-            createdAt: serverTimestamp(),
-          });
+          };
 
-        const intendedStatus: InventoryStatus = isDraftSubmission ? 'draft' : selectedListingStatus;
+          const inventoryRef = await addDoc(collection(db, 'inventory'), {
+            ...documentPayload,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          await writeInventoryBackup(inventoryRef.id, 'inventory_created', documentPayload);
+          return inventoryRef;
+        };
+
+        const shouldAutoApproveAdminCreate =
+          isAdmin && !isDraftSubmission && !editingItem;
+        const intendedStatus: InventoryStatus = isDraftSubmission
+          ? 'draft'
+          : shouldAutoApproveAdminCreate
+            ? 'pending_approval'
+            : selectedListingStatus;
         const inventoryRef = await createDoc(intendedStatus);
+        if (shouldAutoApproveAdminCreate) {
+          await updateDoc(doc(db, 'inventory', inventoryRef.id), {
+            status: 'approved',
+            approvedBy: user.name,
+            approvalAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          await writeInventoryBackup(inventoryRef.id, 'inventory_auto_approved', {
+            ...payload,
+            status: 'approved',
+            approvedBy: user.name,
+            submitterId: auth.currentUser?.uid || user.uid,
+            submitterName: user.name,
+            clientId: effectiveTenantClientId,
+            clientName: effectiveClientName,
+          });
+        }
         await addAuditLog(db, {
           action: 'inventory_added',
           actorId: user.uid,
@@ -772,8 +862,12 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           actorRole: user.role,
           targetType: 'inventory',
           targetId: inventoryRef.id,
-          description: `Inventory added: ${payload.title}`,
-          newValue: payload,
+          description: shouldAutoApproveAdminCreate
+            ? `Inventory added and auto-approved: ${payload.title}`
+            : `Inventory added: ${payload.title}`,
+          newValue: shouldAutoApproveAdminCreate
+            ? { ...payload, status: 'approved', approvedBy: user.name }
+            : payload,
         });
       }
 
@@ -812,7 +906,9 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       
       const effectiveStatus: InventoryStatus = isDraftSubmission
         ? 'draft'
-        : formData.approvalStatus === 'approved'
+        : (isAdmin && !editingItem)
+          ? 'approved'
+          : formData.approvalStatus === 'approved'
           ? 'approved'
           : 'pending_approval';
       const successMessage = isDraftSubmission
@@ -821,13 +917,31 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           ? (editingItem ? 'Listing updated as approved!' : 'Listing saved as approved!')
           : (editingItem ? 'Listing updated as non-approved!' : 'Listing saved as non-approved!');
       if (uploadWarnings.length > 0) {
-        alert(`${successMessage}\n\nSome files could not be uploaded.\n${uploadWarnings.join('\n')}`);
+        setFormNotice({
+          type: 'success',
+          message: `${successMessage} Some files could not be uploaded: ${uploadWarnings.join(' | ')}`,
+        });
       } else {
-        alert(successMessage);
+        setFormNotice({ type: 'success', message: successMessage });
       }
     } catch (error) {
+      if (String((error as any)?.code || '').includes('permission-denied') && auth.currentUser) {
+        try {
+          const latestUserDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+          const latest = latestUserDoc.exists() ? (latestUserDoc.data() as any) : null;
+          console.error('Inventory create permission diagnostics', {
+            authUid: auth.currentUser.uid,
+            authEmail: auth.currentUser.email,
+            latestUserRole: latest?.role || null,
+            latestUserClientId: latest?.clientId || null,
+            formClientId: tenantClientId || null,
+          });
+        } catch {
+          // noop
+        }
+      }
       const message = handleFirestoreError(error, editingItem ? OperationType.UPDATE : OperationType.CREATE, 'inventory');
-      alert(message);
+      setFormNotice({ type: 'error', message });
     } finally {
       setLoading(false);
     }
@@ -841,6 +955,13 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         approvalAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+      const existing = items.find((item) => item.id === id);
+      await writeInventoryBackup(id, `inventory_${status}`, {
+        ...(existing || {}),
+        id,
+        status,
+        approvedBy: user.name,
+      });
       await addAuditLog(db, {
         action: status === 'approved' ? 'inventory_approved' : 'inventory_status_changed',
         actorId: user.uid,
@@ -851,10 +972,10 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         description: `Inventory status updated to ${status}`,
         newValue: { status, approvedBy: user.name },
       });
-      alert(status === 'approved' ? 'Listing approved successfully.' : 'Listing rejected successfully.');
+      setFormNotice({ type: 'success', message: status === 'approved' ? 'Listing approved successfully.' : 'Listing rejected successfully.' });
     } catch (error) {
       const message = handleFirestoreError(error, OperationType.UPDATE, `inventory/${id}`);
-      alert(message);
+      setFormNotice({ type: 'error', message });
     }
   };
 
@@ -862,19 +983,31 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     if (!confirm('Are you sure you want to delete this listing?')) return;
     try {
       const existing = items.find((item) => item.id === id);
-      await deleteDoc(doc(db, 'inventory', id));
+      await updateDoc(doc(db, 'inventory', id), {
+        deletedAt: serverTimestamp(),
+        deletedBy: user.uid,
+        deletedByName: user.name,
+        updatedAt: serverTimestamp(),
+      });
+      await writeInventoryBackup(id, 'inventory_archived', {
+        ...(existing || {}),
+        id,
+        deletedBy: user.uid,
+        deletedByName: user.name,
+      });
       await addAuditLog(db, {
-        action: 'inventory_deleted',
+        action: 'inventory_archived',
         actorId: user.uid,
         actorName: user.name,
         actorRole: user.role,
         targetType: 'inventory',
         targetId: id,
-        description: `Inventory deleted${existing?.title ? ` (${existing.title})` : ''}`,
+        description: `Inventory archived${existing?.title ? ` (${existing.title})` : ''}`,
         oldValue: existing || null,
+        newValue: { deletedAt: 'serverTimestamp', deletedBy: user.uid },
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `inventory/${id}`);
+      handleFirestoreError(error, OperationType.UPDATE, `inventory/${id}`);
     }
   };
 
@@ -940,6 +1073,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   };
 
   const filteredItems = items.filter(item => {
+    if ((item as any).deletedAt) return false;
     const isPersonalItem = item.submitterId === user.uid;
     const isVisibleNonApproved = isAdmin || isPersonalItem;
     const matchesFilter = (() => {
@@ -1524,6 +1658,11 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                     <X size={22} className="hidden sm:block" />
                   </button>
                 </div>
+                {formNotice && (
+                  <div className={`mx-4 sm:mx-5 mt-3 px-4 py-3 rounded-2xl text-sm font-bold ${formNotice.type === 'error' ? 'bg-rose-50 text-rose-700 border border-rose-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'}`}>
+                    {formNotice.message}
+                  </div>
+                )}
 
                 <div className="flex-1 overflow-y-auto min-h-0 bg-white">
                   <div className="max-w-5xl mx-auto p-6 sm:p-10 lg:p-12">
