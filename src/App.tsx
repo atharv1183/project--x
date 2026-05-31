@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { auth, db } from './lib/firebase';
-import { onAuthStateChanged, signInWithCustomToken, signOut } from 'firebase/auth';
+import { browserLocalPersistence, onAuthStateChanged, setPersistence, signInWithCustomToken, signOut } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { PlatformAnnouncement, User } from './types';
@@ -34,6 +34,9 @@ const isEmployeeView = (view: DashboardTarget): view is EmployeeDashboardView =>
 const defaultScreenForUser = (user: User): 'dashboard' | 'platform' =>
   user.role === 'super_admin' ? 'platform' : 'dashboard';
 
+const SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
+const sessionStartedKey = (uid: string) => `estatepulse_session_started_at_${uid}`;
+
 export default function App() {
   const pathname = window.location.pathname.toLowerCase();
   const isPublicHeroRoute = pathname === '/' || pathname === '/hero' || pathname === '/website';
@@ -58,6 +61,33 @@ export default function App() {
   const isSuperAdmin = user?.role === 'super_admin';
   const useFullHeightDashboardShell = Boolean(isAdminLikeUser || user?.role === 'employee');
 
+  const clearSessionStart = (uid?: string | null) => {
+    if (uid) {
+      localStorage.removeItem(sessionStartedKey(uid));
+    }
+  };
+
+  const getOrCreateSessionStart = (uid: string) => {
+    const key = sessionStartedKey(uid);
+    const existing = Number(localStorage.getItem(key) || 0);
+    if (Number.isFinite(existing) && existing > 0) return existing;
+    const now = Date.now();
+    localStorage.setItem(key, String(now));
+    return now;
+  };
+
+  const hasSessionExpired = (uid: string) => Date.now() - getOrCreateSessionStart(uid) >= SESSION_DURATION_MS;
+
+  const endSession = async (uid?: string | null) => {
+    clearSessionStart(uid || auth.currentUser?.uid || null);
+    localStorage.removeItem('super_admin_impersonation');
+    setImpersonation(null);
+    await signOut(auth);
+    setUser(null);
+    setActiveScreen('dashboard');
+    setDashboardTarget(null);
+  };
+
   const showLoginToast = (name: string) => {
     setLoginToastName(name);
     if (loginToastTimerRef.current) {
@@ -70,62 +100,64 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (isPublicHeroRoute || isBookDemoRoute) {
-      setLoading(false);
-      return;
-    }
-
     let unsubscribe = () => {};
 
     const initAuth = async () => {
-      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
-      // In local development, always start from login screen.
-      if (isLocalhost) {
-        try {
-          await signOut(auth);
-        } catch {
-          // Ignore sign-out errors during initialization and continue.
-        }
-      }
+      await setPersistence(auth, browserLocalPersistence);
 
       unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
         try {
           if (firebaseUser) {
+            if (hasSessionExpired(firebaseUser.uid)) {
+              alert('Your session expired after 24 hours. Please login again.');
+              await endSession(firebaseUser.uid);
+              return;
+            }
             const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
             if (userDoc.exists()) {
-            const nextUser = { uid: firebaseUser.uid, ...userDoc.data() } as User;
-            if (!(nextUser as any).clientId && nextUser.role !== 'super_admin') {
-              const byUid = await getDocs(query(collection(db, 'platformClients'), where('adminUid', '==', firebaseUser.uid), limit(1)));
-              const byEmail = byUid.empty
-                ? await getDocs(query(collection(db, 'platformClients'), where('adminEmail', '==', firebaseUser.email || ''), limit(1)))
-                : byUid;
-              const resolvedDoc = byEmail.docs[0];
-              if (resolvedDoc) {
-                (nextUser as any).clientId = resolvedDoc.id;
-                (nextUser as any).clientName = String((resolvedDoc.data() as any)?.name || (nextUser as any).clientName || '');
-              }
-            }
-            if ((nextUser as any).clientId) {
-                const clientDoc = await getDoc(doc(db, 'platformClients', String((nextUser as any).clientId)));
-                if (clientDoc.exists()) {
-                  const clientData = clientDoc.data() as any;
-                  const expiryMs = clientData?.subscriptionExpiryDate
-                    ? new Date(clientData.subscriptionExpiryDate).getTime()
-                    : 0;
-                  const isExpired = Number.isFinite(expiryMs) && expiryMs > 0 && expiryMs < Date.now();
-                  const blockedByState = ['expired', 'suspended', 'deleted_permanently', 'archived'].includes(String(clientData?.state || ''));
-                  if (isExpired || blockedByState) {
-                    await signOut(auth);
-                    setUser(null);
-                    setActiveScreen('dashboard');
-                    alert('Your company subscription is expired or suspended. Please contact platform admin.');
-                    return;
+              const nextUser = { uid: firebaseUser.uid, ...userDoc.data() } as User;
+              const canResolveClientFromPlatform =
+                !(nextUser as any).clientId && (nextUser.role === 'admin' || nextUser.role === 'client_admin');
+              if (canResolveClientFromPlatform) {
+                try {
+                  const byUid = await getDocs(query(collection(db, 'platformClients'), where('adminUid', '==', firebaseUser.uid), limit(1)));
+                  const byEmail = byUid.empty
+                    ? await getDocs(query(collection(db, 'platformClients'), where('adminEmail', '==', firebaseUser.email || ''), limit(1)))
+                    : byUid;
+                  const resolvedDoc = byEmail.docs[0];
+                  if (resolvedDoc) {
+                    (nextUser as any).clientId = resolvedDoc.id;
+                    (nextUser as any).clientName = String((resolvedDoc.data() as any)?.name || (nextUser as any).clientName || '');
                   }
+                } catch (error) {
+                  console.warn('Unable to resolve client mapping from platformClients.', error);
+                }
+              }
+              if ((nextUser as any).clientId) {
+                try {
+                  const clientDoc = await getDoc(doc(db, 'platformClients', String((nextUser as any).clientId)));
+                  if (clientDoc.exists()) {
+                    const clientData = clientDoc.data() as any;
+                    const expiryMs = clientData?.subscriptionExpiryDate
+                      ? new Date(clientData.subscriptionExpiryDate).getTime()
+                      : 0;
+                    const isExpired = Number.isFinite(expiryMs) && expiryMs > 0 && expiryMs < Date.now();
+                    const blockedByState = ['expired', 'suspended', 'deleted_permanently', 'archived'].includes(String(clientData?.state || ''));
+                    if (isExpired || blockedByState) {
+                      await endSession(firebaseUser.uid);
+                      alert('Your company subscription is expired or suspended. Please contact platform admin.');
+                      return;
+                    }
+                  }
+                } catch (error) {
+                  console.warn('Unable to verify client subscription during auth bootstrap.', error);
                 }
               }
               setUser(nextUser);
               setActiveScreen(defaultScreenForUser(nextUser));
+              if (isPublicHeroRoute) {
+                window.history.replaceState(null, '', '/login');
+              }
             } else {
               // If user exists in Auth but not in Firestore (shouldn't happen with our logic)
               setUser(null);
@@ -149,6 +181,16 @@ export default function App() {
 
     return () => unsubscribe();
   }, [isBookDemoRoute, isPublicHeroRoute]);
+
+  useEffect(() => {
+    if (!user) return;
+    const timeoutMs = Math.max(0, SESSION_DURATION_MS - (Date.now() - getOrCreateSessionStart(user.uid)));
+    const timer = setTimeout(() => {
+      alert('Your session expired after 24 hours. Please login again.');
+      void endSession(user.uid);
+    }, timeoutMs);
+    return () => clearTimeout(timer);
+  }, [user]);
 
   useEffect(() => {
     const raw = localStorage.getItem('super_admin_impersonation');
@@ -244,12 +286,7 @@ export default function App() {
   }, [brand.logoUrl]);
 
   const handleLogout = async () => {
-    await signOut(auth);
-    setUser(null);
-    setActiveScreen('dashboard');
-    setDashboardTarget(null);
-    localStorage.removeItem('super_admin_impersonation');
-    setImpersonation(null);
+    await endSession(user?.uid);
   };
 
   const handleBack = () => {
@@ -272,14 +309,6 @@ export default function App() {
     setDashboardTargetSignal((prev) => prev + 1);
   };
 
-  if (isPublicHeroRoute) {
-    return <PublicHeroPage />;
-  }
-
-  if (isBookDemoRoute) {
-    return <BookDemo />;
-  }
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -288,10 +317,22 @@ export default function App() {
     );
   }
 
+  if (isPublicHeroRoute && !user) {
+    return <PublicHeroPage />;
+  }
+
+  if (isBookDemoRoute) {
+    return <BookDemo />;
+  }
+
   if (!user) {
     return (
       <Login
         onLoginSuccess={(u) => {
+          localStorage.setItem(sessionStartedKey(u.uid), String(Date.now()));
+          if (isPublicHeroRoute) {
+            window.history.replaceState(null, '', '/login');
+          }
           setUser(u);
           setActiveScreen(defaultScreenForUser(u));
           showLoginToast(u.name);
@@ -405,7 +446,7 @@ export default function App() {
 
       <main
         className={useFullHeightDashboardShell ? "flex-1 w-full p-0 overflow-y-auto overflow-x-hidden" : "flex-1 w-full max-w-7xl mx-auto p-4 md:p-6"}
-        style={{ paddingBottom: 'calc(var(--bottom-nav-height, 64px) + env(safe-area-inset-bottom, 0px) + 16px)' }}
+        style={useFullHeightDashboardShell ? undefined : { paddingBottom: 'calc(var(--bottom-nav-height, 64px) + env(safe-area-inset-bottom, 0px) + 16px)' }}
       >
         <AnimatePresence mode="wait">
           <motion.div

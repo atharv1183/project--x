@@ -131,6 +131,46 @@ async function run() {
     await assertFails(getDoc(doc(emp1Db, 'leads', 'client_b_lead_assigned_to_emp1')));
   });
 
+  add('employee can create self-assigned lead for own company', async () => {
+    await assertSucceeds(
+      setDoc(doc(emp1Db, 'leads', 'employee_created_lead'), {
+        clientId: 'client_a',
+        clientName: 'Client A',
+        name: 'Employee Created Lead',
+        phone: '6666666666',
+        source: 'Employee Added',
+        status: 'pending',
+        assignedTo: 'emp1_uid',
+        addedById: 'emp1_uid',
+        addedByName: 'Employee One',
+        addedByRole: 'employee',
+        assignedAt: Timestamp.now(),
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      }),
+    );
+  });
+
+  add('employee cannot create self-assigned lead with executive source', async () => {
+    await assertFails(
+      setDoc(doc(emp1Db, 'leads', 'employee_created_lead_bad_source'), {
+        clientId: 'client_a',
+        clientName: 'Client A',
+        name: 'Bad Source Lead',
+        phone: '6666666667',
+        source: 'Executive Added',
+        status: 'pending',
+        assignedTo: 'emp1_uid',
+        addedById: 'emp1_uid',
+        addedByName: 'Employee One',
+        addedByRole: 'employee',
+        assignedAt: Timestamp.now(),
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      }),
+    );
+  });
+
   add('admin cannot read lead from another company', async () => {
     await assertFails(getDoc(doc(adminDb, 'leads', 'client_b_lead_assigned_to_emp1')));
   });

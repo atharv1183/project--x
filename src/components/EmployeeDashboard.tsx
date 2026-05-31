@@ -183,7 +183,7 @@ export default function EmployeeDashboard({
 
   // New Requirement Form State
   const [showAddLead, setShowAddLead] = useState(false);
-  const [leadForm, setLeadForm] = useState({ name: '', phone: '', source: 'Executive Added' });
+  const [leadForm, setLeadForm] = useState({ name: '', phone: '', source: 'Employee Added' });
   const [showReqModal, setShowReqModal] = useState(false);
   const [editingRequirementId, setEditingRequirementId] = useState<string | null>(null);
   const [reqForm, setReqForm] = useState({
@@ -821,7 +821,7 @@ export default function EmployeeDashboard({
         clientName: (user as any).clientName || null,
         name: leadForm.name || 'Anonymous',
         phone: normalizedPhone,
-        source: 'Executive Added',
+        source: 'Employee Added',
         status: 'pending',
         assignedTo: user.uid,
         addedById: user.uid,
@@ -846,7 +846,7 @@ export default function EmployeeDashboard({
         // Non-blocking: lead creation succeeded even if audit log write is denied by rules.
       }
 
-      setLeadForm({ name: '', phone: '', source: 'Executive Added' });
+      setLeadForm({ name: '', phone: '', source: 'Employee Added' });
       setShowAddLead(false);
       alert('Lead added successfully!');
     } catch (error) {
