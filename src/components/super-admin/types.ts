@@ -17,6 +17,7 @@ export type NewClientCredentials = {
 
 export type AddClientFormState = {
   companyLogoUrl: string;
+  companyLogoFile: File | null;
   companyName: string;
   personName: string;
   contactNumber: string;

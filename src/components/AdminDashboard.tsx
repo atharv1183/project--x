@@ -906,7 +906,9 @@ export default function AdminDashboard({
   }, [isSuperAdmin, shouldScopeByClient, tenantClientId]);
 
   useEffect(() => {
-    const qLogs = query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(2000));
+    const qLogs = user.role === 'super_admin'
+      ? query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(2000))
+      : query(collection(db, 'auditLogs'), where('actorId', '==', user.uid), orderBy('createdAt', 'desc'), limit(2000));
     const unsubscribe = onSnapshot(qLogs, (snapshot) => {
       const allLogs = snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as AuditLogEntry));
       if (!isManager) {
@@ -917,7 +919,7 @@ export default function AdminDashboard({
       setAuditLogs(allLogs.filter((entry) => scopeIds.has(entry.actorId)));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'auditLogs'));
     return () => unsubscribe();
-  }, [isManager]);
+  }, [isManager, user.role, user.uid]);
 
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -2780,7 +2782,7 @@ export default function AdminDashboard({
           <div>
             <h2 className="text-2xl font-bold text-gray-900">Activity Logs</h2>
             <p className="text-xs text-gray-500 mt-1">
-              {isManager ? 'Showing your and your team activity.' : 'Showing full platform activity logs in this scope.'}
+              {user.role === 'super_admin' ? 'Showing full platform activity logs.' : 'Showing your activity only.'}
             </p>
           </div>
           <ActivityLogsTable logs={auditLogs} formatWhen={(value) => value ? formatLeadDate(value) : 'N/A'} />

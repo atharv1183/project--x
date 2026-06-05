@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ElementType, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,7 +47,7 @@ const BookDemo = () => {
     };
   }, []);
 
-  const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.currentTarget).entries());
     const parsed = schema.safeParse(data);
@@ -62,21 +62,42 @@ const BookDemo = () => {
     setErrors({});
     setSubmitting(true);
     try {
-      await addDoc(collection(db, "demoRequests"), {
-        ...parsed.data,
+      const payload = {
+        name: parsed.data.name,
+        email: parsed.data.email,
+        phone: parsed.data.phone,
         company: parsed.data.company || "",
         role: parsed.data.role || "",
         message: parsed.data.message || "",
         status: "new",
         source: "book-demo",
         submittedAt: serverTimestamp(),
-        pagePath: window.location.pathname,
+        pagePath: window.location.pathname.slice(0, 80),
+      };
+      await addDoc(collection(db, "demoRequests"), {
+        ...payload,
       });
       setDone(true);
       toast({ title: "Request received", description: "We'll reach out within 24 hours." });
     } catch (error) {
-      console.error(error);
-      toast({ title: "Could not submit request", description: "Please try again in a moment." });
+      console.error("Demo request submit failed", error);
+      const mailSubject = encodeURIComponent("Book a demo request - EstatePlus");
+      const mailBody = encodeURIComponent(
+        [
+          `Name: ${parsed.data.name}`,
+          `Email: ${parsed.data.email}`,
+          `Phone: ${parsed.data.phone}`,
+          `Company: ${parsed.data.company || "-"}`,
+          `Role: ${parsed.data.role || "-"}`,
+          "",
+          parsed.data.message || "",
+        ].join("\n")
+      );
+      toast({
+        title: "Could not submit request",
+        description: "Opening email instead so your request is not lost.",
+      });
+      window.location.href = `mailto:growth@estatepluscrm.in?subject=${mailSubject}&body=${mailBody}`;
     } finally {
       setSubmitting(false);
     }
@@ -237,7 +258,7 @@ const Field = ({
   error,
 }: {
   label: string;
-  icon: React.ElementType;
+  icon: ElementType;
   name: string;
   type?: string;
   placeholder?: string;

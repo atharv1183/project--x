@@ -31,8 +31,38 @@ service cloud.firestore {
 
     function isSuperAdmin() {
       return isSignedIn()
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super_admin';
+        && (
+          request.auth.token.role == 'super_admin'
+          || (
+            exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super_admin'
+          )
+        );
+    }
+
+    function isPlatformAdmin() {
+      return isSuperAdmin()
+        || (
+          isSignedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+          && (
+            !(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clientId is string)
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clientId == ''
+          )
+        );
+    }
+
+    function isPaymentOnlyPlatformClientUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'state',
+        'paymentStatus',
+        'billingCycle',
+        'lastPaymentAmount',
+        'lastPaymentAt',
+        'subscriptionExpiryDate',
+        'updatedAt'
+      ]);
     }
 
     function requesterClientId() {
@@ -302,6 +332,7 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'name',
             'phone',
+            'email',
             'profileImageUrl',
             'brandLogoUrl',
             'brandCompanyName',
@@ -387,14 +418,15 @@ service cloud.firestore {
     }
 
     match /platformClients/{clientId} {
-      allow read: if isSuperAdmin()
+      allow read: if isPlatformAdmin()
         || (isSignedIn() && requesterClientId() is string && requesterClientId() == clientId)
         || (isSignedIn() && resource.data.adminUid is string && resource.data.adminUid == request.auth.uid)
         || (isSignedIn() && resource.data.adminEmail is string && resource.data.adminEmail == request.auth.token.email);
-      allow write: if isSuperAdmin();
+      allow create, delete: if isPlatformAdmin();
+      allow update: if isPlatformAdmin() || (isSignedIn() && isPaymentOnlyPlatformClientUpdate());
 
       match /internalNotes/{docId} {
-        allow read, write: if isSuperAdmin();
+        allow read, write: if isPlatformAdmin();
       }
     }
 
@@ -436,7 +468,9 @@ service cloud.firestore {
     }
 
     match /paymentTransactions/{docId} {
-      allow read, write: if isSuperAdmin();
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isPlatformAdmin();
     }
 
     match /demoRequests/{docId} {

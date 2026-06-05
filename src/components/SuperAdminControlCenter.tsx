@@ -58,6 +58,7 @@ const INITIAL_EDIT_FORM: EditClientFormState = {
 
 const INITIAL_ADD_FORM: AddClientFormState = {
   companyLogoUrl: '',
+  companyLogoFile: null,
   companyName: '',
   personName: '',
   contactNumber: '',
@@ -203,6 +204,30 @@ const downloadJson = (filename: string, payload: unknown) => {
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+};
+
+const uploadToCloudinary = async (file: File, folder: string) => {
+  const cloudName = String(import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || '').trim();
+  const uploadPreset = String(import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || '').trim();
+  if (!cloudName || !uploadPreset) {
+    throw new Error('Cloudinary is not configured. Add VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET.');
+  }
+
+  const body = new FormData();
+  body.append('file', file);
+  body.append('upload_preset', uploadPreset);
+  body.append('folder', folder);
+
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, {
+    method: 'POST',
+    body,
+  });
+  const result = await response.json().catch(() => null) as { secure_url?: string; error?: { message?: string } } | null;
+  if (!response.ok || !result?.secure_url) {
+    throw new Error(result?.error?.message || `Cloudinary upload failed with status ${response.status}.`);
+  }
+
+  return result.secure_url;
 };
 
 export default function SuperAdminControlCenter({ user }: Props) {
@@ -601,6 +626,9 @@ export default function SuperAdminControlCenter({ user }: Props) {
       provisionAuth = getAuth(provisionApp);
       const userCredential = await createUserWithEmailAndPassword(provisionAuth, loginEmail, tempPassword);
       provisionedUid = userCredential.user.uid;
+      const logoUrl = addClientForm.companyLogoFile
+        ? await uploadToCloudinary(addClientForm.companyLogoFile, 'company-logos')
+        : addClientForm.companyLogoUrl.trim();
 
       const clientRef = await addDoc(collection(db, 'platformClients'), {
         name: companyName,
@@ -609,7 +637,7 @@ export default function SuperAdminControlCenter({ user }: Props) {
         email,
         address: addClientForm.address.trim(),
         gstn: addClientForm.gstn.trim(),
-        logoUrl: addClientForm.companyLogoUrl.trim(),
+        logoUrl,
         state: 'trial',
         trialDays,
         subscriptionStartDate: trialStart.toISOString().slice(0, 10),
@@ -697,9 +725,9 @@ export default function SuperAdminControlCenter({ user }: Props) {
     const txRef = editingPaymentId
       ? doc(db, 'paymentTransactions', editingPaymentId)
       : doc(collection(db, 'paymentTransactions'));
-    const batch = writeBatch(db);
 
     setSavingPayment(true);
+    let saveStage = 'prepare payment';
     try {
       const transactionPayload = {
         clientId: client.id,
@@ -712,8 +740,8 @@ export default function SuperAdminControlCenter({ user }: Props) {
         subscriptionExpiryDate: newExpiryDate,
         extendedMonths,
         amount,
-        createdBy: existingTransaction?.createdBy || user.uid,
-        createdByName: existingTransaction?.createdByName || user.name,
+        createdBy: user.uid,
+        createdByName: user.name,
         ...(editingPaymentId ? { updatedAt: serverTimestamp() } : { createdAt: serverTimestamp() }),
       };
 
@@ -722,9 +750,11 @@ export default function SuperAdminControlCenter({ user }: Props) {
         .sort((a, b) => timestampMillis(b.createdAt) - timestampMillis(a.createdAt))[0];
       const shouldUpdateClient = !editingPaymentId || latestForClient?.id === editingPaymentId;
 
-      batch.set(txRef, transactionPayload, { merge: true });
+      saveStage = 'save payment transaction';
+      await setDoc(txRef, transactionPayload, { merge: true });
       if (shouldUpdateClient) {
-        batch.update(doc(db, 'platformClients', client.id), {
+        saveStage = 'update company subscription';
+        await updateDoc(doc(db, 'platformClients', client.id), {
           state: nextStatus,
           paymentStatus: 'paid',
           billingCycle: `${extendedMonths} month${extendedMonths === 1 ? '' : 's'}`,
@@ -734,7 +764,6 @@ export default function SuperAdminControlCenter({ user }: Props) {
           updatedAt: serverTimestamp(),
         });
       }
-      await batch.commit();
       await addAuditLog(db, {
         action: editingPaymentId ? 'payment_transaction_updated' : 'payment_recorded',
         actorId: user.uid,
@@ -756,8 +785,22 @@ export default function SuperAdminControlCenter({ user }: Props) {
       );
       resetPaymentForm();
     } catch (error) {
-      console.error('Failed to save payment', error);
-      alert('Could not save payment. Please try again.');
+      console.error(`Failed to save payment at stage: ${saveStage}`, {
+        error,
+        user: {
+          uid: user.uid,
+          role: user.role,
+          clientId: (user as any).clientId || null,
+          email: user.email,
+        },
+        targetClient: {
+          id: client.id,
+          name: client.name || '',
+        },
+      });
+      const code = typeof error === 'object' && error && 'code' in error ? String((error as any).code) : '';
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      alert(`Could not save payment.\nStage: ${saveStage}${code ? `\n${code}` : ''}\n${message}`);
     } finally {
       setSavingPayment(false);
     }

@@ -83,11 +83,11 @@ export default function Login({ onLoginSuccess }: LoginProps) {
         className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden"
       >
         <div className="bg-blue-600 p-8 text-center">
-          <div className="inline-flex items-center justify-center bg-white rounded-xl mb-4 overflow-hidden shadow-sm">
+          <div className="inline-flex items-center justify-center bg-white rounded-xl mb-4 overflow-hidden shadow-lg shadow-blue-900/20">
             <img
               src="/logo.jpg"
               alt="Estate Plus CRM"
-              className="h-16 w-auto object-contain"
+              className="h-16 w-auto object-contain brightness-125 contrast-125 saturate-150 drop-shadow-[0_10px_18px_rgba(16,185,129,0.18)]"
             />
           </div>
           <h2 className="text-2xl font-bold text-white tracking-tight">Estate Plus CRM</h2>

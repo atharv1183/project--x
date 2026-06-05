@@ -46,6 +46,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
   const [email, setEmail] = useState(user.email || '');
   const [profileImageUrl, setProfileImageUrl] = useState(user.profileImageUrl || '');
   const [brandLogoUrl, setBrandLogoUrl] = useState(user.brandLogoUrl || '');
+  const [brandLogoFile, setBrandLogoFile] = useState<File | null>(null);
   const [brandCompanyName, setBrandCompanyName] = useState(user.brandCompanyName || '');
   const [brandTagline, setBrandTagline] = useState(user.brandTagline || '');
   const [currentPassword, setCurrentPassword] = useState('');
@@ -124,6 +125,30 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
 
   const normalizePhone = (value: string) => value.replace(/\D/g, '');
 
+  const uploadBrandLogo = async (file: File) => {
+    const cloudName = String(import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || '').trim();
+    const uploadPreset = String(import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || '').trim();
+    if (!cloudName || !uploadPreset) {
+      throw new Error('Cloudinary is not configured. Please contact admin.');
+    }
+
+    const body = new FormData();
+    body.append('file', file);
+    body.append('upload_preset', uploadPreset);
+    body.append('folder', 'brand-logos');
+
+    const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, {
+      method: 'POST',
+      body,
+    });
+    const result = await response.json().catch(() => null) as { secure_url?: string; error?: { message?: string } } | null;
+    if (!response.ok || !result?.secure_url) {
+      throw new Error(result?.error?.message || 'Brand logo upload failed.');
+    }
+
+    return result.secure_url;
+  };
+
   const handleAvatarUpload = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -150,6 +175,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === 'string') {
+        setBrandLogoFile(file);
         setBrandLogoUrl(reader.result);
       }
     };
@@ -189,13 +215,15 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
         await updateEmail(currentUser, loginEmail);
       }
 
+      const uploadedBrandLogoUrl = brandLogoFile ? await uploadBrandLogo(brandLogoFile) : brandLogoUrl.trim();
+
       await updateDoc(doc(db, 'users', user.uid), {
         phone: normalizedPhone,
         email: email.trim().toLowerCase(),
         profileImageUrl: profileImageUrl.trim(),
         ...(canEditBrand
           ? {
-              brandLogoUrl: brandLogoUrl.trim(),
+              brandLogoUrl: uploadedBrandLogoUrl,
               brandCompanyName: brandCompanyName.trim(),
               brandTagline: brandTagline.trim(),
             }
@@ -203,7 +231,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
       });
       if (isCompanyBrandOwner && (user as any).clientId) {
         await setDoc(doc(db, 'clientBranding', String((user as any).clientId)), {
-          logoUrl: brandLogoUrl.trim(),
+          logoUrl: uploadedBrandLogoUrl,
           companyName: brandCompanyName.trim(),
           tagline: brandTagline.trim(),
           updatedAt: serverTimestamp(),
@@ -216,7 +244,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
         profileImageUrl: profileImageUrl.trim(),
         ...(canEditBrand
           ? {
-              brandLogoUrl: brandLogoUrl.trim(),
+              brandLogoUrl: uploadedBrandLogoUrl,
               brandCompanyName: brandCompanyName.trim(),
               brandTagline: brandTagline.trim(),
             }
@@ -234,11 +262,13 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
           phone: normalizedPhone,
           email: email.trim().toLowerCase(),
           profileImageUrl: profileImageUrl.trim(),
-          brandLogoUrl: canEditBrand ? brandLogoUrl.trim() : undefined,
+          brandLogoUrl: canEditBrand ? uploadedBrandLogoUrl : undefined,
           brandCompanyName: canEditBrand ? brandCompanyName.trim() : undefined,
           brandTagline: canEditBrand ? brandTagline.trim() : undefined,
         },
       });
+      setBrandLogoUrl(uploadedBrandLogoUrl);
+      setBrandLogoFile(null);
       setSuccess('Profile updated successfully.');
     } catch (err: any) {
       if (err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-credential') {
@@ -427,7 +457,10 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
                       </div>
                       <button
                         type="button"
-                        onClick={() => setBrandLogoUrl('')}
+                        onClick={() => {
+                          setBrandLogoUrl('');
+                          setBrandLogoFile(null);
+                        }}
                         className="px-3 py-2 rounded-xl bg-white border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-100"
                       >
                         Remove

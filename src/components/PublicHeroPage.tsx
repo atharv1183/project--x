@@ -394,7 +394,14 @@ const Index = () => {
                 >
                   Book a Free Demo <ArrowRight />
                 </Button>
-                <Button size="lg" variant="outline" className="h-12 px-8 text-base border-white/30 bg-white/10 text-white hover:bg-white/20">
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="h-12 px-8 text-base border-white/30 bg-white/10 text-white hover:bg-white/20"
+                  onClick={() => {
+                    window.location.href = "mailto:growth@estatepluscrm.in?subject=Contact%20Sales%20-%20EstatePlus";
+                  }}
+                >
                   Contact Sales
                 </Button>
               </div>
@@ -434,7 +441,10 @@ const Index = () => {
             <h4 className="font-bold mb-4">Contact</h4>
             <ul className="space-y-3 text-sm text-white/60">
               <li className="flex items-center gap-2"><Phone className="w-4 h-4 text-primary-glow" /> 850499720</li>
-              <li className="flex items-center gap-2"><Mail className="w-4 h-4 text-primary-glow" /> Growth@estatepluscrm.in</li>
+              <li className="flex items-center gap-2">
+                <Mail className="w-4 h-4 text-primary-glow" />
+                <a href="mailto:growth@estatepluscrm.in" className="hover:text-white transition">growth@estatepluscrm.in</a>
+              </li>
               <li className="flex items-center gap-2"><MapPin className="w-4 h-4 text-primary-glow" /> India</li>
             </ul>
           </div>

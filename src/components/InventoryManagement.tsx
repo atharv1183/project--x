@@ -527,20 +527,33 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
     body.append('upload_preset', cloudinaryUploadPreset);
     body.append('folder', `inventory/${path}`);
 
-    const response = await withTimeout(
-      fetch(endpoint, {
-        method: 'POST',
-        body,
-      }),
-      timeoutMs,
-      `Upload timed out for ${file.name}.`
-    );
+    let response: Response;
+    try {
+      response = await withTimeout(
+        fetch(endpoint, {
+          method: 'POST',
+          body,
+        }),
+        timeoutMs,
+        `Upload timed out for ${file.name}.`
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Network request failed';
+      throw new Error(
+        `Could not reach Cloudinary for ${file.name}: ${reason}. Check internet connectivity, Cloudinary CORS, and that the upload preset allows unsigned browser uploads.`
+      );
+    }
 
-    const result = await withTimeout(
-      response.json() as Promise<{ secure_url?: string; error?: { message?: string } }>,
-      Math.min(timeoutMs, 8000),
-      `Could not parse upload response for ${file.name}.`
-    );
+    let result: { secure_url?: string; error?: { message?: string } };
+    try {
+      result = await withTimeout(
+        response.json() as Promise<{ secure_url?: string; error?: { message?: string } }>,
+        Math.min(timeoutMs, 8000),
+        `Could not parse upload response for ${file.name}.`
+      );
+    } catch {
+      throw new Error(`Cloudinary returned an unreadable upload response for ${file.name}.`);
+    }
 
     if (!response.ok || !result.secure_url) {
       const reason = result?.error?.message || 'Unknown upload error';
@@ -591,11 +604,6 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       return;
     }
 
-    if (!isProjectListing && !editingItem && files.photos.length === 0) {
-      setFormNotice({ type: 'error', message: 'At least one property photo is required.' });
-      return;
-    }
-
     if (isProjectListing) {
       if (formData.projectUnits.length === 0) {
         setFormNotice({ type: 'error', message: 'Please add at least one project unit.' });
@@ -607,28 +615,20 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           setFormNotice({ type: 'error', message: `Please complete title, area and rate for unit ${i + 1}.` });
           return;
         }
-        if (!editingItem && unit.photos.length === 0 && unit.newPhotos.length === 0) {
-          setFormNotice({ type: 'error', message: `At least one photo is required for unit ${i + 1}.` });
-          return;
-        }
       }
     }
 
     const hasProjectUnitUploads = formData.projectUnits.some((unit) => unit.newPhotos.length > 0);
     const hasSinglePhotoUploads = !isProjectListing && files.photos.length > 0;
     const hasVideoUploads = files.videos.length > 0;
-    if ((hasSinglePhotoUploads || files.attachments.length > 0 || hasProjectUnitUploads || hasVideoUploads) && !hasCloudinaryConfig) {
-      setFormNotice({
-        type: 'error',
-        message: 'Cloudinary is not configured. Please set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET in .env.local.',
-      });
-      return;
-    }
 
     setFormNotice(null);
     setLoading(true);
     try {
       const uploadWarnings: string[] = [];
+      if ((hasSinglePhotoUploads || files.attachments.length > 0 || hasProjectUnitUploads || hasVideoUploads) && !hasCloudinaryConfig) {
+        uploadWarnings.push('Cloudinary is not configured, so selected files were not uploaded');
+      }
       const videoUrls = editingItem ? [...(editingItem.videos || [])] : [];
       videoLinks.forEach((link) => {
         if (!videoUrls.includes(link)) {
@@ -698,11 +698,6 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
             }
           }
 
-          if (unitPhotoUrls.length === 0) {
-            setFormNotice({ type: 'error', message: `Could not upload required photos for unit ${i + 1}. Please retry.` });
-            return;
-          }
-
           const convertedUnit = convertArea(Number(unit.areaValue), unit.areaUnit as AreaUnit);
           const unitPayload: ProjectUnit = {
             id: unit.id,
@@ -757,11 +752,6 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
             console.error('Photo upload failed:', uploadError);
             uploadWarnings.push(`Photo upload failed: ${file.name}`);
           }
-        }
-
-        if (!editingItem && photoUrls.length === 0) {
-          setFormNotice({ type: 'error', message: 'Could not upload required property photo. Please retry.' });
-          return;
         }
 
         payload.type = formData.type;
@@ -819,6 +809,12 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
             submitterName: user.name,
             clientId: effectiveTenantClientId,
             clientName: effectiveClientName,
+            ...(status === 'approved'
+              ? {
+                  approvedBy: user.name,
+                  approvalAt: serverTimestamp(),
+                }
+              : {}),
           };
 
           const inventoryRef = await addDoc(collection(db, 'inventory'), {
@@ -835,16 +831,10 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         const intendedStatus: InventoryStatus = isDraftSubmission
           ? 'draft'
           : shouldAutoApproveAdminCreate
-            ? 'pending_approval'
+            ? 'approved'
             : selectedListingStatus;
         const inventoryRef = await createDoc(intendedStatus);
         if (shouldAutoApproveAdminCreate) {
-          await updateDoc(doc(db, 'inventory', inventoryRef.id), {
-            status: 'approved',
-            approvedBy: user.name,
-            approvalAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
           await writeInventoryBackup(inventoryRef.id, 'inventory_auto_approved', {
             ...payload,
             status: 'approved',
@@ -2023,9 +2013,9 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                                 <div className="w-10 h-10 rounded-xl bg-orange-500 text-white flex items-center justify-center">
                                   <ImageIcon size={20} />
                                 </div>
-                                <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Photos <span className="text-rose-500">*</span></h3>
+                                <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Photos</h3>
                              </div>
-                             <p className="text-[10px] font-bold text-slate-400 uppercase">Min 1 Required</p>
+                             <p className="text-[10px] font-bold text-slate-400 uppercase">Optional</p>
                            </header>
 
                            <div className="grid grid-cols-3 gap-4">
