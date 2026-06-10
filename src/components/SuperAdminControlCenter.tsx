@@ -662,6 +662,8 @@ export default function SuperAdminControlCenter({ user }: Props) {
         updatedAt: serverTimestamp(),
       });
 
+      await setDoc(doc(db, 'clientAdmins', provisionedUid), { clientId: clientRef.id }, { merge: true });
+
       setModule('status');
       setAddClientForm(INITIAL_ADD_FORM);
       setNewClientCredentials({

@@ -66,7 +66,37 @@ service cloud.firestore {
     }
 
     function requesterClientId() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clientId;
+      let userClientId = exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clientId
+        : null;
+      return userClientId is string && userClientId.size() > 0
+        ? userClientId
+        : (
+            exists(/databases/$(database)/documents/clientAdmins/$(request.auth.uid))
+            && get(/databases/$(database)/documents/clientAdmins/$(request.auth.uid)).data.clientId is string
+            && get(/databases/$(database)/documents/clientAdmins/$(request.auth.uid)).data.clientId.size() > 0
+            ? get(/databases/$(database)/documents/clientAdmins/$(request.auth.uid)).data.clientId
+            : null
+          );
+    }
+
+    function isPlatformClientOwner(clientId) {
+      return clientId is string
+        && clientId.size() > 0
+        && exists(/databases/$(database)/documents/platformClients/$(clientId))
+        && (
+          get(/databases/$(database)/documents/platformClients/$(clientId)).data.adminUid == request.auth.uid
+          || (
+            get(/databases/$(database)/documents/platformClients/$(clientId)).data.adminEmail is string
+            && get(/databases/$(database)/documents/platformClients/$(clientId)).data.adminEmail == request.auth.token.email
+          )
+        );
+    }
+
+    function canManageClientMembers(clientId) {
+      return isSuperAdmin()
+        || isPlatformClientOwner(clientId)
+        || (isAdminLike() && requesterClientId() is string && clientId == requesterClientId());
     }
 
     function isSameClient(resourceData) {
@@ -299,8 +329,9 @@ service cloud.firestore {
     match /employeeDirectory/{userId} {
       allow get, list: if isSuperAdmin() || (isSignedIn() && isSameClient(resource.data));
       allow create: if isValidEmployeeDirectory(request.resource.data)
+        && request.resource.data.clientId is string
         && (
-          (isAdminLike() && (isSuperAdmin() || request.resource.data.clientId == requesterClientId()))
+          canManageClientMembers(request.resource.data.clientId)
           || (
             request.auth.uid == userId
             && request.resource.data.clientId == requesterClientId()
@@ -311,6 +342,25 @@ service cloud.firestore {
       allow delete: if isSuperAdmin() || (isAdminLike() && isSameClient(resource.data));
     }
 
+    // Maps client_admin auth uid -> tenant clientId when users.clientId is missing.
+    match /clientAdmins/{uid} {
+      allow get: if request.auth.uid == uid || isSuperAdmin();
+      allow list: if false;
+      allow create, update: if request.auth.uid == uid
+        && request.resource.data.clientId is string
+        && request.resource.data.clientId.size() > 0
+        && request.resource.data.keys().hasOnly(['clientId'])
+        && exists(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId))
+        && (
+          get(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId)).data.adminUid == request.auth.uid
+          || (
+            get(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId)).data.adminEmail is string
+            && get(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId)).data.adminEmail == request.auth.token.email
+          )
+        );
+      allow delete: if isSuperAdmin();
+    }
+
     // Users
     match /users/{userId} {
       allow get: if (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || request.auth.uid == userId;
@@ -318,8 +368,8 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && isValidUser(request.resource.data)
         && (
-          (isAdminLike() && (isSuperAdmin() || (request.resource.data.clientId is string && request.resource.data.clientId == requesterClientId()))) ||
-          (
+          (request.resource.data.clientId is string && canManageClientMembers(request.resource.data.clientId))
+          || (
             request.auth.uid == userId
             && request.resource.data.role == 'employee'
             && request.resource.data.email == request.auth.token.email
@@ -339,6 +389,15 @@ service cloud.firestore {
             'brandTagline',
             'updatedAt'
           ])
+        )
+        || (
+          request.auth.uid == userId
+          && resource.data.role == 'client_admin'
+          && (!(resource.data.clientId is string) || resource.data.clientId == '')
+          && request.resource.data.clientId is string
+          && request.resource.data.clientId.size() > 0
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientId', 'clientName', 'updatedAt'])
+          && isPlatformClientOwner(request.resource.data.clientId)
         );
       allow delete: if (isAdminLike() && (isSuperAdmin() || isSameClient(resource.data))) || (isSignedIn() && resource.data.phone + "@estatepulse.com" == request.auth.token.email);
     }

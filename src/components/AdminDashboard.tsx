@@ -1,7 +1,5 @@
 import { useState, useEffect, useRef, FormEvent, useMemo } from 'react';
 import { db, auth, functions } from '../lib/firebase';
-import { initializeApp, deleteApp } from 'firebase/app';
-import { createUserWithEmailAndPassword, getAuth, signOut } from 'firebase/auth';
 import { 
   collection, 
   query, 
@@ -64,8 +62,8 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { format } from 'date-fns';
 import { Followup } from '../types';
-import firebaseConfig from '../../firebase-applet-config.json';
 import { httpsCallable } from 'firebase/functions';
+import { isCallableUnavailable, provisionTeamMemberLocally, shouldUseLocalProvisioning } from '../lib/provisionTeamMember';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -871,7 +869,9 @@ export default function AdminDashboard({
 
     const qAttendanceCorrections = isManager
       ? query(collection(db, 'attendanceCorrections'), where('uid', '==', user.uid))
-      : query(collection(db, 'attendanceCorrections'), orderBy('requestedAt', 'desc'));
+      : shouldScopeByClient && tenantClientId
+        ? query(collection(db, 'attendanceCorrections'), where('clientId', '==', tenantClientId))
+        : query(collection(db, 'attendanceCorrections'), orderBy('requestedAt', 'desc'));
     const unsubscribeAttendanceCorrections = onSnapshot(qAttendanceCorrections, (snapshot) => {
       const requests = snapshot.docs
         .map(doc => ({ id: doc.id, ...doc.data() } as AttendanceCorrectionRequest))
@@ -908,9 +908,11 @@ export default function AdminDashboard({
   useEffect(() => {
     const qLogs = user.role === 'super_admin'
       ? query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(2000))
-      : query(collection(db, 'auditLogs'), where('actorId', '==', user.uid), orderBy('createdAt', 'desc'), limit(2000));
+      : query(collection(db, 'auditLogs'), where('actorId', '==', user.uid), limit(2000));
     const unsubscribe = onSnapshot(qLogs, (snapshot) => {
-      const allLogs = snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as AuditLogEntry));
+      const allLogs = snapshot.docs
+        .map((item) => ({ id: item.id, ...item.data() } as AuditLogEntry))
+        .sort((a, b) => (parseTimestamp(b.createdAt)?.getTime() ?? 0) - (parseTimestamp(a.createdAt)?.getTime() ?? 0));
       if (!isManager) {
         setAuditLogs(allLogs);
         return;
@@ -1685,8 +1687,6 @@ export default function AdminDashboard({
     const selectedManager = isManager
       ? { uid: user.uid, name: user.name }
       : managers.find((member) => member.uid === employeeForm.managerId);
-    const email = `${normalizedPhone}@estatepulse.com`;
-    const initialPassword = normalizedPhone;
 
     if (!name) {
       alert('Member name is required.');
@@ -1701,124 +1701,90 @@ export default function AdminDashboard({
       return;
     }
     setLoading(true);
-    let provisionApp: ReturnType<typeof initializeApp> | null = null;
-    let provisionAuth: ReturnType<typeof getAuth> | null = null;
-    let provisionedUser: { uid: string; delete: () => Promise<void> } | null = null;
     try {
-      const existingUsersSnapshot = await getDocs(query(collection(db, 'users'), where('phone', '==', normalizedPhone), limit(1)));
-      if (!existingUsersSnapshot.empty) {
-        const existingUserDoc = existingUsersSnapshot.docs[0];
-        const existingUser = existingUserDoc.data() as User;
-        if (existingUser.role !== 'deleted' && existingUser.role !== 'suspended') {
-          alert('A member account with this mobile number already exists.');
-          return;
-        }
+      let provisioned: { uid: string; restored: boolean } | null = null;
 
-        const batch = writeBatch(db);
-        batch.update(existingUserDoc.ref, {
-          name,
-          email,
-          role: memberRole,
-          phone: normalizedPhone,
-          clientId: tenantClientId || null,
-          clientName: (user as any).clientName || null,
-          managerId: memberRole === 'employee' ? (selectedManager?.uid || null) : null,
-          managerName: memberRole === 'employee' ? (selectedManager?.name || null) : null,
-          updatedAt: serverTimestamp(),
-        });
-        if (memberRole === 'employee') {
-          batch.set(doc(db, 'employeeDirectory', existingUserDoc.id), {
+      if (functions && !shouldUseLocalProvisioning()) {
+        try {
+          const fn = httpsCallable(functions, 'provisionTeamMember');
+          const response = await fn({
             name,
             phone: normalizedPhone,
-            role: 'employee',
+            role: memberRole,
             clientId: tenantClientId || null,
-            managerId: selectedManager?.uid || null,
-            managerName: selectedManager?.name || null,
-            updatedAt: serverTimestamp(),
+            clientName: (user as any).clientName || null,
+            managerId: memberRole === 'employee' ? (selectedManager?.uid || null) : null,
+            managerName: memberRole === 'employee' ? (selectedManager?.name || null) : null,
           });
-        } else {
-          batch.delete(doc(db, 'employeeDirectory', existingUserDoc.id));
+          provisioned = {
+            uid: String((response.data as { uid?: string } | undefined)?.uid || ''),
+            restored: Boolean((response.data as { restored?: boolean } | undefined)?.restored),
+          };
+        } catch (error) {
+          if (!isCallableUnavailable(error)) {
+            throw error;
+          }
+          console.warn('Cloud function unavailable, using direct provisioning.', error);
         }
-        await batch.commit();
-
-        showSaveToast(`${name} restored successfully`, `${memberRole === 'manager' ? 'Manager' : 'Executive'} account reactivated`);
-        setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: isManager ? user.uid : '' });
-        setShowAddEmployee(false);
-        return;
       }
 
-      // Use a secondary auth instance so the admin session is not replaced.
-      provisionApp = initializeApp(firebaseConfig, `employee-provisioner-${Date.now()}`);
-      provisionAuth = getAuth(provisionApp);
-      const userCredential = await createUserWithEmailAndPassword(provisionAuth, email, initialPassword);
-      provisionedUser = userCredential.user;
-
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'users', userCredential.user.uid), {
-        name,
-        email,
-        role: memberRole,
-        phone: normalizedPhone,
-        clientId: (user as any).clientId || null,
-        clientName: (user as any).clientName || null,
-        managerId: memberRole === 'employee' ? (selectedManager?.uid || null) : null,
-        managerName: memberRole === 'employee' ? (selectedManager?.name || null) : null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      if (memberRole === 'employee') {
-        batch.set(doc(db, 'employeeDirectory', userCredential.user.uid), {
+      if (!provisioned) {
+        provisioned = await provisionTeamMemberLocally({
+          db,
+          actorUid: user.uid,
+          actorEmail: auth.currentUser?.email || user.email || null,
+          actorRole: user.role,
+          tenantClientId,
+          clientName: (user as any).clientName || null,
           name,
           phone: normalizedPhone,
-          role: 'employee',
-          clientId: tenantClientId || null,
-          managerId: selectedManager?.uid || null,
-          managerName: selectedManager?.name || null,
-          updatedAt: serverTimestamp(),
+          memberRole,
+          managerId: memberRole === 'employee' ? (selectedManager?.uid || null) : null,
+          managerName: memberRole === 'employee' ? (selectedManager?.name || null) : null,
+        });
+        await addAuditLog(db, {
+          action: 'employee_added',
+          actorId: user.uid,
+          actorName: user.name,
+          actorRole: user.role,
+          targetType: 'user',
+          targetId: provisioned.uid,
+          description: `${memberRole === 'manager' ? 'Manager' : 'Executive'} ${provisioned.restored ? 'restored' : 'added'}: ${name}`,
+          newValue: { name, phone: normalizedPhone, role: memberRole, managerId: selectedManager?.uid || null },
         });
       }
 
-      await batch.commit();
-
-      showSaveToast(`${name} added successfully`, `${memberRole === 'manager' ? 'Manager' : 'Executive'} account created`);
-      await addAuditLog(db, {
-        action: 'employee_added',
-        actorId: user.uid,
-        actorName: user.name,
-        actorRole: user.role,
-        targetType: 'user',
-        targetId: provisionedUser?.uid,
-        description: `${memberRole === 'manager' ? 'Manager' : 'Executive'} added: ${name}`,
-        newValue: { name, phone: normalizedPhone, role: memberRole, managerId: selectedManager?.uid || null },
-      });
+      showSaveToast(
+        `${name} ${provisioned.restored ? 'restored' : 'added'} successfully`,
+        `${memberRole === 'manager' ? 'Manager' : 'Executive'} account ${provisioned.restored ? 'reactivated' : 'created'}`
+      );
       setEmployeeForm({ name: '', phone: '', role: 'employee', managerId: isManager ? user.uid : '' });
       setShowAddEmployee(false);
     } catch (error) {
-      if (provisionedUser) {
-        await provisionedUser.delete().catch(() => {});
-      }
       handleFirestoreError(error, OperationType.CREATE, 'users');
       const code = typeof error === 'object' && error && 'code' in error ? String((error as any).code) : '';
-      if (code === 'auth/email-already-in-use') {
-        alert('This mobile number is tied to an old login account. Restore that member from Team if visible, or contact super admin to reset/unblock the existing account.');
+      const message = typeof error === 'object' && error && 'message' in error ? String((error as any).message) : '';
+      if (code.includes('already-exists') || code === 'auth/email-already-in-use') {
+        alert(message || 'A member account with this mobile number already exists.');
+      } else if (code.includes('failed-precondition')) {
+        alert(message || 'Company mapping missing for your account. Please contact super admin.');
       } else if (code === 'auth/weak-password') {
         alert('Unable to set initial password. Please use a valid mobile number.');
+      } else if (
+        code === 'permission-denied' ||
+        message.toLowerCase().includes('missing or insufficient permissions')
+      ) {
+        alert(
+          'Permission denied while saving the executive. Ask your platform admin to deploy the latest Firestore rules, then log out and log back in before retrying.'
+        );
+      } else if (isCallableUnavailable(error)) {
+        alert('Cloud service is unavailable. Retrying with direct save failed. Please refresh and try again.');
       } else if (error instanceof Error) {
         alert(error.message || 'Failed to add executive. Please try again.');
       } else {
         alert('Failed to add executive. Please try again.');
       }
     } finally {
-      try {
-        if (provisionAuth) {
-          await signOut(provisionAuth);
-        }
-      } catch {
-        // Ignore cleanup sign-out failures for secondary auth instance.
-      }
-      if (provisionApp) {
-        await deleteApp(provisionApp).catch(() => {});
-      }
       setLoading(false);
     }
   };

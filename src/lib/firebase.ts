@@ -10,7 +10,7 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const functions = (() => {
   try {
-    return getFunctions(app);
+    return getFunctions(app, 'us-central1');
   } catch (error) {
     console.warn('Firebase Functions is unavailable in this environment.', error);
     return null;

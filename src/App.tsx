@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { auth, db } from './lib/firebase';
 import { browserLocalPersistence, onAuthStateChanged, setPersistence, signInWithCustomToken, signOut } from 'firebase/auth';
-import { collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { PlatformAnnouncement, User } from './types';
 import Login from './components/Login';
@@ -126,8 +126,20 @@ export default function App() {
                     : byUid;
                   const resolvedDoc = byEmail.docs[0];
                   if (resolvedDoc) {
-                    (nextUser as any).clientId = resolvedDoc.id;
-                    (nextUser as any).clientName = String((resolvedDoc.data() as any)?.name || (nextUser as any).clientName || '');
+                    const resolvedClientId = resolvedDoc.id;
+                    const resolvedClientName = String((resolvedDoc.data() as any)?.name || (nextUser as any).clientName || '');
+                    (nextUser as any).clientId = resolvedClientId;
+                    (nextUser as any).clientName = resolvedClientName;
+                    try {
+                      await setDoc(doc(db, 'clientAdmins', firebaseUser.uid), { clientId: resolvedClientId }, { merge: true });
+                      await updateDoc(doc(db, 'users', firebaseUser.uid), {
+                        clientId: resolvedClientId,
+                        clientName: resolvedClientName,
+                        updatedAt: serverTimestamp(),
+                      });
+                    } catch (persistError) {
+                      console.warn('Unable to persist resolved client mapping.', persistError);
+                    }
                   }
                 } catch (error) {
                   console.warn('Unable to resolve client mapping from platformClients.', error);
