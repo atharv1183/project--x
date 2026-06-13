@@ -440,7 +440,7 @@ const Index = () => {
           <div>
             <h4 className="font-bold mb-4">Contact</h4>
             <ul className="space-y-3 text-sm text-white/60">
-              <li className="flex items-center gap-2"><Phone className="w-4 h-4 text-primary-glow" /> 850499720</li>
+              <li className="flex items-center gap-2"><Phone className="w-4 h-4 text-primary-glow" /> 8504899720</li>
               <li className="flex items-center gap-2">
                 <Mail className="w-4 h-4 text-primary-glow" />
                 <a href="mailto:growth@estatepluscrm.in" className="hover:text-white transition">growth@estatepluscrm.in</a>
