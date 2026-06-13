@@ -40,10 +40,22 @@ const BookDemo = () => {
     document.documentElement.style.overflow = "hidden";
     document.body.style.overflow = "hidden";
     window.scrollTo(0, 0);
+
+    // SEO: dynamic title & meta for this page
+    const prevTitle = document.title;
+    document.title = "Book a Free Demo – EstatePlus Real Estate CRM";
+    let metaDesc = document.querySelector('meta[name="description"]') as HTMLMetaElement | null;
+    const prevDesc = metaDesc?.content || "";
+    if (metaDesc) {
+      metaDesc.content = "Schedule a free 30-minute personalized walkthrough of EstatePlus CRM. No commitment — see how we help brokers, builders and agencies grow.";
+    }
+
     return () => {
       cancelAnimationFrame(t);
       document.documentElement.style.overflow = previousHtmlOverflow;
       document.body.style.overflow = previousBodyOverflow;
+      document.title = prevTitle;
+      if (metaDesc) metaDesc.content = prevDesc;
     };
   }, []);
 

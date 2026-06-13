@@ -1,0 +1,11 @@
+# robots.txt for EstatePulse
+# https://estatepluscrm.in
+
+User-agent: *
+Allow: /
+Disallow: /login
+Disallow: /dashboard
+Disallow: /api/
+
+# Sitemap
+Sitemap: https://estatepluscrm.in/sitemap.xml

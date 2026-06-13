@@ -1,0 +1,24 @@
+# EstatePlus (Estate Plus)
+> A modern real-estate CRM and operating ecosystem for brokers, builders, channel partners and enterprises.
+
+## About
+EstatePlus is a cloud-based platform that centralizes lead management, inventory tracking, attendance monitoring, site visit logging, and marketing automation for real estate businesses in India.
+
+## Features
+- CRM & Lead Management: Capture, qualify, assign, and track leads through every stage.
+- Inventory Management: Organize projects, units, and availability in real time.
+- Marketing Integration: Run Meta campaigns and sync leads directly into the CRM.
+- Automation Systems: Workflows for follow-ups, assignment, and notifications.
+- Reporting Dashboards: Live visibility into pipeline, team, and revenue health.
+- Team Coordination: Multi-user roles, permissions, and shared inventory.
+- Attendance & Site Visits: GPS-based attendance logging and site visit tracking.
+- Broker Management: Coordinate broker networks and distribute leads efficiently.
+
+## Plans
+- Estate Plus Core: CRM & Operational Management Suite (from ₹24,000/quarter).
+- Estate Plus GrowthX: CRM + Performance Marketing Ecosystem (from ₹64,000/quarter).
+
+## Contact
+- Email: growth@estatepluscrm.in
+- Website: https://estatepluscrm.in
+- Location: India
