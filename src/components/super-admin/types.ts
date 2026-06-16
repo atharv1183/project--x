@@ -60,6 +60,8 @@ export type PlatformClient = {
   billingCycle?: string;
   lastPaymentAmount?: number;
   lastPaymentAt?: any;
+  tempPassword?: string;
+  adminEmail?: string;
 };
 
 export type PaymentTransaction = {

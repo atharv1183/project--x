@@ -107,6 +107,7 @@ export interface PlatformClient {
   sandboxEnabled?: boolean;
   createdAt?: any;
   updatedAt?: any;
+  tempPassword?: string;
 }
 
 export interface FeatureToggle {

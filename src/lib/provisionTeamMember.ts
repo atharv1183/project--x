@@ -66,7 +66,7 @@ export async function syncTenantMapping(
   }
 }
 
-async function createAuthUserRest(email: string, initialPassword: string): Promise<{ uid: string; idToken: string }> {
+export async function createAuthUserRest(email: string, initialPassword: string): Promise<{ uid: string; idToken: string }> {
   const url = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`;
   const response = await fetch(url, {
     method: 'POST',
@@ -101,13 +101,42 @@ async function createAuthUserRest(email: string, initialPassword: string): Promi
   };
 }
 
-async function deleteAuthUserRest(idToken: string): Promise<void> {
+export async function deleteAuthUserRest(idToken: string): Promise<void> {
   const url = `https://identitytoolkit.googleapis.com/v1/accounts:delete?key=${firebaseConfig.apiKey}`;
   await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idToken }),
   }).catch(() => {});
+}
+
+/**
+ * Sign in an existing Auth user via REST to retrieve their UID and idToken.
+ * Used to recover from EMAIL_EXISTS when the Auth account already exists
+ * (e.g. after a previous incomplete deletion).
+ */
+export async function signInAuthUserRest(email: string, password: string): Promise<{ uid: string; idToken: string }> {
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${firebaseConfig.apiKey}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      password,
+      returnSecureToken: true,
+    }),
+  });
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData?.error?.message || 'Failed to sign in existing auth user via REST');
+  }
+
+  const data = await response.json();
+  return {
+    uid: data.localId,
+    idToken: data.idToken,
+  };
 }
 
 export async function provisionTeamMemberLocally(params: {

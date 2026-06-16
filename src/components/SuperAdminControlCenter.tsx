@@ -17,9 +17,7 @@ import {
 import { Attendance, Lead, User } from '../types';
 import { db } from '../lib/firebase';
 import { addAuditLog } from '../lib/audit';
-import { initializeApp, deleteApp } from 'firebase/app';
-import { createUserWithEmailAndPassword, getAuth, signOut } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { createAuthUserRest, deleteAuthUserRest, signInAuthUserRest } from '../lib/provisionTeamMember';
 import { AddClientForm } from './super-admin/components/AddClientForm';
 import { CredentialsBanner } from './super-admin/components/CredentialsBanner';
 import { EditClientPanel } from './super-admin/components/EditClientPanel';
@@ -563,24 +561,30 @@ export default function SuperAdminControlCenter({ user }: Props) {
     if (!editingClientId) return;
     const target = clients.find((item) => item.id === editingClientId);
     if (!target) return;
-    if (!window.confirm(`Delete company "${target.name}"? This will remove company profile and mark its users as deleted.`)) {
+    if (!window.confirm(`Delete company "${target.name}"? This will remove the company profile and permanently delete its user records.`)) {
       return;
     }
 
-    const relatedUsers = users.filter((member) => (member as any).clientId === editingClientId);
-    const batch = writeBatch(db);
-    relatedUsers.forEach((member) => {
-      batch.update(doc(db, 'users', member.uid), {
-        role: 'deleted',
-        updatedAt: serverTimestamp(),
+    try {
+      const relatedUsers = users.filter((member) => (member as any).clientId === editingClientId);
+      const batch = writeBatch(db);
+      relatedUsers.forEach((member) => {
+        // Delete user doc entirely so the phone/email won't be found by duplicate checks
+        batch.delete(doc(db, 'users', member.uid));
+        // Also clean up clientAdmins and employeeDirectory entries
+        batch.delete(doc(db, 'clientAdmins', member.uid));
+        batch.delete(doc(db, 'employeeDirectory', member.uid));
       });
-    });
 
-    await batch.commit();
-    await deleteDoc(doc(db, 'platformClients', editingClientId));
-    setEditingClientId(null);
-    setEditingClientForm(INITIAL_EDIT_FORM);
-    alert('Company deleted and related users marked as deleted.');
+      await batch.commit();
+      await deleteDoc(doc(db, 'platformClients', editingClientId));
+      setEditingClientId(null);
+      setEditingClientForm(INITIAL_EDIT_FORM);
+      alert('Company and all related user records deleted successfully.');
+    } catch (error) {
+      console.error('Failed to delete company', error);
+      alert('Could not fully delete the company. Please try again or contact support.');
+    }
   };
 
   const handleSaveClient = async (e: FormEvent) => {
@@ -597,9 +601,9 @@ export default function SuperAdminControlCenter({ user }: Props) {
     if (!email) return alert('Email is required.');
 
     setSavingClient(true);
-    let provisionApp: ReturnType<typeof initializeApp> | null = null;
-    let provisionAuth: ReturnType<typeof getAuth> | null = null;
     let provisionedUid: string | null = null;
+    let provisionedIdToken: string | null = null;
+    let platformClientSaved = false;
 
     try {
       const existingCompanyByEmail = await getDocs(query(collection(db, 'platformClients'), where('email', '==', email)));
@@ -622,14 +626,36 @@ export default function SuperAdminControlCenter({ user }: Props) {
 
       const tempPassword = `${contactNumber}${Math.floor(100 + Math.random() * 900)}`;
 
-      provisionApp = initializeApp(firebaseConfig, `client-admin-provisioner-${Date.now()}`);
-      provisionAuth = getAuth(provisionApp);
-      const userCredential = await createUserWithEmailAndPassword(provisionAuth, loginEmail, tempPassword);
-      provisionedUid = userCredential.user.uid;
+      // Use REST API to create auth user — avoids session switching that causes permission errors
+      try {
+        const { uid, idToken } = await createAuthUserRest(loginEmail, tempPassword);
+        provisionedUid = uid;
+        provisionedIdToken = idToken;
+      } catch (authError: any) {
+        // If the Auth account already exists (e.g. from a previous incomplete deletion),
+        // sign in to reuse the existing UID
+        if (authError?.code === 'auth/email-already-in-use') {
+          try {
+            const { uid, idToken } = await signInAuthUserRest(loginEmail, tempPassword);
+            provisionedUid = uid;
+            provisionedIdToken = idToken;
+          } catch {
+            // Sign-in failed (password changed?), inform the user
+            throw new Error(
+              'An auth account already exists for this phone number but could not be recovered. ' +
+              'Please contact support or use a different phone number.'
+            );
+          }
+        } else {
+          throw authError;
+        }
+      }
+
       const logoUrl = addClientForm.companyLogoFile
         ? await uploadToCloudinary(addClientForm.companyLogoFile, 'company-logos')
         : addClientForm.companyLogoUrl.trim();
 
+      console.log('DEBUG: Writing platformClients...');
       const clientRef = await addDoc(collection(db, 'platformClients'), {
         name: companyName,
         contactPerson: personName,
@@ -645,24 +671,41 @@ export default function SuperAdminControlCenter({ user }: Props) {
         paymentStatus: 'pending',
         adminUid: provisionedUid,
         adminEmail: loginEmail,
+        tempPassword,
         createdBy: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      platformClientSaved = true;
+      console.log('DEBUG: platformClients write success:', clientRef.id);
 
-      await setDoc(doc(db, 'users', provisionedUid), {
-        uid: provisionedUid,
-        name: `${companyName} Admin`,
-        email: loginEmail,
-        phone: contactNumber,
-        role: 'client_admin',
-        clientId: clientRef.id,
-        clientName: companyName,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      console.log('DEBUG: Writing users for UID:', provisionedUid);
+      try {
+        await setDoc(doc(db, 'users', provisionedUid), {
+          uid: provisionedUid,
+          name: `${companyName} Admin`,
+          email: loginEmail,
+          phone: contactNumber,
+          role: 'client_admin',
+          clientId: clientRef.id,
+          clientName: companyName,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        console.log('DEBUG: users write success');
+      } catch (err) {
+        console.error('DEBUG: users write failed:', err);
+        throw err;
+      }
 
-      await setDoc(doc(db, 'clientAdmins', provisionedUid), { clientId: clientRef.id }, { merge: true });
+      console.log('DEBUG: Writing clientAdmins...');
+      try {
+        await setDoc(doc(db, 'clientAdmins', provisionedUid), { clientId: clientRef.id }, { merge: true });
+        console.log('DEBUG: clientAdmins write success');
+      } catch (err) {
+        console.error('DEBUG: clientAdmins write failed:', err);
+        throw err;
+      }
 
       setModule('status');
       setAddClientForm(INITIAL_ADD_FORM);
@@ -673,20 +716,13 @@ export default function SuperAdminControlCenter({ user }: Props) {
       });
       alert('Client created successfully and started in Trial phase.');
     } catch (error) {
-      if (provisionedUid && provisionAuth?.currentUser) {
-        await provisionAuth.currentUser.delete().catch(() => {});
+      // If Firestore writes failed but Auth user was created, clean it up ONLY if platformClients was not saved
+      if (provisionedIdToken && !platformClientSaved) {
+        await deleteAuthUserRest(provisionedIdToken).catch(() => {});
       }
       console.error('Failed to save client', error);
-      alert('Could not save client. Please try again.');
+      alert(error instanceof Error ? error.message : 'Could not save client. Please try again.');
     } finally {
-      try {
-        if (provisionAuth) await signOut(provisionAuth);
-      } catch {
-        // noop
-      }
-      if (provisionApp) {
-        await deleteApp(provisionApp).catch(() => {});
-      }
       setSavingClient(false);
     }
   };

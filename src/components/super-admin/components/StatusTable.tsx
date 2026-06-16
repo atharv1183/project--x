@@ -20,6 +20,8 @@ export function StatusTable({ rows, users, statusSort, onSort, onEdit, onAddPaym
               ['name', 'Company Name'],
               ['person', 'Person Name'],
               ['contact', 'Contact No.'],
+              ['adminEmail', 'Admin Email'],
+              ['tempPassword', 'Temp Password'],
               ['users', 'No. of Active users'],
               ['payment', 'Last Payment period'],
               ['status', 'Status'],
@@ -48,6 +50,8 @@ export function StatusTable({ rows, users, statusSort, onSort, onEdit, onAddPaym
                 </td>
                 <td className="px-3 py-2">{client.contactPerson || '-'}</td>
                 <td className="px-3 py-2">{client.mobileNumber || '-'}</td>
+                <td className="px-3 py-2 text-xs font-mono">{client.adminEmail || '-'}</td>
+                <td className="px-3 py-2 text-xs font-mono font-semibold text-purple-700">{client.tempPassword || '-'}</td>
                 <td className="px-3 py-2">{activeUsers}</td>
                 <td className="px-3 py-2 capitalize">{client.billingCycle || '-'}</td>
                 <td className="px-3 py-2 capitalize">{client.state || 'trial'}</td>
@@ -61,7 +65,7 @@ export function StatusTable({ rows, users, statusSort, onSort, onEdit, onAddPaym
           })}
           {rows.length === 0 && (
             <tr>
-              <td colSpan={9} className="px-3 py-8 text-center text-sm text-gray-500">No companies found.</td>
+              <td colSpan={11} className="px-3 py-8 text-center text-sm text-gray-500">No companies found.</td>
             </tr>
           )}
         </tbody>

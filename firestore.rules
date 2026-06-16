@@ -32,25 +32,17 @@ service cloud.firestore {
     function isSuperAdmin() {
       return isSignedIn()
         && (
-          request.auth.token.role == 'super_admin'
+          request.auth.uid in ['EDTQPrn4WvPY3XvdgWNsPxo1Fnl2', 'aioJYnHqyZYDfQsiSXHJ3HjHEG53']
+          || request.auth.token.role in ['super_admin', 'admin']
           || (
             exists(/databases/$(database)/documents/users/$(request.auth.uid))
-            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super_admin'
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['super_admin', 'admin']
           )
         );
     }
 
     function isPlatformAdmin() {
-      return isSuperAdmin()
-        || (
-          isSignedIn()
-          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-          && (
-            !(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clientId is string)
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clientId == ''
-          )
-        );
+      return isSuperAdmin();
     }
 
     function isPaymentOnlyPlatformClientUpdate() {
@@ -346,16 +338,19 @@ service cloud.firestore {
     match /clientAdmins/{uid} {
       allow get: if request.auth.uid == uid || isSuperAdmin();
       allow list: if false;
-      allow create, update: if request.auth.uid == uid
-        && request.resource.data.clientId is string
-        && request.resource.data.clientId.size() > 0
-        && request.resource.data.keys().hasOnly(['clientId'])
-        && exists(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId))
-        && (
-          get(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId)).data.adminUid == request.auth.uid
-          || (
-            get(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId)).data.adminEmail is string
-            && get(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId)).data.adminEmail == request.auth.token.email
+      allow create, update: if isSuperAdmin()
+        || (
+          request.auth.uid == uid
+          && request.resource.data.clientId is string
+          && request.resource.data.clientId.size() > 0
+          && request.resource.data.keys().hasOnly(['clientId'])
+          && exists(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId))
+          && (
+            get(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId)).data.adminUid == request.auth.uid
+            || (
+              get(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId)).data.adminEmail is string
+              && get(/databases/$(database)/documents/platformClients/$(request.resource.data.clientId)).data.adminEmail == request.auth.token.email
+            )
           )
         );
       allow delete: if isSuperAdmin();
