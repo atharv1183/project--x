@@ -27,6 +27,7 @@ import {
 } from '../types';
 import { handleFirestoreError, cn, convertArea, AREA_CONVERSIONS } from '../lib/utils';
 import { addAuditLog } from '../lib/audit';
+import InventoryShareModal from './InventoryShareModal';
 import { 
   Plus, 
   Search, 
@@ -228,6 +229,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
 
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [selectedShareItem, setSelectedShareItem] = useState<InventoryItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<'all' | 'approved' | 'non_approved' | 'pending' | 'draft'>('all');
@@ -796,6 +799,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           actorRole: user.role,
           targetType: 'inventory',
           targetId: editingItem.id,
+          clientId: user.clientId,
           description: `Inventory updated: ${payload.title}`,
           oldValue: editingItem,
           newValue: updatePayload,
@@ -852,6 +856,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           actorRole: user.role,
           targetType: 'inventory',
           targetId: inventoryRef.id,
+          clientId: user.clientId,
           description: shouldAutoApproveAdminCreate
             ? `Inventory added and auto-approved: ${payload.title}`
             : `Inventory added: ${payload.title}`,
@@ -959,6 +964,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         actorRole: user.role,
         targetType: 'inventory',
         targetId: id,
+        clientId: user.clientId,
         description: `Inventory status updated to ${status}`,
         newValue: { status, approvedBy: user.name },
       });
@@ -992,6 +998,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
         actorRole: user.role,
         targetType: 'inventory',
         targetId: id,
+        clientId: user.clientId,
         description: `Inventory archived${existing?.title ? ` (${existing.title})` : ''}`,
         oldValue: existing || null,
         newValue: { deletedAt: 'serverTimestamp', deletedBy: user.uid },
@@ -1183,59 +1190,8 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   };
 
   const shareOnWhatsApp = (item: InventoryItem) => {
-    const mapLink = getInventoryLocationLink(item);
-    const isProject = item.listingMode === 'project' || item.isProject;
-    const imageLinks = item.photos?.length
-      ? item.photos.slice(0, 10).map((link, index) => `Img${index + 1}: ${link}`).join('\n')
-      : 'N/A';
-    const videoLinks = item.videos?.length
-      ? item.videos.slice(0, 6).map((link, index) => `Vid${index + 1}: ${link}`).join('\n')
-      : 'N/A';
-    const projectSummary = isProject && item.projectUnits?.length
-      ? item.projectUnits
-          .slice(0, 8)
-          .map((unit, idx) => `${idx + 1}. ${unit.title || `Unit ${idx + 1}`} | ${unit.type}${unit.subType ? ` (${unit.subType})` : ''} | ${unit.areaValue || '-'} ${unit.areaUnit || ''} | Rs ${Number(unit.rate || 0).toLocaleString()}`)
-          .join('\n')
-      : '';
-    const unitImageLinks = isProject && item.projectUnits?.length
-      ? item.projectUnits
-          .flatMap((unit, unitIndex) =>
-            (unit.photos || []).slice(0, 2).map((link, photoIndex) =>
-              `Unit${unitIndex + 1}Img${photoIndex + 1}: ${link}`
-            )
-          )
-          .slice(0, 16)
-      : [];
-    const projectListViewLink = item.id ? buildProjectViewLink(item.id, 'list') : '';
-    const projectIconViewLink = item.id ? buildProjectViewLink(item.id, 'icon') : '';
-
-    const message = [
-      `*${item.title}*`,
-      '',
-      `Listing: ${isProject ? 'Project' : 'Individual Property'}`,
-      `Category: ${getTypeWithSubType(item)}`,
-      `Location: ${item.location || 'N/A'}`,
-      `Map: ${mapLink}`,
-      !isProject ? `Area: ${getPrimarySizeText(item)}` : `Units: ${item.projectUnitCount || item.projectUnits?.length || 0}`,
-      !isProject ? `Rate: Rs ${Number(item.rate || 0).toLocaleString()} ${item.rateUnit ? `(${item.rateUnit})` : ''}` : '',
-      item.description ? `Description: ${item.description}` : '',
-      ...(isProject && projectListViewLink && projectIconViewLink
-        ? ['', '*Views*', `List: ${projectListViewLink}`, `Icon: ${projectIconViewLink}`]
-        : []),
-      '',
-      isProject ? '*Project Unit Details*' : '',
-      isProject ? projectSummary : '',
-      '',
-      '*Photos*',
-      imageLinks,
-      ...(unitImageLinks.length > 0 ? ['', '*Project Unit Photos*', ...unitImageLinks] : []),
-      '',
-      '*Videos*',
-      videoLinks,
-    ].filter(Boolean).join('\n');
-
-    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
-    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+    setSelectedShareItem(item);
+    setShareModalOpen(true);
   }; 
 
   return (
@@ -2469,9 +2425,12 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
           </div>
         )}
       </AnimatePresence>
+      <InventoryShareModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        item={selectedShareItem}
+        userPhone={user.phone}
+      />
     </div>
   );
 }
-
-
-

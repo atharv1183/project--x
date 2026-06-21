@@ -22,6 +22,8 @@ export interface Lead {
   updatedAt?: any;
   lastInteractionAt?: any;
   nextFollowupAt?: any;
+  hasFollowupTime?: boolean;
+  nextFollowupTime?: string;
   lastRemark?: string;
   siteVisitPhoto?: string;
   siteVisitLocation?: Location;
@@ -33,6 +35,9 @@ export interface Lead {
   kycPanUrl?: string;
   kycPanName?: string;
   kycUploadedAt?: any;
+  deletedAt?: any;
+  deletedBy?: string;
+  deletedByName?: string;
 }
 
 export interface Followup {
@@ -144,6 +149,7 @@ export interface AuditLogEntry {
   newValue?: any;
   meta?: Record<string, any>;
   createdAt?: any;
+  clientId?: string;
 }
 
 export interface Notification {
@@ -278,6 +284,7 @@ export interface InventoryItem {
   status: InventoryStatus;
   submitterId: string;
   submitterName: string;
+  clientId?: string;
   createdAt: any;
   updatedAt: any;
   approvedBy?: string;

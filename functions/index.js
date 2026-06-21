@@ -54,6 +54,7 @@ exports.startImpersonationSession = onCall(async (request) => {
     actorName: request.auth.token.name || request.auth.token.email || actorUid,
     targetType: 'client',
     targetId: clientId,
+    clientId: clientId,
     newValue: { targetUid },
   });
 
@@ -79,6 +80,7 @@ exports.endImpersonationSession = onCall(async (request) => {
     actorName: request.auth.token.name || request.auth.token.email || actorUid,
     targetType: 'client',
     targetId: clientId || null,
+    clientId: clientId || null,
   });
 
   return { ok: true };
@@ -99,12 +101,16 @@ exports.forceLogoutUser = onCall(async (request) => {
     revokedBy: actorUid,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
+  const targetUserSnap = await db.collection('users').doc(targetUid).get();
+  const targetUserClientId = targetUserSnap.exists ? targetUserSnap.data().clientId : null;
+
   await writeAuditLog({
     action: 'force_logout_user',
     actorId: actorUid,
     actorName: request.auth.token.name || request.auth.token.email || actorUid,
     targetType: 'user',
     targetId: targetUid,
+    clientId: targetUserClientId || null,
   });
 
   return { ok: true };
@@ -130,12 +136,16 @@ exports.resetUserPassword = onCall(async (request) => {
   }
 
   await admin.auth().updateUser(targetUid, { password: newPassword });
+  const targetUserSnap = await db.collection('users').doc(targetUid).get();
+  const targetUserClientId = targetUserSnap.exists ? targetUserSnap.data().clientId : null;
+
   await writeAuditLog({
     action: 'user_password_reset',
     actorId: actorUid,
     actorName: request.auth.token.name || request.auth.token.email || actorUid,
     targetType: 'user',
     targetId: targetUid,
+    clientId: targetUserClientId || null,
     meta: {
       mode: requestedPassword ? 'manual' : 'mobile_fallback',
     },
@@ -256,6 +266,7 @@ exports.provisionTeamMember = onCall({ cors: true, region: 'us-central1' }, asyn
       actorRole,
       targetType: 'user',
       targetId: existingDoc.id,
+      clientId,
       description: `${memberRole === 'manager' ? 'Manager' : 'Executive'} restored: ${name}`,
       newValue: { name, phone, role: memberRole, managerId },
     });
@@ -319,6 +330,7 @@ exports.provisionTeamMember = onCall({ cors: true, region: 'us-central1' }, asyn
     actorRole,
     targetType: 'user',
     targetId: uid,
+    clientId,
     description: `${memberRole === 'manager' ? 'Manager' : 'Executive'} added: ${name}`,
     newValue: { name, phone, role: memberRole, managerId },
   });

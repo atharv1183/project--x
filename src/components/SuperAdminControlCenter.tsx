@@ -267,7 +267,11 @@ export default function SuperAdminControlCenter({ user }: Props) {
       setPaymentTransactions(snapshot.docs.map((snapshotDoc) => ({ id: snapshotDoc.id, ...snapshotDoc.data() } as PaymentTransaction)));
     });
     const unsubLeads = onSnapshot(query(collection(db, 'leads')), (snapshot) => {
-      setLeads(snapshot.docs.map((snapshotDoc) => ({ id: snapshotDoc.id, ...snapshotDoc.data() } as Lead)));
+      setLeads(
+        snapshot.docs
+          .map((snapshotDoc) => ({ id: snapshotDoc.id, ...snapshotDoc.data() } as Lead))
+          .filter((lead) => !lead.deletedAt)
+      );
     });
     const unsubAttendance = onSnapshot(query(collection(db, 'attendance')), (snapshot) => {
       setAttendance(snapshot.docs.map((snapshotDoc) => ({ id: snapshotDoc.id, ...snapshotDoc.data() } as Attendance)));
@@ -809,6 +813,7 @@ export default function SuperAdminControlCenter({ user }: Props) {
         actorRole: user.role,
         targetType: 'platformClient',
         targetId: client.id,
+        clientId: client.id,
         description: `${editingPaymentId ? 'Updated' : 'Recorded'} payment for ${client.name || 'company'}`,
         oldValue: editingPaymentId ? existingTransaction : { state: client.state, subscriptionExpiryDate: client.subscriptionExpiryDate },
         newValue: transactionPayload,
@@ -884,6 +889,7 @@ export default function SuperAdminControlCenter({ user }: Props) {
         actorRole: user.role,
         targetType: 'paymentTransaction',
         targetId: transaction.id,
+        clientId: transaction.clientId,
         description: `Deleted payment transaction for ${transaction.companyName}`,
         oldValue: transaction,
       });

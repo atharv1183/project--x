@@ -12,6 +12,7 @@ export type AuditLogPayload = {
   oldValue?: any;
   newValue?: any;
   meta?: Record<string, any>;
+  clientId?: string;
 };
 
 export async function addAuditLog(db: Firestore, payload: AuditLogPayload): Promise<void> {
@@ -27,6 +28,7 @@ export async function addAuditLog(db: Firestore, payload: AuditLogPayload): Prom
       oldValue: payload.oldValue ?? null,
       newValue: payload.newValue ?? null,
       meta: payload.meta ?? null,
+      clientId: payload.clientId || null,
       createdAt: serverTimestamp(),
     });
   } catch {

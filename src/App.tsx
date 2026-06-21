@@ -17,19 +17,20 @@ import ToolsPage, { ToolTarget } from './components/ToolsPage';
 import PublicHeroPage from './components/PublicHeroPage';
 import SuperAdminControlCenter from './components/SuperAdminControlCenter';
 import BookDemo from './pages/BookDemo';
+import PropertyDetailPage from './pages/PropertyDetailPage';
 import { functions } from './lib/firebase';
 import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-type AdminDashboardView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'activity_logs';
-type EmployeeDashboardView = 'performance' | 'leads' | 'pending' | 'today' | 'upcoming' | 'attendance' | 'requirements' | 'inventory' | 'activity_logs';
-type DashboardTarget = ToolTarget | null;
+type AdminDashboardView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'activity_logs' | 'deleted_leads';
+type EmployeeDashboardView = 'performance' | 'leads' | 'pending' | 'today' | 'upcoming' | 'attendance' | 'requirements' | 'inventory' | 'activity_logs' | 'deleted_leads';
+type DashboardTarget = ToolTarget | 'deleted_leads' | null;
 
 const isAdminView = (view: DashboardTarget): view is AdminDashboardView =>
-  view === 'performance' || view === 'leads' || view === 'employees' || view === 'attendance' || view === 'requirements' || view === 'inventory' || view === 'activity_logs';
+  view === 'performance' || view === 'leads' || view === 'employees' || view === 'attendance' || view === 'requirements' || view === 'inventory' || view === 'activity_logs' || view === 'deleted_leads';
 
 const isEmployeeView = (view: DashboardTarget): view is EmployeeDashboardView =>
-  view === 'performance' || view === 'leads' || view === 'pending' || view === 'today' || view === 'upcoming' || view === 'attendance' || view === 'requirements' || view === 'inventory' || view === 'activity_logs';
+  view === 'performance' || view === 'leads' || view === 'pending' || view === 'today' || view === 'upcoming' || view === 'attendance' || view === 'requirements' || view === 'inventory' || view === 'activity_logs' || view === 'deleted_leads';
 
 const defaultScreenForUser = (user: User): 'dashboard' | 'platform' =>
   user.role === 'super_admin' ? 'platform' : 'dashboard';
@@ -327,6 +328,12 @@ export default function App() {
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-600"></div>
       </div>
     );
+  }
+
+  const isPropertyDetailRoute = pathname.startsWith('/p/') || pathname === '/p';
+  if (isPropertyDetailRoute) {
+    const propertyId = window.location.pathname.split('/').pop() || '';
+    return <PropertyDetailPage propertyId={propertyId} />;
   }
 
   if (isPublicHeroRoute && !user) {

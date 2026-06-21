@@ -16,11 +16,13 @@ import {
   getDocs,
   runTransaction,
   writeBatch,
-  Timestamp
+  Timestamp,
+  deleteField
 } from 'firebase/firestore';
 import { Lead, User, LeadStatus, OperationType, Requirement, Attendance, AttendanceCorrectionRequest, Broker, LeadTransfer, AuditLogEntry } from '../types';
 import { handleFirestoreError } from '../lib/utils';
 import { addAuditLog } from '../lib/audit';
+import { compareFollowup } from './EmployeeDashboard';
 import InventoryManagement from './InventoryManagement';
 import SalesPerformanceDashboard from './SalesPerformanceDashboard';
 import MonthlyAttendanceReport from './MonthlyAttendanceReport';
@@ -69,7 +71,7 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-type AdminView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'brokers' | 'transfer_register' | 'notification_center' | 'activity_logs';
+type AdminView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'brokers' | 'transfer_register' | 'notification_center' | 'activity_logs' | 'deleted_leads';
 type LeadQueueTab = 'overdue' | 'today' | 'upcoming';
 
 type AdminDashboardProps = {
@@ -109,6 +111,12 @@ const formatLeadDate = (date: any) => {
   if (!date) return 'Just now';
   const d = date.toDate ? date.toDate() : (date.seconds ? new Date(date.seconds * 1000) : new Date(date));
   return format(d, 'MMM dd, yyyy hh:mm a');
+};
+
+const formatLeadFollowupDate = (lead: Lead) => {
+  if (!lead.nextFollowupAt) return 'Not set';
+  const d = lead.nextFollowupAt.toDate ? lead.nextFollowupAt.toDate() : (lead.nextFollowupAt.seconds ? new Date(lead.nextFollowupAt.seconds * 1000) : new Date(lead.nextFollowupAt));
+  return format(d, lead.hasFollowupTime ? 'MMM dd, yyyy hh:mm a' : 'MMM dd, yyyy');
 };
 
 const getAddedByRoleLabel = (role?: Lead['addedByRole']) => {
@@ -178,6 +186,7 @@ export default function AdminDashboard({
   const [brokerTableSort, setBrokerTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'broker', dir: 'asc' });
   const [employees, setEmployees] = useState<User[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [deletedLeads, setDeletedLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [leadTransfers, setLeadTransfers] = useState<LeadTransfer[]>([]);
   const [attendance, setAttendance] = useState<Attendance[]>([]);
@@ -230,6 +239,7 @@ export default function AdminDashboard({
   const [transferSearch, setTransferSearch] = useState('');
   const [interactionRemark, setInteractionRemark] = useState('');
   const [nextFollowupDate, setNextFollowupDate] = useState('');
+  const [nextFollowupTime, setNextFollowupTime] = useState('');
 
   // Reallocation State
   const [reallocateEmployee, setReallocateEmployee] = useState<User | null>(null);
@@ -262,6 +272,7 @@ export default function AdminDashboard({
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const managerScopeUserIdsRef = useRef<Set<string>>(new Set([user.uid]));
   const rawLeadsRef = useRef<Lead[]>([]);
+  const rawDeletedLeadsRef = useRef<Lead[]>([]);
   const rawAttendanceRef = useRef<Attendance[]>([]);
   const rawRequirementsRef = useRef<Requirement[]>([]);
   const rawLeadTransfersRef = useRef<LeadTransfer[]>([]);
@@ -676,6 +687,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'lead',
         targetId: selectedLead.id,
+        clientId: user.clientId,
         description: `Lead transferred from ${employees.find(e => e.uid === selectedLead.assignedTo)?.name || 'Unknown'} to ${targetEmployee.name}`,
         oldValue: { assignedTo: selectedLead.assignedTo },
         newValue: { assignedTo: targetEmployee.uid },
@@ -723,9 +735,28 @@ export default function AdminDashboard({
       };
 
       if (nextFollowupDate && !isNaN(new Date(nextFollowupDate).getTime())) {
-        const nextFollowupAt = Timestamp.fromDate(new Date(nextFollowupDate));
-        updateData.nextFollowupAt = nextFollowupAt;
-        localUpdateData.nextFollowupAt = nextFollowupAt;
+        const [year, month, day] = nextFollowupDate.split('-').map(Number);
+        const dateObj = new Date(year, month - 1, day);
+        if (nextFollowupTime) {
+          const [hours, minutes] = nextFollowupTime.split(':').map(Number);
+          dateObj.setHours(hours, minutes, 0, 0);
+          const nextFollowupAt = Timestamp.fromDate(dateObj);
+          updateData.nextFollowupAt = nextFollowupAt;
+          updateData.hasFollowupTime = true;
+          updateData.nextFollowupTime = nextFollowupTime;
+          localUpdateData.nextFollowupAt = nextFollowupAt;
+          localUpdateData.hasFollowupTime = true;
+          localUpdateData.nextFollowupTime = nextFollowupTime;
+        } else {
+          dateObj.setHours(0, 0, 0, 0);
+          const nextFollowupAt = Timestamp.fromDate(dateObj);
+          updateData.nextFollowupAt = nextFollowupAt;
+          updateData.hasFollowupTime = false;
+          updateData.nextFollowupTime = deleteField();
+          localUpdateData.nextFollowupAt = nextFollowupAt;
+          localUpdateData.hasFollowupTime = false;
+          localUpdateData.nextFollowupTime = undefined;
+        }
       }
 
       await updateDoc(leadRef, updateData);
@@ -736,9 +767,10 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'lead',
         targetId: selectedLead.id,
+        clientId: user.clientId,
         description: `Lead "${selectedLead.name}" updated to ${status}`,
         oldValue: { status: selectedLead.status, lastRemark: selectedLead.lastRemark || null },
-        newValue: { status, lastRemark: interactionRemark, nextFollowupDate: nextFollowupDate || null },
+        newValue: { status, lastRemark: interactionRemark, nextFollowupDate: nextFollowupDate || null, nextFollowupTime: nextFollowupTime || null },
       });
 
       await addDoc(collection(db, 'leads', selectedLead.id, 'followups'), {
@@ -761,6 +793,7 @@ export default function AdminDashboard({
 
       setInteractionRemark('');
       setNextFollowupDate('');
+      setNextFollowupTime('');
       // Update local state with concrete timestamps to avoid invalid date formatting crashes.
       setSelectedLead((prev) => (prev ? ({ ...prev, ...localUpdateData } as Lead) : prev));
 
@@ -795,6 +828,7 @@ export default function AdminDashboard({
         });
         managerScopeUserIdsRef.current = scopedIds;
         setLeads(rawLeadsRef.current.filter((lead) => scopedIds.has(lead.assignedTo) || lead.addedById === user.uid));
+        setDeletedLeads(rawDeletedLeadsRef.current.filter((lead) => scopedIds.has(lead.assignedTo) || lead.addedById === user.uid));
         setAttendance(rawAttendanceRef.current.filter((log) => scopedIds.has(log.uid)));
         setRequirements(rawRequirementsRef.current.filter((req) => scopedIds.has(req.employeeId)));
         setLeadTransfers(
@@ -810,7 +844,9 @@ export default function AdminDashboard({
       : query(collection(db, 'leads'), orderBy('createdAt', 'desc'));
     const unsubscribeLeads = onSnapshot(qLeads, (snapshot) => {
       const allLeads = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead));
+      
       rawLeadsRef.current = allLeads;
+
       if (!isManager) {
         setLeads(allLeads);
         return;
@@ -820,6 +856,24 @@ export default function AdminDashboard({
         allLeads.filter((lead) => scopeIds.has(lead.assignedTo) || lead.addedById === user.uid)
       );
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'leads'));
+
+    const qDeletedLeads = shouldScopeByClient
+      ? query(collection(db, 'deletedLeads'), where('clientId', '==', tenantClientId))
+      : query(collection(db, 'deletedLeads'), orderBy('createdAt', 'desc'));
+    const unsubscribeDeletedLeads = onSnapshot(qDeletedLeads, (snapshot) => {
+      const allDeletedLeads = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead));
+      
+      rawDeletedLeadsRef.current = allDeletedLeads;
+
+      if (!isManager) {
+        setDeletedLeads(allDeletedLeads);
+        return;
+      }
+      const scopeIds = managerScopeUserIdsRef.current;
+      setDeletedLeads(
+        allDeletedLeads.filter((lead) => scopeIds.has(lead.assignedTo) || lead.addedById === user.uid)
+      );
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'deletedLeads'));
 
     const qAttendance = shouldScopeByClient
       ? query(collection(db, 'attendance'), where('clientId', '==', tenantClientId), limit(2000))
@@ -832,28 +886,32 @@ export default function AdminDashboard({
         return;
       }
       const scopeIds = managerScopeUserIdsRef.current;
-      setAttendance(allLogs.filter((log) => scopeIds.has(log.uid)));
+      setAttendance(
+        allLogs.filter((log) => scopeIds.has(log.uid))
+      );
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendance'));
 
     const qReqs = shouldScopeByClient
       ? query(collection(db, 'requirements'), where('clientId', '==', tenantClientId))
       : query(collection(db, 'requirements'), orderBy('createdAt', 'desc'));
     const unsubscribeReqs = onSnapshot(qReqs, (snapshot) => {
-      const allRequirements = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Requirement));
-      rawRequirementsRef.current = allRequirements;
+      const allReqs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Requirement));
+      rawRequirementsRef.current = allReqs;
       if (!isManager) {
-        setRequirements(allRequirements);
+        setRequirements(allReqs);
         return;
       }
       const scopeIds = managerScopeUserIdsRef.current;
-      setRequirements(allRequirements.filter((req) => scopeIds.has(req.employeeId)));
+      setRequirements(
+        allReqs.filter((req) => scopeIds.has(req.employeeId))
+      );
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'requirements'));
 
     const qTransfers = shouldScopeByClient
       ? query(collection(db, 'leadTransfers'), where('clientId', '==', tenantClientId), limit(2000))
-      : query(collection(db, 'leadTransfers'), orderBy('createdAt', 'desc'), limit(2000));
+      : query(collection(db, 'leadTransfers'), orderBy('when', 'desc'), limit(2000));
     const unsubscribeTransfers = onSnapshot(qTransfers, (snapshot) => {
-      const allTransfers = snapshot.docs.map((transferDoc) => ({ id: transferDoc.id, ...transferDoc.data() } as LeadTransfer));
+      const allTransfers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LeadTransfer));
       rawLeadTransfersRef.current = allTransfers;
       if (!isManager) {
         setLeadTransfers(allTransfers);
@@ -882,6 +940,7 @@ export default function AdminDashboard({
     return () => {
       unsubscribeEmployees();
       unsubscribeLeads();
+      unsubscribeDeletedLeads();
       unsubscribeAttendance();
       unsubscribeReqs();
       unsubscribeTransfers();
@@ -906,9 +965,12 @@ export default function AdminDashboard({
   }, [isSuperAdmin, shouldScopeByClient, tenantClientId]);
 
   useEffect(() => {
+    const isCompanyAdmin = user.role === 'admin' || user.role === 'client_admin';
     const qLogs = user.role === 'super_admin'
       ? query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(2000))
-      : query(collection(db, 'auditLogs'), where('actorId', '==', user.uid), limit(2000));
+      : isCompanyAdmin && tenantClientId
+        ? query(collection(db, 'auditLogs'), where('clientId', '==', tenantClientId), limit(2000))
+        : query(collection(db, 'auditLogs'), where('actorId', '==', user.uid), limit(2000));
     const unsubscribe = onSnapshot(qLogs, (snapshot) => {
       const allLogs = snapshot.docs
         .map((item) => ({ id: item.id, ...item.data() } as AuditLogEntry))
@@ -1041,6 +1103,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'requirement',
         targetId: reqId,
+        clientId: user.clientId,
         description: `Requirement deleted${existing?.name ? ` (${existing.name})` : ''}`,
         oldValue: existing || null,
       });
@@ -1092,6 +1155,7 @@ export default function AdminDashboard({
           actorRole: user.role,
           targetType: 'user',
           targetId: showEditEmployee.uid,
+          clientId: user.clientId,
           description: `Executive removed: ${showEditEmployee.name}`,
           oldValue: currentUser || null,
           newValue: { role: 'deleted' },
@@ -1131,6 +1195,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'user',
         targetId: showEditEmployee.uid,
+        clientId: user.clientId,
         description: `Executive updated: ${showEditEmployee.name}`,
         oldValue: currentUser || null,
         newValue: {
@@ -1246,7 +1311,12 @@ export default function AdminDashboard({
         upcomingFollowup: parseTimestamp((b as any).nextFollowupAt)?.getTime() || 0,
         status: b.status,
       };
-      const result = compareValues(mapA[leadTableSort.key], mapB[leadTableSort.key]);
+      let result = 0;
+      if (leadTableSort.key === 'upcomingFollowup') {
+        result = compareFollowup(a, b);
+      } else {
+        result = compareValues(mapA[leadTableSort.key], mapB[leadTableSort.key]);
+      }
       return leadTableSort.dir === 'asc' ? result : -result;
     });
     return list;
@@ -1392,6 +1462,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'attendance',
         targetId: user.uid,
+        clientId: user.clientId,
         description: `Attendance ${type} marked`,
         newValue: { type, latitude, longitude },
       });
@@ -1436,6 +1507,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'requirement',
         targetId: editingRequirementId,
+        clientId: user.clientId,
         description: `Requirement updated for ${reqForm.name}`,
         newValue: { ...reqForm, phone: normalizedPhone },
       });
@@ -1497,6 +1569,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'attendanceCorrection',
         targetId: request.id,
+        clientId: user.clientId,
         description: `Attendance correction ${status}`,
         oldValue: { status: request.status },
         newValue: { status },
@@ -1531,6 +1604,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'user',
         targetId: empId,
+        clientId: user.clientId,
         description: `Executive removed${emp?.name ? ` (${emp.name})` : ''}`,
         oldValue: emp || null,
       });
@@ -1560,6 +1634,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'user',
         targetId: emp.uid,
+        clientId: user.clientId,
         description: `Password reset for ${emp.name}`,
       });
       alert(`Password reset successful.\nTemporary password: ${nextPassword}`);
@@ -1584,9 +1659,10 @@ export default function AdminDashboard({
     if (!normalizedLeadPhone || !leadForm.source) return alert('Phone and Source are mandatory');
     if (normalizedLeadPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
 
-    const duplicateSnapshot = await getDocs(query(collection(db, 'leads'), where('phone', '==', normalizedLeadPhone), limit(1)));
-    if (!duplicateSnapshot.empty) {
-      const existingLead = duplicateSnapshot.docs[0].data() as Lead;
+    const duplicateSnapshot = await getDocs(query(collection(db, 'leads'), where('phone', '==', normalizedLeadPhone)));
+    const activeDuplicate = duplicateSnapshot.docs.find(doc => !doc.data().deletedAt);
+    if (activeDuplicate) {
+      const existingLead = activeDuplicate.data() as Lead;
       return alert(`Lead with mobile ${normalizedLeadPhone} already exists (${existingLead.name || 'Unknown'}).`);
     }
 
@@ -1749,6 +1825,7 @@ export default function AdminDashboard({
           actorRole: user.role,
           targetType: 'user',
           targetId: provisioned.uid,
+          clientId: user.clientId,
           description: `${memberRole === 'manager' ? 'Manager' : 'Executive'} ${provisioned.restored ? 'restored' : 'added'}: ${name}`,
           newValue: { name, phone: normalizedPhone, role: memberRole, managerId: selectedManager?.uid || null },
         });
@@ -1826,6 +1903,7 @@ export default function AdminDashboard({
           actorRole: user.role,
           targetType: 'broker',
           targetId: editingBrokerId,
+          clientId: user.clientId,
           description: `Broker updated: ${name}`,
           newValue: { name, phone, state, city, locality, specializations },
         });
@@ -1851,6 +1929,7 @@ export default function AdminDashboard({
           actorRole: user.role,
           targetType: 'broker',
           targetId: brokerRef.id,
+          clientId: user.clientId,
           description: `Broker added: ${name}`,
           newValue: { name, phone, state, city, locality, specializations },
         });
@@ -1880,6 +1959,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'broker',
         targetId: brokerId,
+        clientId: user.clientId,
         description: `Broker deleted${existing?.name ? ` (${existing.name})` : ''}`,
         oldValue: existing || null,
       });
@@ -1919,6 +1999,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'lead',
         targetId: selectedLead.id,
+        clientId: user.clientId,
         description: `Lead details modified for ${selectedLead.name}`,
         oldValue: selectedLead,
         newValue: { ...selectedLead, ...editForm },
@@ -1952,6 +2033,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'lead',
         targetId: leadId,
+        clientId: user.clientId,
         description: `Lead approved${lead?.name ? ` (${lead.name})` : ''}`,
         oldValue: { status: lead?.status || null },
         newValue: { status: 'deal_approved' },
@@ -1983,8 +2065,80 @@ export default function AdminDashboard({
         siteVisitVerifiedAt: Timestamp.now(),
         siteVisitVerifiedBy: user.name,
       });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteLead = async (leadId: string) => {
+    if (!confirm('Are you sure you want to delete this lead? It will be moved to the Deleted Leads tab.')) return;
+    setLoading(true);
+    try {
+      const leadData = leads.find(l => l.id === leadId);
+      if (!leadData) throw new Error('Lead not found in active state.');
+
+      const deletedLeadRef = doc(db, 'deletedLeads', leadId);
+      await setDoc(deletedLeadRef, {
+        ...leadData,
+        deletedAt: serverTimestamp(),
+        deletedBy: user.uid,
+        deletedByName: user.name,
+        updatedAt: serverTimestamp(),
+      });
+
+      const docRef = doc(db, 'leads', leadId);
+      await deleteDoc(docRef);
+
+      await addAuditLog(db, {
+        action: 'lead_deleted',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: leadId,
+        clientId: tenantClientId || null,
+        description: `Lead moved to trash: ${leadData.name || 'Unknown'}`,
+      });
+      setSelectedLead(null);
+      alert('Lead deleted successfully.');
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `leads/${selectedLead.id}`);
+      handleFirestoreError(error, OperationType.UPDATE, `leads/${leadId}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRestoreLead = async (leadId: string) => {
+    if (!confirm('Are you sure you want to restore this lead?')) return;
+    setLoading(true);
+    try {
+      const docRef = doc(db, 'deletedLeads', leadId);
+      const leadData = deletedLeads.find(l => l.id === leadId);
+      if (!leadData) throw new Error('Lead not found in deleted state.');
+
+      const activeLeadRef = doc(db, 'leads', leadId);
+      const { deletedAt, deletedBy, deletedByName, ...rest } = leadData;
+
+      await setDoc(activeLeadRef, {
+        ...rest,
+        updatedAt: serverTimestamp(),
+      });
+
+      await deleteDoc(docRef);
+
+      await addAuditLog(db, {
+        action: 'lead_restored',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: leadId,
+        clientId: tenantClientId || null,
+        description: `Lead restored: ${leadData.name || 'Unknown'}`,
+      });
+      alert('Lead restored successfully.');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `leads/${leadId}`);
     } finally {
       setLoading(false);
     }
@@ -2000,6 +2154,7 @@ export default function AdminDashboard({
     { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
     { id: 'notification_center', icon: Bell, label: 'Notification Center' },
     { id: 'activity_logs', icon: History, label: 'Activity Logs' },
+    { id: 'deleted_leads', icon: Trash2, label: 'Deleted Leads' },
     ...(isSuperAdmin ? [{ id: 'brokers' as AdminView, icon: ClipboardList, label: 'Brokers' }] : []),
   ];
 
@@ -2023,6 +2178,7 @@ export default function AdminDashboard({
         actorRole: user.role,
         targetType: 'notificationSettings',
         targetId: ownerId,
+        clientId: user.clientId,
         description: 'Notification center settings updated',
         newValue: notificationSettings,
       });
@@ -2381,7 +2537,7 @@ export default function AdminDashboard({
                           <div className="flex items-center gap-1.5">
                             <Clock3 size={12} className="text-indigo-400" />
                             <p className="text-[10px] font-bold text-gray-600 uppercase tracking-tighter">
-                              {formatLeadDate(lead.nextFollowupAt)}
+                              {formatLeadFollowupDate(lead)}
                             </p>
                           </div>
                         ) : (
@@ -2870,6 +3026,79 @@ export default function AdminDashboard({
         </div>
       ) : activeView === 'inventory' ? (
         <InventoryManagement user={user} />
+      ) : activeView === 'deleted_leads' ? (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Deleted Leads</h2>
+            <p className="text-xs text-gray-500 mt-1">
+              View soft-deleted leads and restore them if necessary. No permanent deletion is allowed.
+            </p>
+          </div>
+
+          {deletedLeads.length === 0 ? (
+            <div className="bg-white rounded-3xl border border-dashed border-gray-200 p-12 text-center">
+              <div className="w-16 h-16 bg-gray-50 text-gray-400 flex items-center justify-center rounded-2xl mx-auto mb-4">
+                <Trash2 size={24} />
+              </div>
+              <h4 className="font-bold text-gray-700 mb-1">No deleted leads</h4>
+              <p className="text-gray-400 text-sm">Leads you delete will appear here for recovery.</p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/20 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100">
+                      <th className="px-6 py-4 text-xs font-black uppercase text-gray-400 tracking-wider">Client</th>
+                      <th className="px-6 py-4 text-xs font-black uppercase text-gray-400 tracking-wider">Source</th>
+                      <th className="px-6 py-4 text-xs font-black uppercase text-gray-400 tracking-wider">Deleted By</th>
+                      <th className="px-6 py-4 text-xs font-black uppercase text-gray-400 tracking-wider">Deleted At</th>
+                      <th className="px-6 py-4 text-xs font-black uppercase text-gray-400 tracking-wider text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {deletedLeads.map((lead) => (
+                      <tr key={lead.id} className="hover:bg-gray-50/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-xs">
+                              {lead.name ? lead.name[0] : '?'}
+                            </div>
+                            <div>
+                              <p className="font-semibold text-gray-900">{lead.name}</p>
+                              <p className="text-sm text-gray-500">{lead.phone}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg uppercase">
+                            {lead.source}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-sm font-medium text-gray-600 bg-gray-100 px-2.5 py-1 rounded-lg">
+                            {lead.deletedByName || 'Unknown'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-500">
+                          {formatLeadDate(lead.deletedAt)}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={() => handleRestoreLead(lead.id)}
+                            className="bg-blue-50 text-blue-600 hover:bg-blue-100 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                          >
+                            Restore
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       ) : null}
 
       {/* Reallocate Leads Modal */}
@@ -3088,13 +3317,22 @@ export default function AdminDashboard({
                         onChange={e => setInteractionRemark(e.target.value)}
                         className="w-full h-24 px-4 py-3 bg-white border border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition-all resize-none font-medium text-sm"
                       />
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div className="flex flex-col gap-1">
-                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Next Followup</label>
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Next Followup Date</label>
                           <input
                             type="date"
                             value={nextFollowupDate}
                             onChange={e => setNextFollowupDate(e.target.value)}
+                            className="px-4 py-2 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium h-[42px]"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Next Time (Optional)</label>
+                          <input
+                            type="time"
+                            value={nextFollowupTime}
+                            onChange={e => setNextFollowupTime(e.target.value)}
                             className="px-4 py-2 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium h-[42px]"
                           />
                         </div>
@@ -3203,12 +3441,22 @@ export default function AdminDashboard({
                     </div>
                   </div>
 
-                  <button 
-                    onClick={() => setIsEditing(true)}
-                    className="w-full py-4 bg-blue-600 text-white font-bold rounded-2xl shadow-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
-                  >
-                    Edit Everything
-                  </button>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button 
+                      onClick={() => setIsEditing(true)}
+                      className="w-full py-4 bg-blue-600 text-white font-bold rounded-2xl shadow-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
+                    >
+                      Edit Everything
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => handleDeleteLead(selectedLead.id)}
+                      disabled={loading}
+                      className="w-full py-4 bg-rose-50 text-rose-600 font-bold rounded-2xl hover:bg-rose-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      Delete Lead
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <form onSubmit={handleUpdateLead} className="space-y-6">

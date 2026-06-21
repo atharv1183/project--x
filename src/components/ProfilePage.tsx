@@ -15,6 +15,7 @@ interface ProfilePageProps {
 type SupportTicketItem = {
   id: string;
   subject: string;
+  title?: string;
   message: string;
   priority: 'low' | 'medium' | 'high';
   status: string;
@@ -257,6 +258,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
         actorRole: user.role,
         targetType: 'user',
         targetId: user.uid,
+        clientId: user.clientId,
         description: 'Profile details updated',
         newValue: {
           phone: normalizedPhone,
@@ -322,6 +324,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
         actorRole: user.role,
         targetType: 'user',
         targetId: user.uid,
+        clientId: user.clientId,
         description: 'Password changed from profile',
       });
       setCurrentPassword('');
@@ -354,6 +357,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
     setTicketLoading(true);
     try {
       await addDoc(collection(db, 'supportTickets'), {
+        title: subject,
         subject,
         message,
         priority: ticketPriority,
@@ -751,7 +755,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
                     className={`w-full text-left rounded-2xl border p-3 transition ${selectedTicketId === ticket.id ? 'border-blue-300 bg-blue-50/50' : 'border-gray-100 bg-white hover:bg-gray-50'}`}
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-bold text-gray-900">{ticket.subject}</p>
+                      <p className="text-sm font-bold text-gray-900">{ticket.subject || ticket.title || '-'}</p>
                       <span className={`text-[11px] font-bold px-2 py-1 rounded-full ${String(ticket.status || 'open').toLowerCase() === 'closed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
                         {String(ticket.status || 'open').replace('_', ' ')}
                       </span>
@@ -764,7 +768,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
 
             {selectedTicket && (
               <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-                <p className="text-sm font-bold text-gray-900">{selectedTicket.subject}</p>
+                <p className="text-sm font-bold text-gray-900">{selectedTicket.subject || selectedTicket.title || '-'}</p>
                 <p className="mt-1 text-xs text-gray-500">
                   Ticket ID: {selectedTicket.id} · Created: {toMillis(selectedTicket.createdAt) ? new Date(toMillis(selectedTicket.createdAt)).toLocaleString() : 'N/A'}
                 </p>

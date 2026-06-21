@@ -10,6 +10,7 @@ import {
   doc, 
   updateDoc, 
   addDoc, 
+  setDoc,
   deleteDoc,
   serverTimestamp,
   orderBy,
@@ -101,6 +102,32 @@ function toMillis(value: unknown): number {
   return toDateValue(value)?.getTime() ?? 0;
 }
 
+export function compareFollowup(a: Lead, b: Lead): number {
+  const timeA = toMillis(a.nextFollowupAt);
+  const timeB = toMillis(b.nextFollowupAt);
+  if (!timeA && !timeB) return 0;
+  if (!timeA) return 1;
+  if (!timeB) return -1;
+
+  const dateA = toDateValue(a.nextFollowupAt)!;
+  const dateB = toDateValue(b.nextFollowupAt)!;
+
+  const ymdA = dateA.getFullYear() * 10000 + (dateA.getMonth() + 1) * 100 + dateA.getDate();
+  const ymdB = dateB.getFullYear() * 10000 + (dateB.getMonth() + 1) * 100 + dateB.getDate();
+
+  if (ymdA !== ymdB) {
+    return ymdA - ymdB;
+  }
+
+  const hasTimeA = !!a.hasFollowupTime;
+  const hasTimeB = !!b.hasFollowupTime;
+
+  if (hasTimeA && hasTimeB) {
+    return dateA.getTime() - dateB.getTime();
+  }
+  return 0;
+}
+
 function normalizePhone(value: string): string {
   return value.replace(/\D/g, '');
 }
@@ -138,7 +165,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 }
 
 type LeadQueueTab = 'overdue' | 'today' | 'upcoming';
-type EmployeeView = LeadQueueTab | 'followups' | 'performance' | 'leads' | 'attendance' | 'requirements' | 'inventory' | 'transfer_register' | 'activity_logs' | 'pending';
+type EmployeeView = LeadQueueTab | 'followups' | 'performance' | 'leads' | 'attendance' | 'requirements' | 'inventory' | 'transfer_register' | 'activity_logs' | 'pending' | 'deleted_leads';
 
 type EmployeeDashboardProps = {
   user: User;
@@ -171,6 +198,7 @@ export default function EmployeeDashboard({
   const [transferTableSort, setTransferTableSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'when', dir: 'desc' });
   const [followupSubTab, setFollowupSubTab] = useState<LeadQueueTab>('today');
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [deletedLeads, setDeletedLeads] = useState<Lead[]>([]);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [leadTransfers, setLeadTransfers] = useState<LeadTransfer[]>([]);
   const [selectedLeadIndex, setSelectedLeadIndex] = useState<number | null>(null);
@@ -207,6 +235,7 @@ export default function EmployeeDashboard({
   const [newSpecialization, setNewSpecialization] = useState('');
   const [remark, setRemark] = useState('');
   const [nextDate, setNextDate] = useState('');
+  const [nextTime, setNextTime] = useState('');
   const [showHistory, setShowHistory] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<Lead['status'] | null>(null);
   const [kycFiles, setKycFiles] = useState<{ aadhaar: File | null; pan: File | null }>({ aadhaar: null, pan: null });
@@ -479,6 +508,7 @@ export default function EmployeeDashboard({
         actorRole: user.role,
         targetType: 'attendance',
         targetId: user.uid,
+        clientId: user.clientId,
         description: `Attendance ${type} marked`,
         newValue: { type, latitude, longitude },
       });
@@ -509,6 +539,7 @@ export default function EmployeeDashboard({
     { id: 'attendance', icon: History, label: 'Attendance' },
     { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
     { id: 'activity_logs', icon: ClipboardList, label: 'Activity Logs' },
+    { id: 'deleted_leads', icon: Trash2, label: 'Deleted Leads' },
   ];
 
   useEffect(() => {
@@ -520,8 +551,14 @@ export default function EmployeeDashboard({
     const qAssigned = query(collection(db, 'leads'), where('assignedTo', '==', user.uid), where('clientId', '==', tenantClientId));
     const qAddedBy = query(collection(db, 'leads'), where('addedById', '==', user.uid), where('clientId', '==', tenantClientId));
 
+    const qDeletedAssigned = query(collection(db, 'deletedLeads'), where('assignedTo', '==', user.uid), where('clientId', '==', tenantClientId));
+    const qDeletedAddedBy = query(collection(db, 'deletedLeads'), where('addedById', '==', user.uid), where('clientId', '==', tenantClientId));
+
     const assignedLeads: Lead[] = [];
     const addedByLeads: Lead[] = [];
+
+    const deletedAssignedLeads: Lead[] = [];
+    const deletedAddedByLeads: Lead[] = [];
 
     const syncLeads = () => {
       const merged = [...assignedLeads, ...addedByLeads];
@@ -529,6 +566,14 @@ export default function EmployeeDashboard({
         .filter((lead, index, arr) => index === arr.findIndex(item => item.id === lead.id))
         .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
       setLeads(deduped);
+    };
+
+    const syncDeletedLeads = () => {
+      const merged = [...deletedAssignedLeads, ...deletedAddedByLeads];
+      const deduped = merged
+        .filter((lead, index, arr) => index === arr.findIndex(item => item.id === lead.id))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      setDeletedLeads(deduped);
     };
 
     const unsubscribeAssigned = onSnapshot(qAssigned, (snapshot) => {
@@ -543,9 +588,23 @@ export default function EmployeeDashboard({
       syncLeads();
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'leads'));
 
+    const unsubscribeDeletedAssigned = onSnapshot(qDeletedAssigned, (snapshot) => {
+      deletedAssignedLeads.length = 0;
+      snapshot.docs.forEach(item => deletedAssignedLeads.push({ id: item.id, ...item.data() } as Lead));
+      syncDeletedLeads();
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'deletedLeads'));
+
+    const unsubscribeDeletedAddedBy = onSnapshot(qDeletedAddedBy, (snapshot) => {
+      deletedAddedByLeads.length = 0;
+      snapshot.docs.forEach(item => deletedAddedByLeads.push({ id: item.id, ...item.data() } as Lead));
+      syncDeletedLeads();
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'deletedLeads'));
+
     return () => {
       unsubscribeAssigned();
       unsubscribeAddedBy();
+      unsubscribeDeletedAssigned();
+      unsubscribeDeletedAddedBy();
     };
   }, [user.uid, tenantClientId]);
 
@@ -700,6 +759,7 @@ export default function EmployeeDashboard({
           actorRole: user.role,
           targetType: 'requirement',
           targetId: editingRequirementId,
+          clientId: user.clientId,
           description: `Requirement updated for ${reqForm.name}`,
           newValue: { ...reqForm, phone: normalizedPhone },
         });
@@ -719,6 +779,7 @@ export default function EmployeeDashboard({
           actorRole: user.role,
           targetType: 'requirement',
           targetId: reqRef.id,
+          clientId: user.clientId,
           description: `Requirement added for ${reqForm.name}`,
           newValue: { ...reqForm, phone: normalizedPhone },
         });
@@ -805,12 +866,14 @@ export default function EmployeeDashboard({
     // Employee can only query leads visible to themselves per Firestore rules.
     // So duplicate checks must be scoped to employee-owned/added leads.
     const [duplicateAssignedSnapshot, duplicateAddedSnapshot] = await Promise.all([
-      getDocs(query(collection(db, 'leads'), where('assignedTo', '==', user.uid), where('phone', '==', normalizedPhone), where('clientId', '==', tenantClientId), limit(1))),
-      getDocs(query(collection(db, 'leads'), where('addedById', '==', user.uid), where('phone', '==', normalizedPhone), where('clientId', '==', tenantClientId), limit(1))),
+      getDocs(query(collection(db, 'leads'), where('assignedTo', '==', user.uid), where('phone', '==', normalizedPhone), where('clientId', '==', tenantClientId))),
+      getDocs(query(collection(db, 'leads'), where('addedById', '==', user.uid), where('phone', '==', normalizedPhone), where('clientId', '==', tenantClientId))),
     ]);
-    const duplicateDoc = duplicateAssignedSnapshot.docs[0] || duplicateAddedSnapshot.docs[0];
-    if (duplicateDoc) {
-      const existingLead = duplicateDoc.data() as Lead;
+    const activeDuplicate =
+      duplicateAssignedSnapshot.docs.find(doc => !doc.data().deletedAt) ||
+      duplicateAddedSnapshot.docs.find(doc => !doc.data().deletedAt);
+    if (activeDuplicate) {
+      const existingLead = activeDuplicate.data() as Lead;
       return alert(`Lead with mobile ${normalizedPhone} already exists in your records (${existingLead.name || 'Unknown'}).`);
     }
 
@@ -839,6 +902,7 @@ export default function EmployeeDashboard({
           actorRole: user.role,
           targetType: 'lead',
           targetId: leadRef.id,
+          clientId: user.clientId,
           description: `Lead added by executive: ${leadForm.name || 'Anonymous'}`,
           newValue: { name: leadForm.name || 'Anonymous', phone: normalizedPhone, assignedTo: user.uid },
         });
@@ -860,7 +924,11 @@ export default function EmployeeDashboard({
     activeTab === 'today' || activeTab === 'upcoming' || activeTab === 'overdue'
       ? activeTab
       : followupSubTab;
-  const queueLeads = leads.filter((l) => l.assignedTo === user.uid && getLeadQueueTab(l) === effectiveQueueTab);
+  const queueLeads = useMemo(() => {
+    const list = leads.filter((l) => l.assignedTo === user.uid && getLeadQueueTab(l) === effectiveQueueTab);
+    list.sort(compareFollowup);
+    return list;
+  }, [leads, user.uid, effectiveQueueTab]);
   const employeeAssignedLeads = useMemo(
     () => leads.filter((lead) => lead.assignedTo === user.uid).sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt)),
     [leads, user.uid]
@@ -1037,9 +1105,24 @@ export default function EmployeeDashboard({
       }
 
       if (nextDate && !isNaN(new Date(nextDate).getTime())) {
-        updateData.nextFollowupAt = Timestamp.fromDate(new Date(nextDate));
+        const [year, month, day] = nextDate.split('-').map(Number);
+        const dateObj = new Date(year, month - 1, day);
+        if (nextTime) {
+          const [hours, minutes] = nextTime.split(':').map(Number);
+          dateObj.setHours(hours, minutes, 0, 0);
+          updateData.nextFollowupAt = Timestamp.fromDate(dateObj);
+          updateData.hasFollowupTime = true;
+          updateData.nextFollowupTime = nextTime;
+        } else {
+          dateObj.setHours(0, 0, 0, 0);
+          updateData.nextFollowupAt = Timestamp.fromDate(dateObj);
+          updateData.hasFollowupTime = false;
+          updateData.nextFollowupTime = deleteField();
+        }
       } else if (status === 'not_interested' || status === 'deal_approved') {
         updateData.nextFollowupAt = deleteField();
+        updateData.hasFollowupTime = deleteField();
+        updateData.nextFollowupTime = deleteField();
       }
 
       await updateDoc(leadRef, updateData);
@@ -1050,9 +1133,10 @@ export default function EmployeeDashboard({
         actorRole: user.role,
         targetType: 'lead',
         targetId: currentLead.id,
+        clientId: user.clientId,
         description: `Lead "${currentLead.name}" updated to ${status}`,
         oldValue: { status: currentLead.status, lastRemark: currentLead.lastRemark || null },
-        newValue: { status, remark, nextDate: nextDate || null },
+        newValue: { status, remark, nextDate: nextDate || null, nextTime: nextTime || null },
       });
 
       await addDoc(collection(db, 'leads', currentLead.id, 'followups'), {
@@ -1063,6 +1147,7 @@ export default function EmployeeDashboard({
 
       setRemark('');
       setNextDate('');
+      setNextTime('');
       setSelectedStatus(null);
       setKycFiles({ aadhaar: null, pan: null });
       setCapturedImage(null);
@@ -1186,6 +1271,7 @@ export default function EmployeeDashboard({
         actorRole: user.role,
         targetType: 'lead',
         targetId: selectedAssignedLead.id,
+        clientId: user.clientId,
         description: `Assigned lead updated: ${nextName}`,
         oldValue: { name: selectedAssignedLead.name, status: selectedAssignedLead.status },
         newValue: { name: nextName, status: nextStatus },
@@ -1203,6 +1289,81 @@ export default function EmployeeDashboard({
       alert('Lead updated successfully.');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `leads/${selectedAssignedLead.id}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteLead = async (leadId: string) => {
+    if (!confirm('Are you sure you want to delete this lead? It will be moved to the Deleted Leads tab.')) return;
+    setLoading(true);
+    try {
+      const leadData = leads.find(l => l.id === leadId);
+      if (!leadData) throw new Error('Lead not found in state.');
+
+      const deletedLeadRef = doc(db, 'deletedLeads', leadId);
+      await setDoc(deletedLeadRef, {
+        ...leadData,
+        deletedAt: serverTimestamp(),
+        deletedBy: user.uid,
+        deletedByName: user.name,
+        updatedAt: serverTimestamp(),
+      });
+
+      const docRef = doc(db, 'leads', leadId);
+      await deleteDoc(docRef);
+
+      await addAuditLog(db, {
+        action: 'lead_deleted',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: leadId,
+        clientId: user.clientId,
+        description: `Lead moved to trash: ${leadData.name || 'Unknown'}`,
+      });
+      setSelectedAssignedLead(null);
+      setSelectedLeadIndex(null);
+      alert('Lead deleted successfully.');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `leads/${leadId}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRestoreLead = async (leadId: string) => {
+    if (!confirm('Are you sure you want to restore this lead?')) return;
+    setLoading(true);
+    try {
+      const leadData = deletedLeads.find(l => l.id === leadId);
+      if (!leadData) throw new Error('Lead not found in deleted leads.');
+
+      const activeLeadRef = doc(db, 'leads', leadId);
+      const { deletedAt, deletedBy, deletedByName, ...rest } = leadData;
+
+      await setDoc(activeLeadRef, {
+        ...rest,
+        updatedAt: serverTimestamp(),
+      });
+
+      const docRef = doc(db, 'deletedLeads', leadId);
+      await deleteDoc(docRef);
+
+      await addAuditLog(db, {
+        action: 'lead_restored',
+        actorId: user.uid,
+        actorName: user.name,
+        actorRole: user.role,
+        targetType: 'lead',
+        targetId: leadId,
+        clientId: user.clientId,
+        description: `Lead restored: ${leadData.name || 'Unknown'}`,
+      });
+      alert('Lead restored successfully.');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `leads/${leadId}`);
     } finally {
       setLoading(false);
     }
@@ -1287,6 +1448,7 @@ export default function EmployeeDashboard({
         actorRole: user.role,
         targetType: 'lead',
         targetId: currentLead.id,
+        clientId: user.clientId,
         description: `Lead transferred to ${targetEmployee.name}`,
         oldValue: { assignedTo: currentLead.assignedTo },
         newValue: { assignedTo: targetEmployee.uid },
@@ -1792,6 +1954,79 @@ export default function EmployeeDashboard({
             </div>
           </div>
         </div>
+      ) : activeTab === 'deleted_leads' ? (
+        <div className="space-y-6 pt-3 sm:pt-4">
+          <div>
+            <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">Deleted Leads</h2>
+            <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mt-1">Archived Leads & Restore Options</p>
+          </div>
+
+          {deletedLeads.length === 0 ? (
+            <div className="bg-white rounded-3xl border border-dashed border-slate-200 p-12 text-center">
+              <div className="w-16 h-16 bg-slate-50 text-slate-400 flex items-center justify-center rounded-2xl mx-auto mb-4">
+                <Trash2 size={24} />
+              </div>
+              <h4 className="font-bold text-slate-700 mb-1">No deleted leads</h4>
+              <p className="text-slate-400 text-sm">Leads you delete will appear here for recovery.</p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-200/20 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100">
+                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Client</th>
+                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Source</th>
+                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Deleted By</th>
+                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Deleted At</th>
+                      <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {deletedLeads.map((lead) => (
+                      <tr key={lead.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-xs">
+                              {lead.name[0]}
+                            </div>
+                            <div>
+                              <p className="font-semibold text-gray-900">{lead.name}</p>
+                              <p className="text-sm text-gray-500">{lead.phone}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-md uppercase tracking-tighter">
+                            {lead.source}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-sm font-medium text-gray-600 bg-gray-100 px-2.5 py-1 rounded-lg">
+                            {lead.deletedByName || 'Unknown'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <p className="text-[10px] font-bold text-gray-600 uppercase tracking-tighter">
+                            {formatDateValue(lead.deletedAt, 'MMM dd, yyyy hh:mm a', 'N/A')}
+                          </p>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={() => handleRestoreLead(lead.id)}
+                            className="bg-blue-50 text-blue-600 hover:bg-blue-100 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+                          >
+                            Restore
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       ) : activeTab === 'inventory' ? (
         <InventoryManagement user={user} />
       ) : (
@@ -1897,7 +2132,7 @@ export default function EmployeeDashboard({
                     <div className="flex items-center gap-1 mt-1">
                       <Clock size={10} className="text-indigo-400" />
                       <p className="text-[9px] text-indigo-500 font-black uppercase tracking-tighter">
-                        Next: {formatDateValue(lead.nextFollowupAt, 'MMM dd')}
+                        Next: {formatDateValue(lead.nextFollowupAt, lead.hasFollowupTime ? 'MMM dd, hh:mm a' : 'MMM dd')}
                       </p>
                     </div>
                   )}
@@ -1925,7 +2160,7 @@ export default function EmployeeDashboard({
                   )}
                   {effectiveQueueTab === 'upcoming' && lead.nextFollowupAt && (
                     <span className="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-600 text-[9px] font-black uppercase tracking-wider whitespace-nowrap">
-                      {formatDateValue(lead.nextFollowupAt, 'dd MMM')}
+                      {formatDateValue(lead.nextFollowupAt, lead.hasFollowupTime ? 'dd MMM, hh:mm a' : 'dd MMM')}
                     </span>
                   )}
                   <div className={cn(
@@ -2080,25 +2315,34 @@ export default function EmployeeDashboard({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Next Followup Date</label>
-                        <input
-                          type="date"
-                          value={nextDate}
-                          onChange={e => setNextDate(e.target.value)}
-                          className="w-full px-6 py-3.5 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                        />
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Next Followup Date</label>
+                          <input
+                            type="date"
+                            value={nextDate}
+                            onChange={e => setNextDate(e.target.value)}
+                            className="w-full px-6 py-3.5 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Next Followup Time (Optional)</label>
+                          <input
+                            type="time"
+                            value={nextTime}
+                            onChange={e => setNextTime(e.target.value)}
+                            className="w-full px-6 py-3.5 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
+                          />
+                        </div>
                       </div>
-                      <div className="flex items-end gap-2">
-                        <button 
-                          onClick={() => handleUpdateLead(selectedStatus || currentLead.status)}
-                          disabled={!canManageCurrentLead || loading || !remark.trim() || !nextDate}
-                          className="flex-1 h-[56px] bg-blue-600 text-white font-black text-xs uppercase tracking-widest rounded-2xl hover:bg-blue-700 shadow-2xl shadow-blue-200 disabled:opacity-30 disabled:grayscale transition-all active:scale-95"
-                        >
-                          Save & Schedule
-                        </button>
-                      </div>
+                      <button 
+                        onClick={() => handleUpdateLead(selectedStatus || currentLead.status)}
+                        disabled={!canManageCurrentLead || loading || !remark.trim() || !nextDate}
+                        className="w-full h-[56px] bg-blue-600 text-white font-black text-xs uppercase tracking-widest rounded-2xl hover:bg-blue-700 shadow-2xl shadow-blue-200 disabled:opacity-30 disabled:grayscale transition-all active:scale-95"
+                      >
+                        Save & Schedule
+                      </button>
                     </div>
 
                       <div className="flex items-center gap-2">
@@ -2339,7 +2583,7 @@ export default function EmployeeDashboard({
 
               <div className="p-5 overflow-y-auto space-y-5">
                 <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_220px_auto] sm:items-end">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_180px_auto_auto] sm:items-end">
                     <div>
                       <label className="block text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1">Lead Name</label>
                       <input
@@ -2368,6 +2612,14 @@ export default function EmployeeDashboard({
                       className="rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-blue-100 hover:bg-blue-700 disabled:opacity-50"
                     >
                       {loading ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteLead(selectedAssignedLead.id)}
+                      disabled={loading || selectedAssignedLead.assignedTo !== user.uid}
+                      className="rounded-xl bg-rose-50 text-rose-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest hover:bg-rose-100 disabled:opacity-50 transition-colors"
+                    >
+                      Delete
                     </button>
                   </div>
                 </div>
