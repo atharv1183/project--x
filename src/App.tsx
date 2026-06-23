@@ -18,6 +18,7 @@ import PublicHeroPage from './components/PublicHeroPage';
 import SuperAdminControlCenter from './components/SuperAdminControlCenter';
 import BookDemo from './pages/BookDemo';
 import PropertyDetailPage from './pages/PropertyDetailPage';
+import PublicContentPage from './pages/PublicContentPage';
 import { functions } from './lib/firebase';
 import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -42,6 +43,7 @@ export default function App() {
   const pathname = window.location.pathname.toLowerCase();
   const isPublicHeroRoute = pathname === '/' || pathname === '/hero' || pathname === '/website';
   const isBookDemoRoute = pathname === '/book-demo' || pathname === '/get-started';
+  const isContentRoute = pathname.startsWith('/blog/') || pathname.startsWith('/city/') || pathname.startsWith('/money/') || pathname.startsWith('/compare/');
   const [user, setUser] = useState<User | null>(null);
   const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile' | 'tools' | 'platform'>('dashboard');
   const [activeAnnouncements, setActiveAnnouncements] = useState<PlatformAnnouncement[]>([]);
@@ -193,7 +195,7 @@ export default function App() {
     void initAuth();
 
     return () => unsubscribe();
-  }, [isBookDemoRoute, isPublicHeroRoute]);
+  }, [isBookDemoRoute, isPublicHeroRoute, isContentRoute]);
 
   useEffect(() => {
     if (!user) return;
@@ -334,6 +336,13 @@ export default function App() {
   if (isPropertyDetailRoute) {
     const propertyId = window.location.pathname.split('/').pop() || '';
     return <PropertyDetailPage propertyId={propertyId} />;
+  }
+
+  if (isContentRoute) {
+    const segments = window.location.pathname.split('/').filter(Boolean);
+    const type = segments[0]; // e.g., 'blog'
+    const slug = segments[1] || '';
+    return <PublicContentPage type={type} slug={slug} />;
   }
 
   if (isPublicHeroRoute && !user) {

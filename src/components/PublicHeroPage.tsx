@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import heroImg from "@/assets/hero-illustration.png";
 import growthImg from "@/assets/growth-illustration.png";
+import { PublicHeroBlogsSection } from "./PublicHeroBlogsSection";
 
 const stats = [
   { label: "Leads Managed", value: "50,000+", icon: Users },
@@ -102,6 +103,7 @@ const Index = () => {
             <a href="#stats" className="hover:text-primary transition">Impact</a>
             <a href="#usecases" className="hover:text-primary transition">Use Cases</a>
             <a href="#pricing" className="hover:text-primary transition">Pricing</a>
+            <a href="#blogs" className="hover:text-primary transition">Blogs</a>
           </div>
           <Button className="bg-gradient-primary hover:opacity-90 shadow-elegant" onClick={() => { window.location.href = "/login"; }}>
             Login
@@ -370,6 +372,9 @@ const Index = () => {
           </div>
         </div>
       </section>
+
+      {/* BLOGS */}
+      <PublicHeroBlogsSection />
 
       {/* CTA */}
       <section className="py-24 relative">
