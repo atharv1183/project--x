@@ -21,9 +21,16 @@ import PropertyDetailPage from './pages/PropertyDetailPage';
 import PublicContentPage from './pages/PublicContentPage';
 import PublicBlogsPage from './pages/PublicBlogsPage';
 import PublicFeaturesPage from './pages/PublicFeaturesPage';
+import PrivacyPolicy from './pages/legal/PrivacyPolicy';
+import TermsOfService from './pages/legal/TermsOfService';
+import RefundPolicy from './pages/legal/RefundPolicy';
+import CookiePolicy from './pages/legal/CookiePolicy';
+import Disclaimer from './pages/legal/Disclaimer';
+import AcceptableUse from './pages/legal/AcceptableUse';
 import { functions } from './lib/firebase';
 import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Routes, Route, Navigate } from 'react-router-dom';
 
 type AdminDashboardView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'activity_logs' | 'deleted_leads';
 type EmployeeDashboardView = 'performance' | 'leads' | 'pending' | 'today' | 'upcoming' | 'attendance' | 'requirements' | 'inventory' | 'activity_logs' | 'deleted_leads';
@@ -48,6 +55,7 @@ export default function App() {
   const isContentRoute = pathname.startsWith('/blog/') || pathname.startsWith('/city/') || pathname.startsWith('/money/') || pathname.startsWith('/compare/');
   const isBlogsRoute = pathname === '/blogs' || pathname === '/blog';
   const isFeaturesRoute = pathname === '/features' || pathname === '/feature';
+  const isLegalRoute = pathname.startsWith('/legal/');
   const [user, setUser] = useState<User | null>(null);
   const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile' | 'tools' | 'platform'>('dashboard');
   const [activeAnnouncements, setActiveAnnouncements] = useState<PlatformAnnouncement[]>([]);
@@ -355,6 +363,15 @@ export default function App() {
 
   if (isFeaturesRoute) {
     return <PublicFeaturesPage />;
+  }
+
+  if (isLegalRoute) {
+    if (pathname === '/legal/privacy-policy') return <PrivacyPolicy />;
+    if (pathname === '/legal/terms-of-service') return <TermsOfService />;
+    if (pathname === '/legal/refund-cancellation') return <RefundPolicy />;
+    if (pathname === '/legal/cookie-policy') return <CookiePolicy />;
+    if (pathname === '/legal/disclaimer') return <Disclaimer />;
+    if (pathname === '/legal/acceptable-use') return <AcceptableUse />;
   }
 
   if (isPublicHeroRoute && !user) {

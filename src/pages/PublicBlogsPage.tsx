@@ -1,65 +1,58 @@
 import { useReveal } from "@/hooks/useReveal";
-import { Button } from "@/components/ui/button";
-import { Phone, Mail, MapPin } from "lucide-react";
 import { PublicHeroBlogsSection } from "../components/PublicHeroBlogsSection";
 import { PublicHeader } from "../components/PublicHeader";
+import { PublicFooter } from "../components/PublicFooter";
 
 const PublicBlogsPage = () => {
   useReveal();
 
   return (
-    <div className="min-h-screen bg-background text-foreground overflow-x-hidden flex flex-col">
-      {/* NAV */}
+    <div className="min-h-screen bg-background text-foreground overflow-x-hidden flex flex-col font-sans">
       <PublicHeader />
 
-      {/* MAIN CONTENT */}
-      <main className="flex-1 pt-24 bg-white relative">
-        <PublicHeroBlogsSection />
+      <main className="flex-1 bg-white relative">
+        {/* Blogs Hero Banner */}
+        <section className="relative pt-32 pb-24 lg:pt-40 lg:pb-32 bg-[#0B1021] text-white overflow-hidden">
+          {/* Background Elements */}
+          <div className="absolute inset-0 z-0">
+            <div className="absolute inset-0 bg-gradient-to-b from-blue-900/20 to-transparent" />
+            <div className="absolute top-0 right-0 w-1/2 h-full bg-gradient-to-l from-blue-600/10 to-transparent blur-3xl transform translate-x-1/2" />
+            <div className="absolute bottom-0 left-0 w-1/2 h-full bg-gradient-to-t from-teal-500/10 to-transparent blur-3xl transform -translate-x-1/2" />
+            
+            {/* Grid Pattern */}
+            <div 
+              className="absolute inset-0 opacity-[0.03]" 
+              style={{
+                backgroundImage: 'linear-gradient(rgba(255, 255, 255, 1) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 1) 1px, transparent 1px)',
+                backgroundSize: '40px 40px'
+              }}
+            />
+          </div>
+
+          <div className="max-w-7xl mx-auto px-6 relative z-10 text-center">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-blue-300 text-sm font-medium mb-6 reveal">
+              <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+              Latest Insights & Resources
+            </div>
+            
+            <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold mb-6 tracking-tight reveal" style={{ transitionDelay: "100ms" }}>
+              Stay Ahead in <br className="hidden md:block" />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-400">Real Estate</span>
+            </h1>
+            
+            <p className="text-lg md:text-xl text-white/60 max-w-2xl mx-auto mb-10 reveal" style={{ transitionDelay: "200ms" }}>
+              Expert advice, industry trends, and practical guides to help you scale your property business with Estate Plus CRM.
+            </p>
+          </div>
+        </section>
+
+        {/* The Blog Grid Section */}
+        <div className="bg-gray-50 pb-20">
+          <PublicHeroBlogsSection />
+        </div>
       </main>
 
-      {/* FOOTER */}
-      <footer className="bg-secondary text-secondary-foreground py-14">
-        <div className="max-w-7xl mx-auto px-6 grid md:grid-cols-4 gap-10">
-          <div>
-            <div className="inline-flex items-center rounded-2xl bg-white px-3 py-2 mb-4 shadow-[0_12px_28px_rgba(0,0,0,0.22)] ring-1 ring-white/20">
-              <span className="rounded-xl bg-gradient-to-br from-white via-emerald-50 to-white p-1.5">
-                <img
-                  src="/logo.jpg"
-                  alt="Estate Plus"
-                  className="h-12 w-auto rounded-lg object-contain"
-                />
-              </span>
-            </div>
-            <p className="text-sm text-white/60">Simplifying Real Estate Operations through Technology.</p>
-          </div>
-          <div>
-            <h4 className="font-bold mb-4">Product</h4>
-            <ul className="space-y-2 text-sm text-white/60">
-              <li>Core CRM</li><li>GrowthX</li><li>Inventory</li><li>Reporting</li>
-            </ul>
-          </div>
-          <div>
-            <h4 className="font-bold mb-4">Company</h4>
-            <ul className="space-y-2 text-sm text-white/60">
-              <li>About</li><li>Use Cases</li><li>Contact</li>
-            </ul>
-          </div>
-          <div>
-            <h4 className="font-bold mb-4">Contact</h4>
-            <ul className="space-y-3 text-sm text-white/60">
-              <li className="flex items-center gap-2"><Phone className="w-4 h-4 text-primary-glow" /> 8504899720</li>
-              <li className="flex items-center gap-2">
-                <Mail className="w-4 h-4 text-primary-glow" />
-                <a href="mailto:growth@estatepluscrm.in" className="hover:text-white transition">growth@estatepluscrm.in</a>
-              </li>
-              <li className="flex items-center gap-2"><MapPin className="w-4 h-4 text-primary-glow" /> India</li>
-            </ul>
-          </div>
-        </div>
-        <div className="max-w-7xl mx-auto px-6 mt-10 pt-6 border-t border-white/10 text-xs text-white/50 text-center">
-          © {new Date().getFullYear()} Estate Plus. All rights reserved.
-        </div>
-      </footer>
+      <PublicFooter />
     </div>
   );
 };
