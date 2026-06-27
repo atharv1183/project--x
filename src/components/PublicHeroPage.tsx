@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import heroImg from "@/assets/hero-illustration.png";
 import growthImg from "@/assets/growth-illustration.png";
-import { PublicHeroBlogsSection } from "./PublicHeroBlogsSection";
+import { PublicHeader } from "./PublicHeader";
 
 const stats = [
   { label: "Leads Managed", value: "50,000+", icon: Users },
@@ -89,27 +89,7 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background text-foreground overflow-x-hidden">
       {/* NAV */}
-      <header className="fixed top-0 inset-x-0 z-50 glass">
-        <nav className="max-w-7xl mx-auto flex items-center justify-between px-6 py-4">
-          <a href="#top" className="flex items-center transition-transform duration-300 hover:-translate-y-0.5">
-            <img
-              src="/logo.jpg"
-              alt="Estate Plus"
-              className="h-14 w-auto rounded-lg object-contain brightness-125 contrast-125 saturate-150 drop-shadow-[0_10px_18px_rgba(16,185,129,0.18)]"
-            />
-          </a>
-          <div className="hidden md:flex gap-8 text-sm font-medium text-muted-foreground">
-            <a href="#features" className="hover:text-primary transition">Features</a>
-            <a href="#stats" className="hover:text-primary transition">Impact</a>
-            <a href="#usecases" className="hover:text-primary transition">Use Cases</a>
-            <a href="#pricing" className="hover:text-primary transition">Pricing</a>
-            <a href="#blogs" className="hover:text-primary transition">Blogs</a>
-          </div>
-          <Button className="bg-gradient-primary hover:opacity-90 shadow-elegant" onClick={() => { window.location.href = "/login"; }}>
-            Login
-          </Button>
-        </nav>
-      </header>
+      <PublicHeader />
 
       {/* HERO */}
       <section id="top" className="relative pt-32 pb-24 bg-gradient-soft overflow-hidden">
@@ -372,9 +352,6 @@ const Index = () => {
           </div>
         </div>
       </section>
-
-      {/* BLOGS */}
-      <PublicHeroBlogsSection />
 
       {/* CTA */}
       <section className="py-24 relative">
