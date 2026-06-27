@@ -18,7 +18,7 @@ export const PublicHeroBlogsSection = () => {
     return blogs.filter(b => !b.featured && b.category === activeCategory);
   }, [blogs, activeCategory]);
 
-  const [visibleCount, setVisibleCount] = useState(4);
+  const [visibleCount, setVisibleCount] = useState(9);
   const visibleBlogs = useMemo(() => filteredBlogs.slice(0, visibleCount), [filteredBlogs, visibleCount]);
 
   const featuredBlogs = useMemo(() => blogs.filter(b => b.featured), [blogs]);
@@ -48,7 +48,7 @@ export const PublicHeroBlogsSection = () => {
         <div className="flex flex-col lg:flex-row gap-8">
           
           {/* Left Navigation */}
-          <div className="lg:w-1/5 shrink-0">
+          <div className="lg:w-48 shrink-0">
             <h3 className="text-xl font-bold mb-4 hidden lg:block">Categories</h3>
             <div className="flex lg:flex-col gap-2 overflow-x-auto pb-4 lg:pb-0 scrollbar-hide">
               {categories.map((cat) => (
@@ -68,8 +68,8 @@ export const PublicHeroBlogsSection = () => {
           </div>
 
           {/* Main Grid */}
-          <div className="lg:w-2/5">
-            <div className="grid sm:grid-cols-2 gap-6">
+          <div className="flex-1">
+            <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-6">
               {visibleBlogs.map((blog) => (
                 <a key={blog.slug} href={`/blog/${blog.slug}`} className="group block">
                   <Card className="h-full border border-gray-100 overflow-hidden hover:shadow-lg transition-all duration-300 hover:-translate-y-1 bg-white flex flex-col">
@@ -110,7 +110,7 @@ export const PublicHeroBlogsSection = () => {
             {visibleCount < filteredBlogs.length && (
               <div className="mt-10 flex justify-center">
                 <Button 
-                  onClick={() => setVisibleCount(prev => prev + 4)}
+                  onClick={() => setVisibleCount(prev => prev + 9)}
                   className="bg-blue-100 text-blue-700 hover:bg-blue-200 font-bold px-8"
                 >
                   LOAD MORE
@@ -120,7 +120,7 @@ export const PublicHeroBlogsSection = () => {
           </div>
 
           {/* Right Featured Section */}
-          <div className="lg:w-2/5 flex flex-col gap-6">
+          <div className="lg:w-[320px] xl:w-[380px] shrink-0 flex flex-col gap-6">
             {mainFeatured && (
               <a href={`/blog/${mainFeatured.slug}`} className="block group">
                 <div className="relative rounded-2xl overflow-hidden bg-blue-600 text-white h-full min-h-[320px] p-8 flex flex-col justify-center">
