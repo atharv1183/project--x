@@ -4,8 +4,62 @@ const admin = require('firebase-admin');
 admin.initializeApp();
 const db = admin.firestore();
 
+function sanitizeId(id) {
+  if (typeof id !== 'string') {
+    throw new HttpsError('invalid-argument', 'ID must be a string.');
+  }
+  const clean = id.trim();
+  if (clean.includes('/') || clean.includes('..') || clean.includes('\0')) {
+    throw new HttpsError('invalid-argument', 'Invalid characters in ID.');
+  }
+  if (clean.length === 0 || clean.length > 128) {
+    throw new HttpsError('invalid-argument', 'ID length must be between 1 and 128 characters.');
+  }
+  return clean;
+}
+
+function validateGeneralString(val, minLen = 1, maxLen = 1000) {
+  if (typeof val !== 'string') {
+    throw new HttpsError('invalid-argument', 'Value must be a string.');
+  }
+  const clean = val.trim();
+  if (clean.length < minLen || clean.length > maxLen) {
+    throw new HttpsError('invalid-argument', `Length must be between ${minLen} and ${maxLen} characters.`);
+  }
+  if (/[\u0000-\u001F\u007F-\u009F]/.test(clean)) {
+    throw new HttpsError('invalid-argument', 'Value contains invalid control characters.');
+  }
+  return clean;
+}
+
+function validatePhone(phone) {
+  if (typeof phone !== 'string') {
+    throw new HttpsError('invalid-argument', 'Phone must be a string.');
+  }
+  const clean = phone.replace(/\D/g, '');
+  if (!/^\d{10,15}$/.test(clean)) {
+    throw new HttpsError('invalid-argument', 'Phone number must be between 10 and 15 digits.');
+  }
+  return clean;
+}
+
+function validateName(name) {
+  return validateGeneralString(name, 1, 100);
+}
+
+const ALLOWED_ROLES = ['super_admin', 'admin', 'client_admin', 'manager', 'employee', 'suspended', 'deleted'];
+function validateRole(role) {
+  if (typeof role !== 'string') {
+    throw new HttpsError('invalid-argument', 'Role must be a string.');
+  }
+  if (!ALLOWED_ROLES.includes(role)) {
+    throw new HttpsError('invalid-argument', 'Invalid role specified.');
+  }
+  return role;
+}
+
 async function getUserRole(uid) {
-  const snap = await db.collection('users').doc(uid).get();
+  const snap = await db.collection('users').doc(sanitizeId(uid)).get();
   if (!snap.exists) return null;
   return snap.data().role || null;
 }
@@ -19,12 +73,11 @@ async function writeAuditLog(payload) {
 
 exports.startImpersonationSession = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
-  const actorUid = request.auth.uid;
+  const actorUid = sanitizeId(request.auth.uid);
   const actorRole = await getUserRole(actorUid);
   if (!['super_admin', 'admin'].includes(actorRole || '')) throw new HttpsError('permission-denied', 'Super admin only.');
 
-  const clientId = String(request.data?.clientId || '').trim();
-  if (!clientId) throw new HttpsError('invalid-argument', 'clientId is required.');
+  const clientId = sanitizeId(request.data?.clientId);
 
   const clientDoc = await db.collection('platformClients').doc(clientId).get();
   if (!clientDoc.exists) throw new HttpsError('not-found', 'Client not found.');
@@ -69,11 +122,12 @@ exports.startImpersonationSession = onCall(async (request) => {
 
 exports.endImpersonationSession = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
-  const actorUid = request.auth.uid;
+  const actorUid = sanitizeId(request.auth.uid);
   const actorRole = await getUserRole(actorUid);
   if (!['super_admin', 'admin'].includes(actorRole || '')) throw new HttpsError('permission-denied', 'Super admin only.');
 
-  const clientId = String(request.data?.clientId || '').trim();
+  const rawClientId = request.data?.clientId;
+  const clientId = rawClientId ? sanitizeId(rawClientId) : null;
   await writeAuditLog({
     action: 'impersonation_ended',
     actorId: actorUid,
@@ -88,12 +142,11 @@ exports.endImpersonationSession = onCall(async (request) => {
 
 exports.forceLogoutUser = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
-  const actorUid = request.auth.uid;
+  const actorUid = sanitizeId(request.auth.uid);
   const actorRole = await getUserRole(actorUid);
   if (!['super_admin', 'admin'].includes(actorRole || '')) throw new HttpsError('permission-denied', 'Super admin only.');
 
-  const targetUid = String(request.data?.targetUid || '').trim();
-  if (!targetUid) throw new HttpsError('invalid-argument', 'targetUid is required.');
+  const targetUid = sanitizeId(request.data?.targetUid);
 
   await admin.auth().revokeRefreshTokens(targetUid);
   await db.collection('sessionRevocations').add({
@@ -118,16 +171,15 @@ exports.forceLogoutUser = onCall(async (request) => {
 
 exports.resetUserPassword = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
-  const actorUid = request.auth.uid;
+  const actorUid = sanitizeId(request.auth.uid);
   const actorRole = await getUserRole(actorUid);
   if (!['super_admin', 'admin', 'manager'].includes(actorRole || '')) {
     throw new HttpsError('permission-denied', 'Only admin/manager can reset passwords.');
   }
 
-  const targetUid = String(request.data?.targetUid || '').trim();
-  const targetPhone = String(request.data?.targetPhone || '').replace(/\D/g, '');
-  const requestedPassword = String(request.data?.newPassword || '').trim();
-  if (!targetUid) throw new HttpsError('invalid-argument', 'targetUid is required.');
+  const targetUid = sanitizeId(request.data?.targetUid);
+  const targetPhone = request.data?.targetPhone ? validatePhone(request.data.targetPhone) : '';
+  const requestedPassword = request.data?.newPassword ? validateGeneralString(request.data.newPassword, 8, 100) : '';
 
   const fallbackPassword = targetPhone || '';
   const newPassword = requestedPassword || fallbackPassword;
@@ -179,35 +231,35 @@ async function resolveActorClientId(actorUid, actor, authEmail) {
 exports.provisionTeamMember = onCall({ cors: true, region: 'us-central1' }, async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
 
-  const actorUid = request.auth.uid;
+  const actorUid = sanitizeId(request.auth.uid);
   const actorSnap = await db.collection('users').doc(actorUid).get();
   if (!actorSnap.exists) throw new HttpsError('permission-denied', 'User profile not found.');
 
   const actor = actorSnap.data() || {};
-  const actorRole = String(actor.role || '');
+  const actorRole = validateRole(actor.role);
   const isAdminLike = ['super_admin', 'admin', 'client_admin', 'manager'].includes(actorRole);
   if (!isAdminLike) throw new HttpsError('permission-denied', 'Only admin roles can add team members.');
 
-  const name = String(request.data?.name || '').trim();
-  const phone = String(request.data?.phone || '').replace(/\D/g, '');
-  const memberRole = request.data?.role === 'manager' ? 'manager' : 'employee';
-  const managerId = String(request.data?.managerId || '').trim() || null;
-  const managerName = String(request.data?.managerName || '').trim() || null;
-  const clientName = String(request.data?.clientName || actor.clientName || '').trim() || null;
+  const name = validateName(request.data?.name);
+  const phone = validatePhone(request.data?.phone);
+  const requestedRole = request.data?.role ? validateRole(request.data.role) : 'employee';
+  const memberRole = requestedRole === 'manager' ? 'manager' : 'employee';
+  const managerId = request.data?.managerId ? sanitizeId(request.data.managerId) : null;
+  const managerName = request.data?.managerName ? validateName(request.data.managerName) : null;
+  const clientName = request.data?.clientName ? validateName(request.data.clientName) : (actor.clientName ? validateName(actor.clientName) : null);
 
-  if (!name) throw new HttpsError('invalid-argument', 'Member name is required.');
-  if (phone.length < 10 || phone.length > 15) {
-    throw new HttpsError('invalid-argument', 'Enter a valid mobile number (10 to 15 digits).');
-  }
   if (memberRole === 'manager' && !['super_admin', 'admin', 'client_admin'].includes(actorRole)) {
     throw new HttpsError('permission-denied', 'Only admin can add managers.');
   }
 
   let clientId = '';
   if (actorRole === 'super_admin') {
-    clientId = String(request.data?.clientId || actor.clientId || '').trim();
+    clientId = sanitizeId(request.data?.clientId || actor.clientId);
   } else {
     clientId = await resolveActorClientId(actorUid, actor, request.auth.token.email || '');
+    if (clientId) {
+      clientId = sanitizeId(clientId);
+    }
     if (!clientId) {
       throw new HttpsError('failed-precondition', 'Company mapping missing for your account. Please contact super admin.');
     }
@@ -355,25 +407,21 @@ exports.createInventoryListing = onCall(async (request) => {
   const payload = (input.payload && typeof input.payload === 'object') ? input.payload : null;
   if (!payload) throw new HttpsError('invalid-argument', 'payload is required.');
 
-  const title = String(payload.title || '').trim();
-  const location = String(payload.location || '').trim();
-  const type = String(payload.type || '').trim();
-  const status = String(payload.status || '').trim();
-  const submitterId = String(payload.submitterId || '').trim();
-  const submitterName = String(payload.submitterName || '').trim();
-  const clientId = String(payload.clientId || '').trim();
-  const clientName = String(payload.clientName || '').trim();
+  const title = validateGeneralString(payload.title, 1, 200);
+  const location = validateGeneralString(payload.location, 1, 200);
+  const type = validateGeneralString(payload.type, 1, 100);
+  const status = validateRole(payload.status);
+  const submitterId = sanitizeId(payload.submitterId);
+  const submitterName = payload.submitterName ? validateName(payload.submitterName) : '';
+  const clientId = sanitizeId(payload.clientId);
+  const clientName = payload.clientName ? validateName(payload.clientName) : '';
 
-  if (!title || !location || !type) {
-    throw new HttpsError('invalid-argument', 'title, location and type are required.');
-  }
   if (!['draft', 'pending_approval', 'approved', 'rejected'].includes(status)) {
     throw new HttpsError('invalid-argument', 'Invalid status.');
   }
-  if (!submitterId || submitterId !== uid) {
+  if (submitterId !== uid) {
     throw new HttpsError('permission-denied', 'submitterId mismatch.');
   }
-  if (!clientId) throw new HttpsError('invalid-argument', 'clientId is required.');
   if (role !== 'super_admin' && clientId !== userClientId) {
     throw new HttpsError('permission-denied', 'Cross-company create is not allowed.');
   }

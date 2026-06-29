@@ -19,6 +19,36 @@ import firebaseConfig from '../../firebase-applet-config.json';
 
 type MemberRole = 'employee' | 'manager';
 
+export function sanitizeId(id: string): string {
+  const clean = id.trim();
+  if (clean.includes('/') || clean.includes('..') || clean.includes('\0')) {
+    throw new Error('Invalid characters in ID.');
+  }
+  if (clean.length === 0 || clean.length > 128) {
+    throw new Error('ID length must be between 1 and 128 characters.');
+  }
+  return clean;
+}
+
+export function validatePhone(phone: string): string {
+  const clean = phone.replace(/\D/g, '');
+  if (!/^\d{10,15}$/.test(clean)) {
+    throw new Error('Phone number must be between 10 and 15 digits.');
+  }
+  return clean;
+}
+
+export function validateName(name: string): string {
+  const clean = name.trim();
+  if (clean.length === 0 || clean.length > 100) {
+    throw new Error('Name must be between 1 and 100 characters.');
+  }
+  if (/[\u0000-\u001F\u007F-\u009F]/.test(clean)) {
+    throw new Error('Name contains invalid control characters.');
+  }
+  return clean;
+}
+
 export function isCallableUnavailable(error: unknown): boolean {
   const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: string }).code) : '';
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
@@ -165,12 +195,22 @@ export async function provisionTeamMemberLocally(params: {
     managerId,
     managerName,
   } = params;
-  const email = `${phone}@estatepulse.com`;
-  const initialPassword = phone;
 
-  await syncTenantMapping(db, actorUid, tenantClientId, clientName);
+  // Validate and sanitize inputs client-side
+  const sanitizedActorUid = sanitizeId(actorUid);
+  const sanitizedTenantClientId = sanitizeId(tenantClientId);
+  const validatedName = validateName(name);
+  const validatedPhone = validatePhone(phone);
+  const sanitizedManagerId = managerId ? sanitizeId(managerId) : null;
+  const validatedManagerName = managerName ? validateName(managerName) : null;
+  const validatedClientName = clientName ? validateName(clientName) : null;
 
-  const clientSnap = await getDoc(doc(db, 'platformClients', tenantClientId));
+  const email = `${validatedPhone}@estatepulse.com`;
+  const initialPassword = validatedPhone;
+
+  await syncTenantMapping(db, sanitizedActorUid, sanitizedTenantClientId, validatedClientName);
+
+  const clientSnap = await getDoc(doc(db, 'platformClients', sanitizedTenantClientId));
   if (!clientSnap.exists()) {
     throw Object.assign(new Error('Company record not found. Please contact super admin.'), {
       code: 'failed-precondition',
@@ -178,7 +218,7 @@ export async function provisionTeamMemberLocally(params: {
   }
   const clientData = clientSnap.data() as { adminUid?: string; adminEmail?: string };
   const ownsClient =
-    clientData.adminUid === actorUid ||
+    clientData.adminUid === sanitizedActorUid ||
     (typeof clientData.adminEmail === 'string' &&
       typeof actorEmail === 'string' &&
       clientData.adminEmail === actorEmail);
@@ -192,8 +232,8 @@ export async function provisionTeamMemberLocally(params: {
   const existingUsersSnapshot = await getDocs(
     query(
       collection(db, 'users'),
-      where('phone', '==', phone),
-      where('clientId', '==', tenantClientId),
+      where('phone', '==', validatedPhone),
+      where('clientId', '==', sanitizedTenantClientId),
       limit(1),
     ),
   );
@@ -208,24 +248,24 @@ export async function provisionTeamMemberLocally(params: {
 
     const batch = writeBatch(db);
     batch.update(existingUserDoc.ref, {
-      name,
+      name: validatedName,
       email,
       role: memberRole,
-      phone,
-      clientId: tenantClientId,
-      clientName,
-      managerId: memberRole === 'employee' ? managerId : null,
-      managerName: memberRole === 'employee' ? managerName : null,
+      phone: validatedPhone,
+      clientId: sanitizedTenantClientId,
+      clientName: validatedClientName,
+      managerId: memberRole === 'employee' ? sanitizedManagerId : null,
+      managerName: memberRole === 'employee' ? validatedManagerName : null,
       updatedAt: serverTimestamp(),
     });
     if (memberRole === 'employee') {
       batch.set(doc(db, 'employeeDirectory', existingUserDoc.id), {
-        name,
-        phone,
+        name: validatedName,
+        phone: validatedPhone,
         role: 'employee',
-        clientId: tenantClientId,
-        managerId,
-        managerName,
+        clientId: sanitizedTenantClientId,
+        managerId: sanitizedManagerId,
+        managerName: validatedManagerName,
         updatedAt: serverTimestamp(),
       });
     } else {
@@ -261,14 +301,14 @@ export async function provisionTeamMemberLocally(params: {
     idTokenToClean = idToken;
 
     const userDoc = {
-      name,
+      name: validatedName,
       email,
       role: memberRole,
-      phone,
-      clientId: tenantClientId,
-      clientName,
-      managerId: memberRole === 'employee' ? managerId : null,
-      managerName: memberRole === 'employee' ? managerName : null,
+      phone: validatedPhone,
+      clientId: sanitizedTenantClientId,
+      clientName: validatedClientName,
+      managerId: memberRole === 'employee' ? sanitizedManagerId : null,
+      managerName: memberRole === 'employee' ? validatedManagerName : null,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -293,12 +333,12 @@ export async function provisionTeamMemberLocally(params: {
         collectionDocumentPath: `employeeDirectory/${newUid}`,
       });
       await setDoc(doc(db, 'employeeDirectory', newUid), {
-        name,
-        phone,
+        name: validatedName,
+        phone: validatedPhone,
         role: 'employee',
-        clientId: tenantClientId,
-        managerId,
-        managerName,
+        clientId: sanitizedTenantClientId,
+        managerId: sanitizedManagerId,
+        managerName: validatedManagerName,
         updatedAt: serverTimestamp(),
       });
       console.log('[PROVISION DEBUG] Firestore Write (New User - employeeDirectory) Success:', {

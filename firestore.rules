@@ -60,7 +60,7 @@ service cloud.firestore {
     function requesterClientId() {
       let userClientId = exists(/databases/$(database)/documents/users/$(request.auth.uid))
         ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.clientId
-        : null;
+        : '';
       return userClientId is string && userClientId.size() > 0
         ? userClientId
         : (
@@ -68,7 +68,7 @@ service cloud.firestore {
             && get(/databases/$(database)/documents/clientAdmins/$(request.auth.uid)).data.clientId is string
             && get(/databases/$(database)/documents/clientAdmins/$(request.auth.uid)).data.clientId.size() > 0
             ? get(/databases/$(database)/documents/clientAdmins/$(request.auth.uid)).data.clientId
-            : null
+            : ''
           );
     }
 
@@ -264,8 +264,8 @@ service cloud.firestore {
           || resource.data.status == 'approved'
           || resource.data.submitterId == request.auth.uid
         )
-      ) || (resource.data.visibilityScope == 'all' && resource.data.status == 'approved');
-      allow get: if isSuperAdmin() || (isSignedIn() && (isSameClient(resource.data) || isSameClientBySubmitter(resource.data))) || (resource.data.status == 'approved');
+      ) || (isSignedIn() && resource.data.visibilityScope == 'all' && resource.data.status == 'approved');
+      allow get: if isSuperAdmin() || (isSignedIn() && (isSameClient(resource.data) || isSameClientBySubmitter(resource.data))) || (isSignedIn() && resource.data.status == 'approved');
       allow create: if isSignedIn()
         && isValidInventory(request.resource.data)
         && (
@@ -444,11 +444,9 @@ service cloud.firestore {
 
     // Deleted Leads Collection
     match /deletedLeads/{leadId} {
-      allow read, write: if isSignedIn()
-        && (isSuperAdmin() || (
-             (resource == null || isSameClient(resource.data)) &&
-             (request == null || request.resource == null || isSameClient(request.resource.data))
-           ));
+      allow read, delete: if isSignedIn() && (isSuperAdmin() || isSameClient(resource.data));
+      allow create: if isSignedIn() && (isSuperAdmin() || isSameClient(request.resource.data));
+      allow update: if isSignedIn() && (isSuperAdmin() || (isSameClient(resource.data) && isSameClient(request.resource.data)));
     }
 
     // Followups
@@ -496,7 +494,8 @@ service cloud.firestore {
     }
 
     match /clientBranding/{clientId} {
-      allow read: if true;
+      allow get: if true;
+      allow list: if isSignedIn();
       allow create, update: if isSuperAdmin()
         || (
           isAdmin()
@@ -534,12 +533,14 @@ service cloud.firestore {
 
     match /paymentTransactions/{docId} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn();
+      allow create, update: if isPlatformAdmin() || isAdmin();
       allow delete: if isPlatformAdmin();
     }
 
     match /demoRequests/{docId} {
-      allow create: if isValidDemoRequest(request.resource.data);
+      allow create: if isValidDemoRequest(request.resource.data)
+        && request.resource.data.submittedAt == request.time
+        && request.resource.data.keys().size() <= 10;
       allow read: if isSuperAdmin();
       allow update: if isSuperAdmin()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'updatedBy'])
@@ -655,14 +656,33 @@ service cloud.firestore {
 
     // Support tickets
     match /supportTickets/{ticketId} {
-      allow read: if isSignedIn() && (isAdminLike() || resource.data.userId == request.auth.uid);
+      allow read: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        (isAdminLike() && (
+          isSuperAdmin() ||
+          (resource.data.companyId is string && requesterClientId() is string && resource.data.companyId == requesterClientId()) ||
+          (resource.data.clientId is string && requesterClientId() is string && resource.data.clientId == requesterClientId())
+        ))
+      );
       allow create: if isSignedIn()
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.keys().hasAll(['userId', 'title', 'message', 'status', 'createdAt']);
       allow update: if isSignedIn() && (
-        isAdminLike() || resource.data.userId == request.auth.uid
+        resource.data.userId == request.auth.uid ||
+        (isAdminLike() && (
+          isSuperAdmin() ||
+          (resource.data.companyId is string && requesterClientId() is string && resource.data.companyId == requesterClientId()) ||
+          (resource.data.clientId is string && requesterClientId() is string && resource.data.clientId == requesterClientId())
+        ))
       );
-      allow delete: if isAdminLike() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow delete: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        (isAdminLike() && (
+          isSuperAdmin() ||
+          (resource.data.companyId is string && requesterClientId() is string && resource.data.companyId == requesterClientId()) ||
+          (resource.data.clientId is string && requesterClientId() is string && resource.data.clientId == requesterClientId())
+        ))
+      );
     }
   }
 }

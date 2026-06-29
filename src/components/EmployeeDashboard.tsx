@@ -5,6 +5,7 @@ import {
   query, 
   where, 
   getDocs,
+  getDoc,
   limit,
   onSnapshot, 
   doc, 
@@ -874,6 +875,18 @@ export default function EmployeeDashboard({
       duplicateAddedSnapshot.docs.find(doc => !doc.data().deletedAt);
     if (activeDuplicate) {
       const existingLead = activeDuplicate.data() as Lead;
+      if (existingLead.assignedTo !== user.uid) {
+        let assigneeName = 'another executive';
+        try {
+          const empSnap = await getDoc(doc(db, 'employeeDirectory', existingLead.assignedTo));
+          if (empSnap.exists()) {
+            assigneeName = empSnap.data().name || assigneeName;
+          }
+        } catch (e) {
+          console.error('Failed to fetch assignee name:', e);
+        }
+        return alert(`Lead with mobile ${normalizedPhone} already exists in the company and is currently assigned to ${assigneeName}.`);
+      }
       return alert(`Lead with mobile ${normalizedPhone} already exists in your records (${existingLead.name || 'Unknown'}).`);
     }
 
