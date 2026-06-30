@@ -10,6 +10,7 @@ import heroImg from "@/assets/hero-illustration.png";
 import growthImg from "@/assets/growth-illustration.png";
 import { PublicHeader } from "./PublicHeader";
 import { PublicFooter } from "./PublicFooter";
+import { PricingSection } from "./PricingSection";
 
 const stats = [
   { label: "Leads Managed", value: "50,000+", icon: Users },
@@ -295,64 +296,7 @@ const Index = () => {
       </section>
 
       {/* PRICING */}
-      <section id="pricing" className="py-28 relative">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="text-center mb-16">
-            <p className="reveal text-sm font-semibold uppercase tracking-widest text-primary mb-3">Pricing</p>
-            <h2 className="reveal-blur text-4xl md:text-5xl font-bold">Choose the plan that fits</h2>
-          </div>
-          <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
-            {plans.map((p, i) => (
-              <Card
-                key={p.name}
-                style={{ ["--i" as any]: i }}
-                className={`reveal relative p-8 border-2 transition-all duration-500 hover:-translate-y-2 ${
-                  p.featured
-                    ? "border-primary bg-gradient-to-br from-primary/5 to-accent/10 shadow-elegant"
-                    : "hover:border-primary/40 hover:shadow-card"
-                }`}
-              >
-                {p.featured && (
-                  <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-gradient-accent text-accent-foreground text-xs font-bold uppercase tracking-wider shadow-glow">
-                    Most Popular
-                  </div>
-                )}
-                <h3 className="text-2xl font-bold mb-1">{p.name}</h3>
-                <p className="text-sm text-muted-foreground mb-6">{p.tagline}</p>
-                <div className="grid grid-cols-3 gap-3 mb-6">
-                  {[
-                    { label: "Quarterly", value: p.price.q },
-                    { label: "Half-Yearly", value: p.price.h },
-                    { label: "Annually", value: p.price.y, hl: true },
-                  ].map((t) => (
-                    <div key={t.label} className={`rounded-xl p-3 text-center ${t.hl ? "bg-gradient-primary text-primary-foreground" : "bg-muted"}`}>
-                      <div className="text-xs opacity-80">{t.label}</div>
-                      <div className="font-bold text-sm md:text-base">{t.value}</div>
-                    </div>
-                  ))}
-                </div>
-                <ul className="space-y-3 mb-8">
-                  {p.features.map((f) => (
-                    <li key={f} className="flex gap-3 text-sm">
-                      <CheckCircle2 className="w-5 h-5 text-primary shrink-0" /> {f}
-                    </li>
-                  ))}
-                </ul>
-                <Button
-                  size="lg"
-                  className={`w-full ${p.featured ? "bg-gradient-primary hover:opacity-90 shadow-elegant" : ""}`}
-                  variant={p.featured ? "default" : "outline"}
-                  onClick={() => {
-                    window.location.href = "/get-started";
-                  }}
-                >
-                  Get Started <ArrowRight />
-                </Button>
-              </Card>
-            ))}
-          </div>
-        </div>
-      </section>
+      <PricingSection />
 
       {/* CTA */}
       <section className="py-24 relative">
