@@ -14,6 +14,7 @@ import AdminDashboard from './components/AdminDashboard';
 import EmployeeDashboard from './components/EmployeeDashboard';
 import ProfilePage from './components/ProfilePage';
 import ToolsPage, { ToolTarget } from './components/ToolsPage';
+import { FloatingContact } from './components/FloatingContact';
 import PublicHeroPage from './components/PublicHeroPage';
 import SuperAdminControlCenter from './components/SuperAdminControlCenter';
 import BookDemo from './pages/BookDemo';
@@ -347,35 +348,69 @@ export default function App() {
   const isPropertyDetailRoute = pathname.startsWith('/p/') || pathname === '/p';
   if (isPropertyDetailRoute) {
     const propertyId = window.location.pathname.split('/').pop() || '';
-    return <PropertyDetailPage propertyId={propertyId} />;
+    return (
+      <>
+        <PropertyDetailPage propertyId={propertyId} />
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isContentRoute) {
     const segments = window.location.pathname.split('/').filter(Boolean);
     const type = segments[0]; // e.g., 'blog'
     const slug = segments[1] || '';
-    return <PublicContentPage type={type} slug={slug} />;
+    return (
+      <>
+        <PublicContentPage type={type as 'blog' | 'city' | 'money' | 'compare'} slug={slug} />
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isBlogsRoute) {
-    return <PublicBlogsPage />;
+    return (
+      <>
+        <PublicBlogsPage />
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isFeaturesRoute) {
-    return <PublicFeaturesPage />;
+    return (
+      <>
+        <PublicFeaturesPage />
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isLegalRoute) {
-    if (pathname === '/legal/privacy-policy') return <PrivacyPolicy />;
-    if (pathname === '/legal/terms-of-service') return <TermsOfService />;
-    if (pathname === '/legal/refund-cancellation') return <RefundPolicy />;
-    if (pathname === '/legal/cookie-policy') return <CookiePolicy />;
-    if (pathname === '/legal/disclaimer') return <Disclaimer />;
-    if (pathname === '/legal/acceptable-use') return <AcceptableUse />;
+    const renderLegal = () => {
+      if (pathname === '/legal/privacy-policy') return <PrivacyPolicy />;
+      if (pathname === '/legal/terms-of-service') return <TermsOfService />;
+      if (pathname === '/legal/refund-cancellation') return <RefundPolicy />;
+      if (pathname === '/legal/cookie-policy') return <CookiePolicy />;
+      if (pathname === '/legal/disclaimer') return <Disclaimer />;
+      if (pathname === '/legal/acceptable-use') return <AcceptableUse />;
+      return null;
+    };
+    return (
+      <>
+        {renderLegal()}
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isPublicHeroRoute && !user) {
-    return <PublicHeroPage />;
+    return (
+      <>
+        <PublicHeroPage />
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isBookDemoRoute) {
