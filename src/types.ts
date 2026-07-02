@@ -299,3 +299,27 @@ export enum OperationType {
   GET = 'get',
   WRITE = 'write',
 }
+
+export interface Blog {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+  imageUrl?: string;
+  authorUid?: string;
+  authorName?: string;
+  createdAt: any;
+  updatedAt: any;
+}
+
+export interface Certificate {
+  id: string;
+  documentNumber: string;
+  name: string;
+  photoUrl?: string;
+  startDate: string;
+  endDate: string;
+  createdAt: any;
+  updatedAt: any;
+  addedByUid?: string;
+}

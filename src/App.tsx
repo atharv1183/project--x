@@ -28,6 +28,8 @@ import RefundPolicy from './pages/legal/RefundPolicy';
 import CookiePolicy from './pages/legal/CookiePolicy';
 import Disclaimer from './pages/legal/Disclaimer';
 import AcceptableUse from './pages/legal/AcceptableUse';
+import VerifyCertificatePage from './pages/VerifyCertificatePage';
+import AboutPage from './pages/AboutPage';
 import { functions } from './lib/firebase';
 import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -56,6 +58,8 @@ export default function App() {
   const isContentRoute = pathname.startsWith('/blog/') || pathname.startsWith('/city/') || pathname.startsWith('/money/') || pathname.startsWith('/compare/');
   const isBlogsRoute = pathname === '/blogs' || pathname === '/blog';
   const isFeaturesRoute = pathname === '/features' || pathname === '/feature';
+  const isAboutRoute = pathname === '/about';
+  const isVerifyCertRoute = pathname === '/verify-certificate' || pathname === '/verify';
   const isLegalRoute = pathname.startsWith('/legal/');
   const [user, setUser] = useState<User | null>(null);
   const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile' | 'tools' | 'platform'>('dashboard');
@@ -208,7 +212,7 @@ export default function App() {
     void initAuth();
 
     return () => unsubscribe();
-  }, [isBookDemoRoute, isPublicHeroRoute, isContentRoute, isBlogsRoute, isFeaturesRoute]);
+  }, [isBookDemoRoute, isPublicHeroRoute, isContentRoute, isBlogsRoute, isFeaturesRoute, isVerifyCertRoute]);
 
   useEffect(() => {
     if (!user) return;
@@ -381,6 +385,24 @@ export default function App() {
     return (
       <>
         <PublicFeaturesPage />
+        <FloatingContact />
+      </>
+    );
+  }
+
+  if (isAboutRoute) {
+    return (
+      <>
+        <AboutPage />
+        <FloatingContact />
+      </>
+    );
+  }
+
+  if (isVerifyCertRoute) {
+    return (
+      <>
+        <VerifyCertificatePage />
         <FloatingContact />
       </>
     );

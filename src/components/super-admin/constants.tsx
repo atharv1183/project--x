@@ -1,4 +1,4 @@
-import { Building2, ClipboardList, CreditCard, DatabaseBackup, LayoutDashboard, Repeat2, Ticket, TimerReset, LucideIcon, Inbox } from 'lucide-react';
+import { Building2, ClipboardList, CreditCard, DatabaseBackup, LayoutDashboard, Repeat2, Ticket, TimerReset, LucideIcon, Inbox, PenTool, Award } from 'lucide-react';
 import { SuperAdminModule } from './types';
 
 export const MODULES: Array<{ id: SuperAdminModule; label: string; icon: LucideIcon }> = [
@@ -10,5 +10,7 @@ export const MODULES: Array<{ id: SuperAdminModule; label: string; icon: LucideI
   { id: 'followups', label: 'Followups', icon: TimerReset },
   { id: 'tickets', label: 'Tickets', icon: Ticket },
   { id: 'demo_requests', label: 'Demo Requests', icon: Inbox },
+  { id: 'blogs', label: 'Blogs', icon: PenTool },
+  { id: 'certificates', label: 'Certificates', icon: Award },
   { id: 'backup_restore', label: 'Backup & Restore (Full Data)', icon: DatabaseBackup },
 ];
