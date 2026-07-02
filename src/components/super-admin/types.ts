@@ -7,6 +7,8 @@ export type SuperAdminModule =
   | 'followups'
   | 'tickets'
   | 'demo_requests'
+  | 'blogs'
+  | 'certificates'
   | 'backup_restore';
 
 export type NewClientCredentials = {

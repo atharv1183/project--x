@@ -94,12 +94,12 @@ export const PublicFooter = () => {
         {/* Brand + Social + Address */}
         <div className="col-span-2 md:col-span-3 lg:col-span-2 space-y-6">
           {/* Logo */}
-          <div className="inline-flex items-center rounded-2xl bg-white px-3 py-2 shadow-[0_12px_28px_rgba(0,0,0,0.22)] ring-1 ring-white/20">
-            <span className="rounded-xl bg-gradient-to-br from-white via-emerald-50 to-white p-1.5">
+          <div className="inline-flex items-center rounded-2xl bg-white px-3 py-2 shadow-[0_12px_28px_rgba(0,0,0,0.22)] ring-1 ring-white/20 shrink-0">
+            <span className="rounded-xl bg-gradient-to-br from-white via-emerald-50 to-white p-1.5 shrink-0 flex items-center justify-center">
               <img
                 src="/logo.jpg"
                 alt="Estate Plus CRM"
-                className="h-12 w-auto rounded-lg object-contain"
+                className="h-14 w-auto min-w-[120px] rounded-lg object-contain shrink-0"
               />
             </span>
           </div>
@@ -181,9 +181,23 @@ export const PublicFooter = () => {
         <div>
           <h4 className="font-bold mb-4">Company</h4>
           <ul className="space-y-2 text-sm text-white/60">
-            <li>About</li>
+            <li>
+              <a href="/about" className="hover:text-white transition">About</a>
+            </li>
             <li>Use Cases</li>
             <li>Contact</li>
+          </ul>
+        </div>
+
+        {/* Careers */}
+        <div>
+          <h4 className="font-bold mb-4">Careers</h4>
+          <ul className="space-y-2 text-sm text-white/60">
+            <li>
+              <a href="/verify-certificate" className="hover:text-white transition flex items-center gap-2">
+                <ChevronRight className="w-4 h-4" /> Verify Certificate
+              </a>
+            </li>
           </ul>
         </div>
 
@@ -237,10 +251,6 @@ export const PublicFooter = () => {
             <li className="flex items-center gap-2">
               <Mail className="w-4 h-4 text-primary-glow shrink-0" />
               <a href="mailto:growth@estatepluscrm.in" className="hover:text-white transition">growth@estatepluscrm.in</a>
-            </li>
-            <li className="flex items-center gap-2">
-              <Mail className="w-4 h-4 text-primary-glow shrink-0" />
-              <a href="mailto:support@estatepluscrm.in" className="hover:text-white transition">support@estatepluscrm.in</a>
             </li>
           </ul>
         </div>

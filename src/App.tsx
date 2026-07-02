@@ -14,6 +14,7 @@ import AdminDashboard from './components/AdminDashboard';
 import EmployeeDashboard from './components/EmployeeDashboard';
 import ProfilePage from './components/ProfilePage';
 import ToolsPage, { ToolTarget } from './components/ToolsPage';
+import { FloatingContact } from './components/FloatingContact';
 import PublicHeroPage from './components/PublicHeroPage';
 import SuperAdminControlCenter from './components/SuperAdminControlCenter';
 import BookDemo from './pages/BookDemo';
@@ -27,6 +28,8 @@ import RefundPolicy from './pages/legal/RefundPolicy';
 import CookiePolicy from './pages/legal/CookiePolicy';
 import Disclaimer from './pages/legal/Disclaimer';
 import AcceptableUse from './pages/legal/AcceptableUse';
+import VerifyCertificatePage from './pages/VerifyCertificatePage';
+import AboutPage from './pages/AboutPage';
 import { functions } from './lib/firebase';
 import { LogOut, Home, ArrowLeft, UserCircle2, Wrench, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -55,6 +58,8 @@ export default function App() {
   const isContentRoute = pathname.startsWith('/blog/') || pathname.startsWith('/city/') || pathname.startsWith('/money/') || pathname.startsWith('/compare/');
   const isBlogsRoute = pathname === '/blogs' || pathname === '/blog';
   const isFeaturesRoute = pathname === '/features' || pathname === '/feature';
+  const isAboutRoute = pathname === '/about';
+  const isVerifyCertRoute = pathname === '/verify-certificate' || pathname === '/verify';
   const isLegalRoute = pathname.startsWith('/legal/');
   const [user, setUser] = useState<User | null>(null);
   const [activeScreen, setActiveScreen] = useState<'dashboard' | 'profile' | 'tools' | 'platform'>('dashboard');
@@ -207,7 +212,7 @@ export default function App() {
     void initAuth();
 
     return () => unsubscribe();
-  }, [isBookDemoRoute, isPublicHeroRoute, isContentRoute, isBlogsRoute, isFeaturesRoute]);
+  }, [isBookDemoRoute, isPublicHeroRoute, isContentRoute, isBlogsRoute, isFeaturesRoute, isVerifyCertRoute]);
 
   useEffect(() => {
     if (!user) return;
@@ -347,35 +352,87 @@ export default function App() {
   const isPropertyDetailRoute = pathname.startsWith('/p/') || pathname === '/p';
   if (isPropertyDetailRoute) {
     const propertyId = window.location.pathname.split('/').pop() || '';
-    return <PropertyDetailPage propertyId={propertyId} />;
+    return (
+      <>
+        <PropertyDetailPage propertyId={propertyId} />
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isContentRoute) {
     const segments = window.location.pathname.split('/').filter(Boolean);
     const type = segments[0]; // e.g., 'blog'
     const slug = segments[1] || '';
-    return <PublicContentPage type={type} slug={slug} />;
+    return (
+      <>
+        <PublicContentPage type={type as 'blog' | 'city' | 'money' | 'compare'} slug={slug} />
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isBlogsRoute) {
-    return <PublicBlogsPage />;
+    return (
+      <>
+        <PublicBlogsPage />
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isFeaturesRoute) {
-    return <PublicFeaturesPage />;
+    return (
+      <>
+        <PublicFeaturesPage />
+        <FloatingContact />
+      </>
+    );
+  }
+
+  if (isAboutRoute) {
+    return (
+      <>
+        <AboutPage />
+        <FloatingContact />
+      </>
+    );
+  }
+
+  if (isVerifyCertRoute) {
+    return (
+      <>
+        <VerifyCertificatePage />
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isLegalRoute) {
-    if (pathname === '/legal/privacy-policy') return <PrivacyPolicy />;
-    if (pathname === '/legal/terms-of-service') return <TermsOfService />;
-    if (pathname === '/legal/refund-cancellation') return <RefundPolicy />;
-    if (pathname === '/legal/cookie-policy') return <CookiePolicy />;
-    if (pathname === '/legal/disclaimer') return <Disclaimer />;
-    if (pathname === '/legal/acceptable-use') return <AcceptableUse />;
+    const renderLegal = () => {
+      if (pathname === '/legal/privacy-policy') return <PrivacyPolicy />;
+      if (pathname === '/legal/terms-of-service') return <TermsOfService />;
+      if (pathname === '/legal/refund-cancellation') return <RefundPolicy />;
+      if (pathname === '/legal/cookie-policy') return <CookiePolicy />;
+      if (pathname === '/legal/disclaimer') return <Disclaimer />;
+      if (pathname === '/legal/acceptable-use') return <AcceptableUse />;
+      return null;
+    };
+    return (
+      <>
+        {renderLegal()}
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isPublicHeroRoute && !user) {
-    return <PublicHeroPage />;
+    return (
+      <>
+        <PublicHeroPage />
+        <FloatingContact />
+      </>
+    );
   }
 
   if (isBookDemoRoute) {

@@ -23,6 +23,8 @@ import { CredentialsBanner } from './super-admin/components/CredentialsBanner';
 import { EditClientPanel } from './super-admin/components/EditClientPanel';
 import { Sidebar } from './super-admin/components/Sidebar';
 import { StatusTable } from './super-admin/components/StatusTable';
+import { BlogManagement } from './super-admin/components/BlogManagement';
+import { CertificateManagement } from './super-admin/components/CertificateManagement';
 import {
   AddClientFormState,
   EditClientFormState,
@@ -1540,6 +1542,14 @@ export default function SuperAdminControlCenter({ user }: Props) {
 
         {module === 'backup_restore' && (
           renderBackupRestore()
+        )}
+
+        {module === 'blogs' && (
+          <BlogManagement user={user} />
+        )}
+
+        {module === 'certificates' && (
+          <CertificateManagement user={user} />
         )}
 
         {showTicketForm && (
