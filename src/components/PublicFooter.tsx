@@ -94,12 +94,12 @@ export const PublicFooter = () => {
         {/* Brand + Social + Address */}
         <div className="col-span-2 md:col-span-3 lg:col-span-2 space-y-6">
           {/* Logo */}
-          <div className="inline-flex items-center rounded-2xl bg-white px-3 py-2 shadow-[0_12px_28px_rgba(0,0,0,0.22)] ring-1 ring-white/20 shrink-0">
-            <span className="rounded-xl bg-gradient-to-br from-white via-emerald-50 to-white p-1.5 shrink-0 flex items-center justify-center">
+          <div className="inline-flex items-center justify-center rounded-2xl bg-white px-3 py-2 shadow-[0_12px_28px_rgba(0,0,0,0.22)] ring-1 ring-white/20 shrink-0">
+            <span className="rounded-xl bg-white p-1.5 flex items-center justify-center shrink-0">
               <img
                 src="/logo.jpg"
                 alt="Estate Plus CRM"
-                className="h-14 w-auto min-w-[120px] rounded-lg object-contain shrink-0"
+                className="h-14 w-auto rounded-lg object-contain block shrink-0 brightness-125 contrast-125 saturate-150 mix-blend-multiply"
               />
             </span>
           </div>
