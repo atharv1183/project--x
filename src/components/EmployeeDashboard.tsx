@@ -53,7 +53,8 @@ import {
   Edit2,
   FileText,
   LayoutGrid,
-  X
+  X,
+  Home
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, isToday, isPast, isFuture, startOfDay, endOfDay } from 'date-fns';
@@ -167,12 +168,70 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 type LeadQueueTab = 'overdue' | 'today' | 'upcoming';
 type EmployeeView = LeadQueueTab | 'followups' | 'performance' | 'leads' | 'attendance' | 'requirements' | 'inventory' | 'transfer_register' | 'activity_logs' | 'pending' | 'deleted_leads';
 
+// Inline password reset component for the profile menu
+function PasswordResetInline({ onDone }: { onDone: () => void }) {
+  const [currentPw, setCurrentPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const handle = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(''); setSuccess('');
+    if (newPw.length < 8) { setError('New password must be at least 8 characters.'); return; }
+    if (newPw !== confirmPw) { setError('Passwords do not match.'); return; }
+    const { currentUser } = auth;
+    if (!currentUser) { setError('Not signed in.'); return; }
+    setLoading(true);
+    try {
+      const { EmailAuthProvider, reauthenticateWithCredential, updatePassword } = await import('firebase/auth');
+      const credential = EmailAuthProvider.credential(currentUser.email!, currentPw);
+      await reauthenticateWithCredential(currentUser, credential);
+      await updatePassword(currentUser, newPw);
+      setSuccess('Password updated!');
+      setCurrentPw(''); setNewPw(''); setConfirmPw('');
+      setTimeout(onDone, 1500);
+    } catch (err: any) {
+      setError(err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-credential' ? 'Current password is incorrect.' : err?.message || 'Failed.');
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <form onSubmit={handle} className="space-y-3">
+      {['Current Password', 'New Password', 'Confirm Password'].map((label, i) => {
+        const vals = [currentPw, newPw, confirmPw];
+        const setters = [setCurrentPw, setNewPw, setConfirmPw];
+        return (
+          <div key={label}>
+            <label className="block text-xs font-bold text-slate-500 mb-1">{label}</label>
+            <input type="password" value={vals[i]} onChange={e => setters[i](e.target.value)}
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-medium outline-none focus:ring-2 focus:ring-blue-200"
+              required minLength={i > 0 ? 8 : 1} />
+          </div>
+        );
+      })}
+      {error && <p className="text-xs text-rose-600 font-semibold">{error}</p>}
+      {success && <p className="text-xs text-green-600 font-semibold">{success}</p>}
+      <div className="flex gap-3 pt-1">
+        <button type="button" onClick={onDone} className="flex-1 py-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-500">Back</button>
+        <button type="submit" disabled={loading} className="flex-1 py-3 rounded-2xl bg-blue-600 text-white text-sm font-bold shadow-lg shadow-blue-200 disabled:opacity-60">
+          {loading ? 'Saving...' : 'Update'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 type EmployeeDashboardProps = {
   user: User;
   brand?: { logoUrl?: string; companyName?: string; tagline?: string };
   backSignal?: number;
   initialView?: EmployeeView;
   initialViewSignal?: number;
+  onOpenProfile?: () => void;
+  onLogout?: () => void;
 };
 
 function getLeadQueueTab(lead: Lead): LeadQueueTab | null {
@@ -191,6 +250,8 @@ export default function EmployeeDashboard({
   backSignal = 0,
   initialView,
   initialViewSignal = 0,
+  onOpenProfile,
+  onLogout,
 }: EmployeeDashboardProps) {
   const [brandLogoFailed, setBrandLogoFailed] = useState(false);
   const tenantClientId = String((user as any).clientId || '');
@@ -199,6 +260,14 @@ export default function EmployeeDashboard({
   const [followupSubTab, setFollowupSubTab] = useState<LeadQueueTab>('today');
   const [leads, setLeads] = useState<Lead[]>([]);
   const [deletedLeads, setDeletedLeads] = useState<Lead[]>([]);
+  
+  const [showAddDrawer, setShowAddDrawer] = useState(false);
+  const [showOtherDrawer, setShowOtherDrawer] = useState(false);
+  const [inventoryFooterMode, setInventoryFooterMode] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
+  const [profileView, setProfileView] = useState<'menu' | 'edit' | 'password'>('menu');
+  const [followupsFooterMode, setFollowupsFooterMode] = useState(false);
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [leadTransfers, setLeadTransfers] = useState<LeadTransfer[]>([]);
   const [selectedLeadIndex, setSelectedLeadIndex] = useState<number | null>(null);
@@ -530,17 +599,24 @@ export default function EmployeeDashboard({
     dealsApproved: leads.filter(l => l.status === 'deal_approved').length
   };
 
-  const employeeTabs: Array<{ id: EmployeeView | 'followups'; icon: any; label: string }> = [
-    { id: 'performance', icon: BarChart3, label: 'Dashboard' },
-    { id: 'leads', icon: Users, label: 'Leads' },
-    { id: 'followups', icon: Clock, label: 'Followups' },
-    { id: 'requirements', icon: FileText, label: 'Needs' },
-    { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
-    { id: 'attendance', icon: History, label: 'Attendance' },
-    { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
-    { id: 'activity_logs', icon: ClipboardList, label: 'Activity Logs' },
-    { id: 'deleted_leads', icon: Trash2, label: 'Deleted Leads' },
-  ];
+  const employeeTabs: Array<{ id: EmployeeView | 'followups'; icon: any; label: string }> = followupsFooterMode
+    ? [
+        { id: 'followups', icon: Clock, label: 'Followups' },
+        { id: 'leads', icon: Users, label: 'Leads' },
+      ]
+    : inventoryFooterMode 
+    ? []
+    : [
+        { id: 'performance', icon: BarChart3, label: 'Dashboard' },
+        { id: 'leads', icon: Users, label: 'Leads' },
+        { id: 'followups', icon: Clock, label: 'Followups' },
+        { id: 'requirements', icon: FileText, label: 'Needs' },
+        { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
+        { id: 'attendance', icon: History, label: 'Attendance' },
+        { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfers' },
+        { id: 'activity_logs', icon: ClipboardList, label: 'Activity Logs' },
+        { id: 'deleted_leads', icon: Trash2, label: 'Deleted Leads' },
+      ];
 
   useEffect(() => {
     if (!tenantClientId) {
@@ -1554,21 +1630,6 @@ export default function EmployeeDashboard({
       {/* Professional Header & Attendance */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6 bg-white/40 backdrop-blur-2xl p-4 sm:p-8 rounded-[32px] sm:rounded-[48px] border border-white/40 shadow-2xl shadow-blue-900/5 ring-1 ring-black/[0.02]">
         <div className="flex items-center gap-4 sm:gap-6 px-1">
-          <div className="w-14 h-14 sm:w-20 sm:h-20 rounded-2xl sm:rounded-[32px] bg-gradient-to-tr from-blue-600 to-blue-500 flex items-center justify-center text-white shadow-2xl shadow-blue-600/40 transform hover:rotate-3 transition-transform overflow-hidden">
-            {user.profileImageUrl ? (
-              <img
-                src={user.profileImageUrl}
-                alt={user.name}
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <>
-                <UserIcon size={26} className="sm:hidden" />
-                <UserIcon size={40} className="hidden sm:block" />
-              </>
-            )}
-          </div>
           <div>
             <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight leading-none mb-1.5 sm:mb-2">Hey, {user.name.split(' ')[0]}</h1>
             <div className="flex items-center gap-2.5 sm:gap-3">
@@ -1605,7 +1666,7 @@ export default function EmployeeDashboard({
           
           <button 
             onClick={() => setShowNotifications(true)}
-            className="p-2.5 sm:p-4 relative bg-white border border-slate-100 rounded-2xl sm:rounded-[24px] hover:border-blue-200 transition-all shadow-lg shadow-slate-200/50 active:scale-95 group"
+            className="p-2.5 sm:p-4 relative bg-white border border-slate-100 rounded-2xl sm:rounded-[24px] hover:border-blue-200 transition-all shadow-lg shadow-slate-200/50 active:scale-95 group shrink-0"
           >
             <Bell size={20} className="sm:hidden text-slate-400 group-hover:text-blue-500 transition-colors relative z-10" />
             <Bell size={28} className="hidden sm:block text-slate-400 group-hover:text-blue-500 transition-colors relative z-10" />
@@ -1615,10 +1676,26 @@ export default function EmployeeDashboard({
               </span>
             )}
           </button>
+
+          <div className="relative">
+            <button onClick={() => setShowProfileMenu(true)} className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-blue-600 to-blue-500 flex items-center justify-center text-white shadow-lg shadow-blue-600/40 overflow-hidden shrink-0 hover:scale-105 transition-transform active:scale-95">
+              {user.profileImageUrl ? (
+                <img
+                  src={user.profileImageUrl}
+                  alt={user.name}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <UserIcon size={18} className="sm:hidden" />
+              )}
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Tab Navigation */}
+      {employeeTabs.length > 0 && (
       <div className="relative mb-6 md:mb-8 md:sticky md:top-20 z-30 lg:hidden">
         <div
           ref={tabsScrollRef}
@@ -1664,6 +1741,7 @@ export default function EmployeeDashboard({
           <ChevronRight size={14} />
         </button>
       </div>
+      )}
 
       {activeTab === 'attendance' ? (
         <MonthlyAttendanceReport
@@ -2088,22 +2166,22 @@ export default function EmployeeDashboard({
                 whileTap={{ scale: 0.98 }}
                 onClick={() => setSelectedLeadIndex(idx)}
                 className={cn(
-                  "w-full text-left p-4 sm:p-5 rounded-[28px] sm:rounded-[32px] border transition-all duration-300 flex items-center gap-3 sm:gap-4 group",
+                  "w-full text-left p-3 sm:p-4 rounded-2xl sm:rounded-[24px] border transition-all duration-300 flex items-center gap-3 group",
                   selectedLeadIndex === idx 
-                    ? "bg-white border-blue-500 shadow-2xl shadow-blue-900/10 ring-4 ring-blue-50/50" 
-                    : "bg-white border-slate-100 shadow-xl shadow-slate-200/10 hover:border-blue-200"
+                    ? "bg-white border-blue-500 shadow-xl shadow-blue-900/10 ring-2 ring-blue-50/50" 
+                    : "bg-white border-slate-100 shadow-md shadow-slate-200/10 hover:border-blue-200"
                 )}
               >
                 <div className={cn(
-                  "w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center font-black text-base sm:text-lg transition-all duration-500 shrink-0",
+                  "w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center font-black text-sm sm:text-base transition-all duration-500 shrink-0",
                   selectedLeadIndex === idx 
-                    ? "bg-blue-600 text-white rotate-3 scale-110 shadow-lg shadow-blue-200" 
+                    ? "bg-blue-600 text-white rotate-3 scale-110 shadow-md shadow-blue-200" 
                     : "bg-slate-50 text-slate-400 group-hover:bg-blue-50 group-hover:text-blue-600 group-hover:rotate-6"
                 )}>
                   {lead.name[0]}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-black text-slate-800 truncate tracking-tight text-sm sm:text-base">{lead.name}</p>
+                  <p className="font-black text-slate-800 truncate tracking-tight text-sm">{lead.name}</p>
                   <div className="flex flex-wrap items-center gap-2 mt-0.5">
                     <Phone size={10} className="text-slate-300" />
                     <p className="text-[10px] text-slate-400 font-bold tracking-tight">
@@ -3216,6 +3294,198 @@ export default function EmployeeDashboard({
           </div>
         )}
       </AnimatePresence>
+      
+      {/* Employee Custom Footer */}
+      <nav
+        className="fixed inset-x-0 bottom-0 z-[130] border-t border-slate-200 bg-white/95 backdrop-blur shadow-[0_-4px_20px_-10px_rgba(0,0,0,0.1)]"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+      >
+        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-around px-2">
+          <button 
+            onClick={() => { setFollowupsFooterMode(true); setInventoryFooterMode(false); setActiveTab('followups'); }} 
+            className={cn("flex flex-col items-center justify-center text-[11px] font-semibold w-20 transition-colors", followupsFooterMode ? "text-blue-600" : "text-slate-500 hover:text-slate-800")}
+          >
+            <Clock className={cn("h-5 w-5 mb-0.5", followupsFooterMode ? "text-blue-600" : "")} />
+            <span>Followups</span>
+          </button>
+          <button 
+            onClick={() => setShowAddDrawer(true)} 
+            className="flex flex-col items-center justify-center text-[11px] font-semibold w-20 text-slate-500 hover:text-slate-800 transition-colors"
+          >
+            <PlusCircle className="h-5 w-5 mb-0.5 text-blue-600" />
+            <span className="text-blue-600">Add</span>
+          </button>
+          <button 
+            onClick={() => { setInventoryFooterMode(true); setFollowupsFooterMode(false); setActiveTab('inventory'); }} 
+            className={cn("flex flex-col items-center justify-center text-[11px] font-semibold w-20 transition-colors", inventoryFooterMode ? "text-blue-600" : "text-slate-500 hover:text-slate-800")}
+          >
+            <LayoutGrid className={cn("h-5 w-5 mb-0.5", inventoryFooterMode ? "text-blue-600" : "")} />
+            <span>Inventory</span>
+          </button>
+        </div>
+      </nav>
+
+
+      {/* Profile Menu Overlay */}
+      <AnimatePresence>
+        {showProfileMenu && (
+          <div className="fixed inset-0 z-[150] flex flex-col justify-end">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+              onClick={() => { setShowProfileMenu(false); setProfileView('menu'); }}
+            />
+            <motion.div 
+              initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 28, stiffness: 320 }}
+              className="relative bg-white rounded-t-3xl shadow-2xl overflow-hidden"
+              style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)' }}
+            >
+              {/* Profile header */}
+              <div className="flex items-center gap-3 p-5 border-b border-slate-100 bg-gradient-to-r from-blue-50 to-indigo-50">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-600 to-blue-500 flex items-center justify-center text-white overflow-hidden shrink-0 shadow-lg shadow-blue-200">
+                  {user.profileImageUrl ? (
+                    <img src={user.profileImageUrl} alt={user.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  ) : (
+                    <UserIcon size={22} />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="font-black text-slate-900 text-sm truncate">{user.name}</p>
+                  <p className="text-[11px] text-slate-500 capitalize">{user.role}</p>
+                </div>
+                {profileView !== 'menu' && (
+                  <button onClick={() => setProfileView('menu')} className="ml-auto p-2 rounded-xl bg-white border border-slate-100 text-slate-500">
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+
+              {profileView === 'menu' && (
+                <div className="p-4 space-y-2">
+                  {/* Settings Section */}
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 mb-1">Settings</p>
+                  <button onClick={() => { setShowProfileMenu(false); setProfileView('menu'); onOpenProfile?.(); }}
+                    className="w-full flex items-center gap-3 p-3.5 rounded-2xl bg-slate-50 hover:bg-blue-50 transition-colors text-left"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600 shrink-0"><UserIcon size={18} /></div>
+                    <div><p className="text-sm font-bold text-slate-800">Edit Profile</p><p className="text-[11px] text-slate-500">Update photo, phone, email</p></div>
+                  </button>
+                  <button onClick={() => setProfileView('password')}
+                    className="w-full flex items-center gap-3 p-3.5 rounded-2xl bg-slate-50 hover:bg-purple-50 transition-colors text-left"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-purple-100 flex items-center justify-center text-purple-600 shrink-0">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </div>
+                    <div><p className="text-sm font-bold text-slate-800">Reset Password</p><p className="text-[11px] text-slate-500">Change your login password</p></div>
+                  </button>
+                  <button onClick={() => setDarkMode(d => !d)}
+                    className="w-full flex items-center gap-3 p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100 transition-colors"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-slate-200 flex items-center justify-center text-slate-600 shrink-0">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                    </div>
+                    <div className="flex-1 text-left"><p className="text-sm font-bold text-slate-800">Night Mode</p><p className="text-[11px] text-slate-500">{darkMode ? 'Currently ON' : 'Currently OFF'}</p></div>
+                    <div className={cn("w-10 h-5 rounded-full transition-colors relative", darkMode ? "bg-blue-600" : "bg-slate-200")}>
+                      <div className={cn("w-4 h-4 rounded-full bg-white shadow absolute top-0.5 transition-transform", darkMode ? "translate-x-5" : "translate-x-0.5")} />
+                    </div>
+                  </button>
+
+                  {/* Other Section */}
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 pt-2 mb-1">More</p>
+                  <div className="grid grid-cols-4 gap-3 p-3 rounded-2xl bg-slate-50">
+                    {[
+                      { id: 'requirements', icon: FileText, label: 'Needs', color: 'bg-purple-100 text-purple-600' },
+                      { id: 'performance', icon: BarChart3, label: 'Dashboard', color: 'bg-blue-100 text-blue-600' },
+                      { id: 'attendance', icon: History, label: 'Attendance', color: 'bg-green-100 text-green-600' },
+                      { id: 'transfer_register', icon: ArrowLeftRight, label: 'Transfer', color: 'bg-orange-100 text-orange-600' },
+                      { id: 'activity_logs', icon: ClipboardList, label: 'Activity Log', color: 'bg-cyan-100 text-cyan-600' },
+                      { id: 'deleted_leads', icon: Trash2, label: 'Deleted', color: 'bg-rose-100 text-rose-600' },
+                    ].map(item => (
+                      <button key={item.id} onClick={() => { setShowProfileMenu(false); setProfileView('menu'); setInventoryFooterMode(false); setFollowupsFooterMode(false); setActiveTab(item.id as any); }}
+                        className="flex flex-col items-center gap-1.5"
+                      >
+                        <div className={cn("w-11 h-11 rounded-2xl flex items-center justify-center", item.color)}><item.icon size={18} /></div>
+                        <span className="text-[10px] font-bold text-slate-600 text-center leading-tight">{item.label}</span>
+                      </button>
+                    ))}
+                    <button onClick={() => { setShowProfileMenu(false); alert('Raise ticket coming soon'); }}
+                      className="flex flex-col items-center gap-1.5"
+                    >
+                      <div className="w-11 h-11 rounded-2xl flex items-center justify-center bg-amber-100 text-amber-600"><MessageSquare size={18} /></div>
+                      <span className="text-[10px] font-bold text-slate-600 text-center leading-tight">Raise Ticket</span>
+                    </button>
+                  </div>
+
+                  {/* Logout */}
+                  <button onClick={() => { setShowProfileMenu(false); onLogout?.(); }}
+                    className="w-full flex items-center gap-3 p-3.5 rounded-2xl bg-rose-50 hover:bg-rose-100 transition-colors mt-1"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    </div>
+                    <p className="text-sm font-bold text-rose-600">Logout</p>
+                  </button>
+                </div>
+              )}
+
+              {profileView === 'password' && (
+                <div className="p-5 space-y-4">
+                  <p className="text-base font-black text-slate-800">Reset Password</p>
+                  <PasswordResetInline onDone={() => setProfileView('menu')} />
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add Drawer */}
+
+      <AnimatePresence>
+        {showAddDrawer && (
+          <div className="fixed inset-0 z-[140] flex flex-col justify-end">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              onClick={() => setShowAddDrawer(false)}
+            />
+            <motion.div 
+              initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="relative bg-white rounded-t-3xl p-6 shadow-2xl flex flex-col gap-4"
+              style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 24px)' }}
+            >
+              <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-2" />
+              <h3 className="text-lg font-black text-slate-800 mb-2">Create New</h3>
+              <div className="grid grid-cols-3 gap-4">
+                <button 
+                  onClick={() => { setShowAddDrawer(false); setShowAddLead(true); }}
+                  className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
+                >
+                  <Users className="h-8 w-8" />
+                  <span className="text-xs font-bold">Lead</span>
+                </button>
+                <button 
+                  onClick={() => { setShowAddDrawer(false); setActiveTab('requirements'); setShowReqModal(true); }}
+                  className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
+                >
+                  <FileText className="h-8 w-8" />
+                  <span className="text-xs font-bold">Need</span>
+                </button>
+                <button 
+                  onClick={() => { setShowAddDrawer(false); setActiveTab('inventory'); }}
+                  className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                >
+                  <LayoutGrid className="h-8 w-8" />
+                  <span className="text-xs font-bold">Inventory</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
     </div>
         </div>
       </div>

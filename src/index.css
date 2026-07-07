@@ -67,6 +67,16 @@
   html { scroll-behavior: smooth; }
 }
 
+/* ── Mobile font scaling ──────────────────────────────────────────────────
+   Reduce the root font-size on small screens so all rem-based text
+   automatically scales down. Desktop (≥641px) stays at the default 16px. */
+@media (max-width: 640px) {
+  html {
+    font-size: 13px;
+  }
+}
+
+
 /* Reveal-on-scroll */
 .reveal { opacity: 0; transform: translateY(40px); transition: opacity 0.9s var(--transition-smooth), transform 0.9s var(--transition-smooth); }
 .reveal.in { opacity: 1; transform: none; }
@@ -118,3 +128,17 @@
     linear-gradient(90deg, hsl(var(--primary) / 0.06) 1px, transparent 1px);
   background-size: 40px 40px;
 }
+
+/* ── Scrollbar utilities ──────────────────────────────────────────────── */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+.custom-scrollbar::-webkit-scrollbar { width: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+
+/* ── Employee panel: extra bottom padding so content doesn't hide behind the fixed footer ── */
+.employee-panel-content {
+  padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px) + 8px);
+}
+
