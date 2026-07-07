@@ -10,6 +10,7 @@ interface ProfilePageProps {
   user: User;
   onClose: () => void;
   onUserUpdate?: (patch: Partial<User>) => void;
+  isEmployee?: boolean;
 }
 
 type SupportTicketItem = {
@@ -42,7 +43,7 @@ function toMillis(value: unknown): number {
   return 0;
 }
 
-export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePageProps) {
+export default function ProfilePage({ user, onClose, onUserUpdate, isEmployee }: ProfilePageProps) {
   const [mobile, setMobile] = useState(user.phone || '');
   const [email, setEmail] = useState(user.email || '');
   const [profileImageUrl, setProfileImageUrl] = useState(user.profileImageUrl || '');
@@ -527,6 +528,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
         </div>
       </div>
 
+      {!isEmployee && (
       <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
         <h3 className="text-xl font-bold text-gray-900">Download Web App</h3>
         <p className="mt-1 text-sm text-gray-500">Install EstatePulse on mobile or desktop for app-like experience.</p>
@@ -572,6 +574,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
           </div>
         </div>
       </div>
+      )}
 
       <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
         <h3 className="text-xl font-bold text-gray-900">Change Password</h3>
@@ -652,6 +655,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
         </form>
       </div>
 
+      {!isEmployee && (
       <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
         <h3 className="text-xl font-bold text-gray-900">Help & Support</h3>
         <p className="mt-1 text-sm text-gray-500">Raise and track support requests for your account.</p>
@@ -778,6 +782,7 @@ export default function ProfilePage({ user, onClose, onUserUpdate }: ProfilePage
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

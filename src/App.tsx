@@ -616,6 +616,8 @@ export default function App() {
                     backSignal={dashboardBackSignal}
                     initialView={isEmployeeView(dashboardTarget) ? dashboardTarget : undefined}
                     initialViewSignal={dashboardTargetSignal}
+                    onOpenProfile={() => setActiveScreen('profile')}
+                    onLogout={handleLogout}
                   />
                 )}
                 {activeScreen === 'profile' && (
@@ -625,6 +627,7 @@ export default function App() {
                         user={user}
                         onClose={() => setActiveScreen('dashboard')}
                         onUserUpdate={(patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev))}
+                        isEmployee={user.role === 'employee'}
                       />
                     </div>
                   </div>
@@ -667,6 +670,7 @@ export default function App() {
                 backSignal={dashboardBackSignal}
                 initialView={isEmployeeView(dashboardTarget) ? dashboardTarget : undefined}
                 initialViewSignal={dashboardTargetSignal}
+                onOpenProfile={() => setActiveScreen('profile')}
               />
             )}
           </motion.div>
@@ -695,35 +699,37 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <nav
-        className="fixed inset-x-0 bottom-0 z-[130] border-t border-slate-200 bg-white/95 backdrop-blur"
-        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
-      >
-        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-around px-2">
-          <button onClick={handleHomeNavigation} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
-            <Home className="h-5 w-5" />
-            <span>Home</span>
-          </button>
-          <button onClick={() => setActiveScreen('profile')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
-            <UserCircle2 className="h-5 w-5" />
-            <span>Profile</span>
-          </button>
-          <button onClick={() => setActiveScreen('tools')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
-            <Wrench className="h-5 w-5" />
-            <span>Backup</span>
-          </button>
-          {isSuperAdmin && (
-            <button onClick={() => setActiveScreen('platform')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
-              <ShieldCheck className="h-5 w-5" />
-              <span>Platform</span>
+      {user?.role !== 'employee' && (
+        <nav
+          className="fixed inset-x-0 bottom-0 z-[130] border-t border-slate-200 bg-white/95 backdrop-blur"
+          style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+        >
+          <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-around px-2">
+            <button onClick={handleHomeNavigation} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
+              <Home className="h-5 w-5" />
+              <span>Home</span>
             </button>
-          )}
-          <button onClick={handleLogout} className="flex flex-col items-center justify-center text-[11px] font-semibold text-rose-600">
-            <LogOut className="h-5 w-5" />
-            <span>Logout</span>
-          </button>
-        </div>
-      </nav>
+            <button onClick={() => setActiveScreen('profile')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
+              <UserCircle2 className="h-5 w-5" />
+              <span>Profile</span>
+            </button>
+            <button onClick={() => setActiveScreen('tools')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
+              <Wrench className="h-5 w-5" />
+              <span>Backup</span>
+            </button>
+            {isSuperAdmin && (
+              <button onClick={() => setActiveScreen('platform')} className="flex flex-col items-center justify-center text-[11px] font-semibold text-slate-700">
+                <ShieldCheck className="h-5 w-5" />
+                <span>Platform</span>
+              </button>
+            )}
+            <button onClick={handleLogout} className="flex flex-col items-center justify-center text-[11px] font-semibold text-rose-600">
+              <LogOut className="h-5 w-5" />
+              <span>Logout</span>
+            </button>
+          </div>
+        </nav>
+      )}
     </div>
   );
 }
