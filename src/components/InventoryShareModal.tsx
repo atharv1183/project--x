@@ -12,7 +12,6 @@ interface InventoryShareModalProps {
 
 export default function InventoryShareModal({ isOpen, onClose, item, userPhone }: InventoryShareModalProps) {
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
-  const [showPreview, setShowPreview] = useState(false);
 
   if (!item) return null;
 
@@ -198,16 +197,6 @@ export default function InventoryShareModal({ isOpen, onClose, item, userPhone }
                 </button>
               </div>
 
-              {/* URL Preview / Copy Row */}
-              <div className="p-3 bg-slate-50 dark:bg-slate-900/40 border border-slate-200/50 dark:border-slate-800/60 rounded-xl flex items-center justify-between gap-3 text-xs">
-                <span className="truncate text-slate-500 dark:text-slate-400 flex-1 select-all">{shareUrl}</span>
-                <button 
-                  onClick={() => handleCopy(shareUrl, 'main')}
-                  className="text-blue-600 dark:text-blue-400 hover:text-blue-500 font-bold shrink-0 inline-flex items-center gap-1"
-                >
-                  {copiedLink === 'main' ? 'Copied' : 'Copy'}
-                </button>
-              </div>
 
               {/* Project Layout Share Options */}
               {isProject && (
@@ -273,22 +262,6 @@ export default function InventoryShareModal({ isOpen, onClose, item, userPhone }
                 </div>
               )}
 
-              {/* Toggle WhatsApp Message Preview */}
-              <div className="border-t border-slate-100 dark:border-slate-800 pt-4">
-                <button 
-                  onClick={() => setShowPreview(!showPreview)}
-                  className="w-full py-2 bg-slate-50 dark:bg-slate-800/40 border border-slate-200/40 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition-all"
-                >
-                  <span>{showPreview ? 'Hide Message Preview' : 'Show WhatsApp Message Preview'}</span>
-                  <ExternalLink size={12} />
-                </button>
-                
-                {showPreview && (
-                  <div className="mt-3 p-4 bg-[#ece5dd] dark:bg-slate-950/80 border border-slate-200 dark:border-slate-900 text-slate-800 dark:text-slate-300 rounded-2xl font-mono text-[11px] whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed shadow-inner">
-                    {buildMessage()}
-                  </div>
-                )}
-              </div>
 
             </div>
 

@@ -72,7 +72,7 @@ function cn(...inputs: ClassValue[]) {
 }
 
 type AdminView = 'performance' | 'leads' | 'employees' | 'attendance' | 'requirements' | 'inventory' | 'brokers' | 'transfer_register' | 'notification_center' | 'activity_logs' | 'deleted_leads';
-type LeadQueueTab = 'overdue' | 'today' | 'upcoming';
+type LeadQueueTab = 'overdue' | 'today' | 'upcoming' | 'all';
 
 type AdminDashboardProps = {
   user: User;
