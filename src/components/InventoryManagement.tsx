@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, FormEvent } from 'react';
+import React, { useState, useEffect, useRef, FormEvent, useMemo } from 'react';
 import { 
   collection, 
   query, 
@@ -50,7 +50,8 @@ import {
   FileText,
   Film,
   Link2,
-  ExternalLink
+  ExternalLink,
+  SlidersHorizontal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -58,6 +59,8 @@ import { format } from 'date-fns';
 interface InventoryManagementProps {
   user: User;
   onBack?: () => void;
+  initialShowForm?: boolean;
+  addSignal?: number;
 }
 
 function toMillis(value: unknown): number {
@@ -190,7 +193,7 @@ function buildProjectViewLink(itemId: string, view: 'list' | 'icon'): string {
   return url.toString();
 }
 
-export default function InventoryManagement({ user, onBack }: InventoryManagementProps) {
+export default function InventoryManagement({ user, onBack, initialShowForm = false, addSignal = 0 }: InventoryManagementProps) {
   const isAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin' || user.role === 'manager';
   const isSuperAdmin = user.role === 'super_admin' || user.role === 'admin' || user.role === 'client_admin';
   const [tenantClientId, setTenantClientId] = useState<string>(String((user as any).clientId || ''));
@@ -232,9 +235,17 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [selectedShareItem, setSelectedShareItem] = useState<InventoryItem | null>(null);
   const [loading, setLoading] = useState(false);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useState(initialShowForm);
+
+  useEffect(() => {
+    if (addSignal > 0) {
+      setShowForm(true);
+      setEditingItem(null);
+    }
+  }, [addSignal]);
   const [filter, setFilter] = useState<'all' | 'approved' | 'non_approved' | 'pending' | 'draft'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [advancedFilters, setAdvancedFilters] = useState({
     state: '',
     city: '',
@@ -1195,7 +1206,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
   }; 
 
   return (
-    <div className="space-y-8 pb-24 max-w-[1600px] mx-auto">
+    <div className="space-y-4 sm:space-y-8 pb-24 max-w-[1600px] mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 px-1">
         <div className="space-y-1">
           <div className="flex items-center gap-3">
@@ -1221,151 +1232,168 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
                 Back
               </button>
           )}
-          <button 
-            onClick={() => {
-              setEditingItem(null);
-              setFormData({
-                title: '',
-                description: '',
-                brokerId: '',
-                visibilityScope: 'internal',
-                listingMode: 'single',
-                type: 'house',
-                areaValue: '',
-                areaUnit: 'sqft',
-                subType: 'new',
-                approvalStatus: 'non_approved',
-                rate: '',
-                rateUnit: 'total',
-                location: '',
-                nearbyLocation: '',
-                landmark: '',
-                locationLink: '',
-                houseType: 'simplex',
-                bhk: '',
-                bathrooms: '',
-                kitchenType: '',
-                features: [],
-                newFeature: '',
-                projectUnits: [createProjectUnitDraft()],
-                latitude: 20.5937,
-                longitude: 78.9629
-              });
-              setFiles({ photos: [], videos: [], attachments: [] });
-              setVideoLinks([]);
-              setVideoLinkInput('');
-              setShowForm(true);
-            }}
-            className="px-6 py-3 bg-slate-900 text-white font-bold text-xs uppercase tracking-widest rounded-2xl shadow-xl shadow-slate-200 hover:bg-slate-800 transition-all flex items-center gap-2 active:scale-95"
-          >
-            <Plus size={18} /> New Listing
-          </button>
+
         </div>
       </div>
 
-      {/* Filters & Search - Refined */}
-      <div className="flex flex-col lg:flex-row gap-4 items-stretch lg:items-center bg-white/50 p-2 rounded-[32px] border border-slate-100">
-        <div className="flex-1 relative group">
-          <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={20} />
-          <input 
-            type="text"
-            placeholder="Search listings..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="w-full pl-14 pr-6 py-4 bg-white rounded-3xl outline-none border border-transparent focus:border-blue-100 focus:bg-white font-semibold text-slate-700 transition-all shadow-sm"
-          />
-        </div>
-        <div className="space-y-1">
-          <p className="px-1 text-[10px] font-black text-slate-400 uppercase tracking-widest">Property Status</p>
-          <div className="flex bg-slate-200/50 p-1 rounded-2xl gap-1 overflow-x-auto no-scrollbar whitespace-nowrap">
-          {[
-            { id: 'all', label: 'All', icon: LayoutGrid },
-            { id: 'approved', label: 'Approved', icon: FileCheck },
-            { id: 'non_approved', label: 'Non-Approved', icon: FileText },
-            { id: 'pending', label: 'Awaiting', icon: Clock },
-            { id: 'draft', label: 'Drafts', icon: Edit2 }
-          ].map(t => (
-            <button
-              key={t.id}
-              onClick={() => setFilter(t.id as any)}
-              className={cn(
-                "flex items-center gap-2 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-                filter === t.id ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+      {/* Filters & Search - Collapsible Advanced Filters */}
+      {(() => {
+        const activeAdvancedCount = Object.values(advancedFilters).filter(Boolean).length;
+        return (
+          <div className="space-y-3">
+            {/* Search Row */}
+            <div className="flex items-center bg-white/50 p-2 rounded-[32px] border border-slate-100">
+              {/* Search with filter icon */}
+              <div className="flex-1 relative group flex items-center">
+                <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors pointer-events-none" size={20} />
+                <input
+                  type="text"
+                  placeholder="Search listings..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="w-full pl-14 pr-14 py-4 bg-white rounded-3xl outline-none border border-transparent focus:border-blue-100 focus:bg-white font-semibold text-slate-700 transition-all shadow-sm"
+                />
+                {/* Filter toggle button */}
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedFilters(v => !v)}
+                  className={cn(
+                    "absolute right-3 top-1/2 -translate-y-1/2 flex items-center justify-center w-9 h-9 rounded-2xl transition-all border",
+                    showAdvancedFilters
+                      ? "bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-200"
+                      : activeAdvancedCount > 0
+                      ? "bg-blue-50 text-blue-600 border-blue-200"
+                      : "bg-slate-100 text-slate-500 border-slate-100 hover:bg-slate-200"
+                  )}
+                  title="Advanced Filters"
+                >
+                  <SlidersHorizontal size={15} />
+                  {activeAdvancedCount > 0 && !showAdvancedFilters && (
+                    <span className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-blue-600 text-white text-[9px] font-black rounded-full flex items-center justify-center">
+                      {activeAdvancedCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Collapsible Advanced Filters Panel */}
+            <AnimatePresence>
+              {showAdvancedFilters && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8, height: 0 }}
+                  animate={{ opacity: 1, y: 0, height: 'auto' }}
+                  exit={{ opacity: 0, y: -8, height: 0 }}
+                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                  className="overflow-hidden"
+                >
+                  <div className="bg-white/80 backdrop-blur p-4 sm:p-5 rounded-[28px] border border-blue-100 shadow-sm shadow-blue-50 space-y-6">
+                    {/* Status tabs */}
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Property Status</p>
+                      <div className="flex bg-slate-200/50 p-1 rounded-2xl gap-1 overflow-x-auto no-scrollbar whitespace-nowrap">
+                        {[
+                          { id: 'all', label: 'All', icon: LayoutGrid },
+                          { id: 'approved', label: 'Approved', icon: FileCheck },
+                          { id: 'non_approved', label: 'Non-Approved', icon: FileText },
+                          { id: 'pending', label: 'Awaiting', icon: Clock },
+                          { id: 'draft', label: 'Drafts', icon: Edit2 }
+                        ].map(t => (
+                          <button
+                            key={t.id}
+                            onClick={() => setFilter(t.id as any)}
+                            className={cn(
+                              "flex items-center gap-2 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                              filter === t.id ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                            )}
+                          >
+                            <t.icon size={14} /> {t.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-5 border-t border-slate-100">
+                      <div className="flex items-center justify-between mb-4">
+                      <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
+                        <SlidersHorizontal size={12} /> Advanced Filters
+                        {activeAdvancedCount > 0 && (
+                          <span className="bg-blue-600 text-white px-1.5 py-0.5 rounded-full text-[9px]">
+                            {activeAdvancedCount} active
+                          </span>
+                        )}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setAdvancedFilters({ state: '', city: '', area: '', minBudget: '', maxBudget: '', minSize: '', maxSize: '' })}
+                        className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-rose-500 transition-colors px-3 py-1 rounded-lg hover:bg-rose-50"
+                      >
+                        Reset All
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+                      <input
+                        type="text"
+                        value={advancedFilters.state}
+                        onChange={e => setAdvancedFilters(prev => ({ ...prev, state: e.target.value }))}
+                        placeholder="State"
+                        className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-200 text-sm font-medium text-slate-700 transition-all"
+                      />
+                      <input
+                        type="text"
+                        value={advancedFilters.city}
+                        onChange={e => setAdvancedFilters(prev => ({ ...prev, city: e.target.value }))}
+                        placeholder="City"
+                        className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-200 text-sm font-medium text-slate-700 transition-all"
+                      />
+                      <input
+                        type="text"
+                        value={advancedFilters.area}
+                        onChange={e => setAdvancedFilters(prev => ({ ...prev, area: e.target.value }))}
+                        placeholder="Area / Locality"
+                        className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-200 text-sm font-medium text-slate-700 transition-all"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        value={advancedFilters.minBudget}
+                        onChange={e => setAdvancedFilters(prev => ({ ...prev, minBudget: e.target.value }))}
+                        placeholder="Min Budget"
+                        className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-200 text-sm font-medium text-slate-700 transition-all"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        value={advancedFilters.maxBudget}
+                        onChange={e => setAdvancedFilters(prev => ({ ...prev, maxBudget: e.target.value }))}
+                        placeholder="Max Budget"
+                        className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-200 text-sm font-medium text-slate-700 transition-all"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        value={advancedFilters.minSize}
+                        onChange={e => setAdvancedFilters(prev => ({ ...prev, minSize: e.target.value }))}
+                        placeholder="Min Size (sqft)"
+                        className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-200 text-sm font-medium text-slate-700 transition-all"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        value={advancedFilters.maxSize}
+                        onChange={e => setAdvancedFilters(prev => ({ ...prev, maxSize: e.target.value }))}
+                        placeholder="Max Size (sqft)"
+                        className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-200 text-sm font-medium text-slate-700 transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+                </motion.div>
               )}
-            >
-              <t.icon size={14} /> {t.label}
-            </button>
-          ))}
+            </AnimatePresence>
           </div>
-        </div>
-      </div>
-
-      <div className="bg-white/60 p-3 sm:p-4 rounded-[28px] border border-slate-100">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3">
-          <input
-            type="text"
-            value={advancedFilters.state}
-            onChange={e => setAdvancedFilters(prev => ({ ...prev, state: e.target.value }))}
-            placeholder="State"
-            className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 text-sm font-medium text-slate-700"
-          />
-          <input
-            type="text"
-            value={advancedFilters.city}
-            onChange={e => setAdvancedFilters(prev => ({ ...prev, city: e.target.value }))}
-            placeholder="City"
-            className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 text-sm font-medium text-slate-700"
-          />
-          <input
-            type="text"
-            value={advancedFilters.area}
-            onChange={e => setAdvancedFilters(prev => ({ ...prev, area: e.target.value }))}
-            placeholder="Area / Locality"
-            className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 text-sm font-medium text-slate-700"
-          />
-          <input
-            type="number"
-            min="0"
-            value={advancedFilters.minBudget}
-            onChange={e => setAdvancedFilters(prev => ({ ...prev, minBudget: e.target.value }))}
-            placeholder="Min Budget"
-            className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 text-sm font-medium text-slate-700"
-          />
-          <input
-            type="number"
-            min="0"
-            value={advancedFilters.maxBudget}
-            onChange={e => setAdvancedFilters(prev => ({ ...prev, maxBudget: e.target.value }))}
-            placeholder="Max Budget"
-            className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 text-sm font-medium text-slate-700"
-          />
-          <input
-            type="number"
-            min="0"
-            value={advancedFilters.minSize}
-            onChange={e => setAdvancedFilters(prev => ({ ...prev, minSize: e.target.value }))}
-            placeholder="Min Size (sqft)"
-            className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 text-sm font-medium text-slate-700"
-          />
-          <div className="flex gap-2">
-            <input
-              type="number"
-              min="0"
-              value={advancedFilters.maxSize}
-              onChange={e => setAdvancedFilters(prev => ({ ...prev, maxSize: e.target.value }))}
-              placeholder="Max Size (sqft)"
-              className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:ring-4 focus:ring-blue-100 text-sm font-medium text-slate-700"
-            />
-            <button
-              type="button"
-              onClick={() => setAdvancedFilters({ state: '', city: '', area: '', minBudget: '', maxBudget: '', minSize: '', maxSize: '' })}
-              className="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-slate-200 transition-all"
-            >
-              Reset
-            </button>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Grid - Improved spacing and density */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6 px-1">
@@ -1571,7 +1599,7 @@ export default function InventoryManagement({ user, onBack }: InventoryManagemen
       {/* Form Modal */}
       <AnimatePresence>
         {showForm && (
-          <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-xl flex items-center justify-center p-0 sm:p-4 lg:p-10">
+          <div className="fixed inset-0 z-[140] bg-black/80 backdrop-blur-xl flex items-center justify-center p-0 sm:p-4 lg:p-10">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}

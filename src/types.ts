@@ -38,6 +38,7 @@ export interface Lead {
   deletedAt?: any;
   deletedBy?: string;
   deletedByName?: string;
+  lastPurpose?: 'Follow-up' | 'Site Visit' | 'Meeting' | 'Closure' | 'Other';
 }
 
 export interface Followup {
@@ -45,6 +46,7 @@ export interface Followup {
   date: any;
   remark: string;
   employeeId: string;
+  purpose?: 'Follow-up' | 'Site Visit' | 'Meeting' | 'Closure' | 'Other';
 }
 
 export interface Attendance {

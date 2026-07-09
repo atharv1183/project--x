@@ -40,12 +40,14 @@ import {
   ShieldCheck,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Clock,
   History,
   Send,
   Search,
   Loader2,
   Users,
+  ArrowLeft,
   ArrowLeftRight,
   Bell,
   Trash2,
@@ -54,7 +56,15 @@ import {
   FileText,
   LayoutGrid,
   X,
-  Home
+  Home,
+  ThumbsUp,
+  ThumbsDown,
+  Zap,
+  Info,
+  MoreHorizontal,
+  Save,
+  UserCircle2,
+  Filter
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, isToday, isPast, isFuture, startOfDay, endOfDay } from 'date-fns';
@@ -165,7 +175,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   }
 }
 
-type LeadQueueTab = 'overdue' | 'today' | 'upcoming';
+type LeadQueueTab = 'overdue' | 'today' | 'upcoming' | 'all';
 type EmployeeView = LeadQueueTab | 'followups' | 'performance' | 'leads' | 'attendance' | 'requirements' | 'inventory' | 'transfer_register' | 'activity_logs' | 'pending' | 'deleted_leads';
 
 // Inline password reset component for the profile menu
@@ -276,7 +286,9 @@ export default function EmployeeDashboard({
   const [selectedAssignedLeadFollowups, setSelectedAssignedLeadFollowups] = useState<Followup[]>([]);
   const [assignedLeadEditName, setAssignedLeadEditName] = useState('');
   const [assignedLeadEditStatus, setAssignedLeadEditStatus] = useState<Lead['status']>('pending');
+  const [inventoryAddSignal, setInventoryAddSignal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   // New Requirement Form State
   const [showAddLead, setShowAddLead] = useState(false);
@@ -307,7 +319,10 @@ export default function EmployeeDashboard({
   const [nextTime, setNextTime] = useState('');
   const [showHistory, setShowHistory] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<Lead['status'] | null>(null);
+  const [followupPurpose, setFollowupPurpose] = useState<'Follow-up' | 'Site Visit' | 'Meeting' | 'Closure' | ''>('');
   const [kycFiles, setKycFiles] = useState<{ aadhaar: File | null; pan: File | null }>({ aadhaar: null, pan: null });
+  const [showQuickActions, setShowQuickActions] = useState(false);
+  const [showDealApprovalModal, setShowDealApprovalModal] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [visitStep, setVisitStep] = useState<'idle' | 'capture' | 'confirm' | 'verifying' | 'verified'>('idle');
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -324,6 +339,8 @@ export default function EmployeeDashboard({
   const [transferRegisterSearch, setTransferRegisterSearch] = useState('');
   const [leadSearchQuery, setLeadSearchQuery] = useState('');
   const [notInterestedOnly, setNotInterestedOnly] = useState(false);
+  const [leadTypeFilter, setLeadTypeFilter] = useState<'All' | 'Interested' | 'Not Interested' | 'Pending'>('All');
+  const [leadPurposeFilter, setLeadPurposeFilter] = useState<'All' | 'Follow-up' | 'Site Visit' | 'Meeting' | 'Closure'>('All');
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
@@ -599,16 +616,16 @@ export default function EmployeeDashboard({
     dealsApproved: leads.filter(l => l.status === 'deal_approved').length
   };
 
+  const pendingFollowupsCount = leads.filter(l => l.assignedTo === user.uid && (getLeadQueueTab(l) === 'today' || getLeadQueueTab(l) === 'overdue')).length;
+
   const employeeTabs: Array<{ id: EmployeeView | 'followups'; icon: any; label: string }> = followupsFooterMode
     ? [
         { id: 'followups', icon: Clock, label: 'Followups' },
-        { id: 'leads', icon: Users, label: 'Leads' },
       ]
     : inventoryFooterMode 
     ? []
     : [
         { id: 'performance', icon: BarChart3, label: 'Dashboard' },
-        { id: 'leads', icon: Users, label: 'Leads' },
         { id: 'followups', icon: Clock, label: 'Followups' },
         { id: 'requirements', icon: FileText, label: 'Needs' },
         { id: 'inventory', icon: LayoutGrid, label: 'Inventory' },
@@ -997,11 +1014,16 @@ export default function EmployeeDashboard({
   };
 
   const effectiveQueueTab: LeadQueueTab =
-    activeTab === 'today' || activeTab === 'upcoming' || activeTab === 'overdue'
-      ? activeTab
+    activeTab === 'today' || activeTab === 'upcoming' || activeTab === 'overdue' || activeTab === 'all'
+      ? activeTab as LeadQueueTab
       : followupSubTab;
   const queueLeads = useMemo(() => {
-    const list = leads.filter((l) => l.assignedTo === user.uid && getLeadQueueTab(l) === effectiveQueueTab);
+    let list;
+    if (effectiveQueueTab === 'all') {
+      list = leads.filter((l) => l.assignedTo === user.uid);
+    } else {
+      list = leads.filter((l) => l.assignedTo === user.uid && getLeadQueueTab(l) === effectiveQueueTab);
+    }
     list.sort(compareFollowup);
     return list;
   }, [leads, user.uid, effectiveQueueTab]);
@@ -1024,18 +1046,33 @@ export default function EmployeeDashboard({
     );
   }, [employeeAssignedLeads, leadSearchQuery, notInterestedOnly]);
   const searchTerm = leadSearchQuery.trim().toLowerCase();
-  const filteredLeads = queueLeads.filter(l => {
-    if (!searchTerm) return true;
-    const searchableText = [
-      l.name,
-      l.phone,
-      l.source,
-      l.status?.replace('_', ' '),
-      l.addedByName,
-      l.lastRemark
-    ].filter(Boolean).join(' ').toLowerCase();
-    return searchableText.includes(searchTerm);
-  });
+  const filteredLeads = (() => {
+    // Not Interested leads are excluded from Overdue/Today/Upcoming queues by getLeadQueueTab().
+    // For the Not Interested filter, we must base from ALL assigned leads, not queueLeads.
+    const base = leadTypeFilter === 'Not Interested' ? employeeAssignedLeads : queueLeads;
+
+    return base.filter(l => {
+      // Apply Lead Type Filter
+      if (leadTypeFilter === 'Interested' && l.status !== 'interested') return false;
+      if (leadTypeFilter === 'Not Interested' && l.status !== 'not_interested') return false;
+      if (leadTypeFilter === 'Pending' && l.status !== 'pending') return false;
+
+      // Apply Lead Purpose Filter
+      if (leadPurposeFilter !== 'All' && l.lastPurpose !== leadPurposeFilter) return false;
+
+      if (!searchTerm) return true;
+      const searchableText = [
+        l.name,
+        l.phone,
+        l.source,
+        l.status?.replace('_', ' '),
+        l.addedByName,
+        l.lastRemark,
+        l.lastPurpose
+      ].filter(Boolean).join(' ').toLowerCase();
+      return searchableText.includes(searchTerm);
+    });
+  })();
 
   const currentLead = selectedLeadIndex !== null ? filteredLeads[selectedLeadIndex] : null;
   const canManageCurrentLead = Boolean(currentLead && currentLead.assignedTo === user.uid);
@@ -1145,7 +1182,7 @@ export default function EmployeeDashboard({
     }
   };
 
-  const handleUpdateLead = async (status: Lead['status']) => {
+  const handleUpdateLead = async (status: Lead['status'], moveToNext = true) => {
     if (!currentLead) return;
     if (currentLead.assignedTo !== user.uid) return alert('This lead is not assigned to you. You can only view it.');
     if (!remark) return alert('Remark is mandatory for call made');
@@ -1167,6 +1204,9 @@ export default function EmployeeDashboard({
         updatedAt: serverTimestamp(),
         lastInteractionAt: serverTimestamp(),
       };
+      if (followupPurpose) {
+        updateData.lastPurpose = followupPurpose;
+      }
 
       if (status === 'deal_pending') {
         if (kycFiles.aadhaar) {
@@ -1215,23 +1255,30 @@ export default function EmployeeDashboard({
         newValue: { status, remark, nextDate: nextDate || null, nextTime: nextTime || null },
       });
 
-      await addDoc(collection(db, 'leads', currentLead.id, 'followups'), {
+      const followupData: any = {
         date: serverTimestamp(),
         remark,
         employeeId: user.uid
-      });
+      };
+      if (followupPurpose) {
+        followupData.purpose = followupPurpose;
+      }
+      await addDoc(collection(db, 'leads', currentLead.id, 'followups'), followupData);
 
       setRemark('');
       setNextDate('');
       setNextTime('');
       setSelectedStatus(null);
+      setFollowupPurpose('');
       setKycFiles({ aadhaar: null, pan: null });
       setCapturedImage(null);
       // Move to next lead if exists
-      if (selectedLeadIndex !== null && selectedLeadIndex < filteredLeads.length - 1) {
-        setSelectedLeadIndex(selectedLeadIndex + 1);
-      } else {
-        setSelectedLeadIndex(null);
+      if (moveToNext) {
+        if (selectedLeadIndex !== null && selectedLeadIndex < filteredLeads.length - 1) {
+          setSelectedLeadIndex(selectedLeadIndex + 1);
+        } else {
+          setSelectedLeadIndex(null);
+        }
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `leads/${currentLead.id}`);
@@ -1628,7 +1675,10 @@ export default function EmployeeDashboard({
           style={{ paddingBottom: 'calc(var(--bottom-nav-height, 64px) + env(safe-area-inset-bottom, 0px) + 24px)' }}
         >
       {/* Professional Header & Attendance */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6 bg-white/40 backdrop-blur-2xl p-4 sm:p-8 rounded-[32px] sm:rounded-[48px] border border-white/40 shadow-2xl shadow-blue-900/5 ring-1 ring-black/[0.02]">
+      <div className={cn(
+        "flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6 bg-white/40 backdrop-blur-2xl p-4 sm:p-8 rounded-[32px] sm:rounded-[48px] border border-white/40 shadow-2xl shadow-blue-900/5 ring-1 ring-black/[0.02]",
+        activeTab === 'inventory' || (activeTab === 'followups' && currentLead) ? "hidden sm:flex" : "flex"
+      )}>
         <div className="flex items-center gap-4 sm:gap-6 px-1">
           <div>
             <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight leading-none mb-1.5 sm:mb-2">Hey, {user.name.split(' ')[0]}</h1>
@@ -1694,54 +1744,7 @@ export default function EmployeeDashboard({
         </div>
       </div>
 
-      {/* Tab Navigation */}
-      {employeeTabs.length > 0 && (
-      <div className="relative mb-6 md:mb-8 md:sticky md:top-20 z-30 lg:hidden">
-        <div
-          ref={tabsScrollRef}
-          className="flex bg-white/90 backdrop-blur p-1.5 rounded-[24px] border border-slate-100 overflow-x-auto no-scrollbar whitespace-nowrap"
-        >
-        {employeeTabs.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => { setActiveTab(tab.id as any); setSelectedLeadIndex(null); }}
-            className={cn(
-              "min-w-[130px] md:min-w-0 md:flex-1 flex items-center justify-center gap-3 py-3.5 px-6 rounded-2xl text-xs font-black uppercase tracking-widest transition-all",
-              activeTab === tab.id || (tab.id === 'followups' && (activeTab === 'today' || activeTab === 'upcoming' || activeTab === 'overdue'))
-                ? "bg-slate-900 text-white shadow-xl shadow-slate-200" 
-                : "text-slate-400 hover:text-slate-600 hover:bg-white"
-            )}
-          >
-            <tab.icon size={16} /> {tab.label}
-          </button>
-        ))}
-        </div>
-        <button
-          type="button"
-          onClick={() => scrollTabs('left')}
-          className={cn(
-            "md:hidden absolute left-1 top-1/2 -translate-y-1/2 z-10 w-7 h-7 rounded-full bg-white/95 border border-slate-200 shadow-sm flex items-center justify-center text-slate-500 transition-all",
-            canScrollTabsLeft ? "opacity-100" : "opacity-30 pointer-events-none"
-          )}
-          aria-label="Scroll tabs left"
-          title="Scroll tabs left"
-        >
-          <ChevronLeft size={14} />
-        </button>
-        <button
-          type="button"
-          onClick={() => scrollTabs('right')}
-          className={cn(
-            "md:hidden absolute right-1 top-1/2 -translate-y-1/2 z-10 w-7 h-7 rounded-full bg-white/95 border border-slate-200 shadow-sm flex items-center justify-center text-slate-500 transition-all",
-            canScrollTabsRight ? "opacity-100" : "opacity-30 pointer-events-none"
-          )}
-          aria-label="Scroll tabs right"
-          title="Scroll tabs right"
-        >
-          <ChevronRight size={14} />
-        </button>
-      </div>
-      )}
+
 
       {activeTab === 'attendance' ? (
         <MonthlyAttendanceReport
@@ -1764,113 +1767,6 @@ export default function EmployeeDashboard({
           attendance={attendanceRecords}
           scope="employee"
         />
-      ) : activeTab === 'leads' ? (
-        <div className="space-y-6 pt-3 sm:pt-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">My Assigned Leads</h2>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setShowAddLead(true)}
-                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white shadow-lg shadow-blue-100 hover:bg-blue-700"
-              >
-                <PlusCircle size={14} /> Add Lead
-              </button>
-              {notInterestedOnly && (
-                <button
-                  type="button"
-                  onClick={() => setNotInterestedOnly(false)}
-                  className="text-[10px] font-black uppercase tracking-wider text-rose-700 bg-rose-100 px-2.5 py-1 rounded-full"
-                >
-                  Not Interested Filter ON
-                </button>
-              )}
-              <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-                {employeeAssignedLeadsFiltered.length}
-              </span>
-            </div>
-          </div>
-          <div className="relative">
-            <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={leadSearchQuery}
-              onChange={e => setLeadSearchQuery(e.target.value)}
-              placeholder="Search my assigned leads..."
-              className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 placeholder:text-slate-400 focus:ring-4 focus:ring-blue-100 focus:border-blue-300 outline-none"
-            />
-          </div>
-          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-200/20 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Client</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Phone</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Source</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Status</th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">
-                      <button
-                        type="button"
-                        onClick={() => setNotInterestedOnly((prev) => !prev)}
-                        className={cn(
-                          "inline-flex items-center gap-1",
-                          notInterestedOnly ? "text-rose-600" : "text-slate-400"
-                        )}
-                        title="Toggle only not interested leads"
-                      >
-                        Not Interested {notInterestedOnly ? '(ON)' : ''}
-                      </button>
-                    </th>
-                    <th className="px-6 py-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Created</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {employeeAssignedLeadsFiltered.map((lead) => (
-                    <tr
-                      key={lead.id}
-                      className="hover:bg-slate-50/50 transition-colors cursor-pointer"
-                      onClick={() => setSelectedAssignedLead(lead)}
-                    >
-                      <td className="px-6 py-4 text-sm font-black text-slate-800">{lead.name}</td>
-                      <td className="px-6 py-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-bold text-slate-600">{lead.phone}</span>
-                          <a
-                            href={getWhatsAppUrl(lead.phone)}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={(event) => event.stopPropagation()}
-                            className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"
-                            title="Chat on WhatsApp"
-                          >
-                            <MessageSquare size={10} /> WhatsApp
-                          </a>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-sm font-bold text-slate-600">{lead.source || '-'}</td>
-                      <td className="px-6 py-4 text-xs font-black text-slate-700 uppercase">{(lead.status || 'pending').replace('_', ' ')}</td>
-                      <td className="px-6 py-4">
-                        <span className={cn(
-                          "px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
-                          lead.status === 'not_interested' ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-500"
-                        )}>
-                          {lead.status === 'not_interested' ? 'Yes' : 'No'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-xs font-bold text-slate-500">{formatDateValue(lead.createdAt, 'MMM dd, yyyy hh:mm a', 'N/A')}</td>
-                    </tr>
-                  ))}
-                  {employeeAssignedLeadsFiltered.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="px-6 py-16 text-center text-sm font-bold text-slate-400">No assigned leads found.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
       ) : activeTab === 'requirements' ? (
         <div className="space-y-7 pt-3 sm:pt-4">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -1940,7 +1836,7 @@ export default function EmployeeDashboard({
                 <div className="grid grid-cols-2 gap-3 py-4 border-t border-slate-50">
                   <div className="space-y-1">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Budget</p>
-                    <p className="text-xs font-black text-slate-700">₹ {req.budget || 'N/A'}</p>
+                    <p className="text-xs font-black text-slate-700">â‚¹ {req.budget || 'N/A'}</p>
                   </div>
                   <div className="space-y-1">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Area</p>
@@ -2106,36 +2002,49 @@ export default function EmployeeDashboard({
           )}
         </div>
       ) : activeTab === 'inventory' ? (
-        <InventoryManagement user={user} />
+        <InventoryManagement user={user} addSignal={inventoryAddSignal} />
       ) : (
         <div className="flex flex-col lg:flex-row gap-5 md:gap-6">
         {/* Leads List Side */}
         <div className={cn("w-full lg:w-[400px] space-y-4", selectedLeadIndex !== null && "hidden lg:block")}>
           <div className="px-4">
-            <div className="inline-flex items-center rounded-2xl bg-white border border-slate-100 p-1.5 gap-1.5 shadow-sm">
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2">
               {[
-                { id: 'overdue', label: 'Overdue' },
-                { id: 'today', label: 'Today' },
-                { id: 'upcoming', label: 'Upcoming' },
+                { id: 'overdue', label: 'Overdue', count: employeeAssignedLeads.filter(l => getLeadQueueTab(l) === 'overdue').length, color: 'bg-rose-50 text-rose-700 ring-rose-200', activeColor: 'bg-slate-900 text-white' },
+                { id: 'today', label: 'Today', count: employeeAssignedLeads.filter(l => getLeadQueueTab(l) === 'today').length, color: 'bg-emerald-50 text-emerald-700 ring-emerald-200', activeColor: 'bg-slate-900 text-white' },
+                { id: 'upcoming', label: 'Upcoming', count: employeeAssignedLeads.filter(l => getLeadQueueTab(l) === 'upcoming').length, color: 'bg-indigo-50 text-indigo-700 ring-indigo-200', activeColor: 'bg-slate-900 text-white' },
+                { id: 'all', label: 'All', count: employeeAssignedLeads.length, color: 'bg-slate-50 text-slate-700 ring-slate-200', activeColor: 'bg-slate-900 text-white' },
               ].map((tab) => (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => { setActiveTab('followups'); setFollowupSubTab(tab.id as LeadQueueTab); setSelectedLeadIndex(null); }}
                   className={cn(
-                    "px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-                    effectiveQueueTab === tab.id ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50"
+                    "px-4 py-2.5 rounded-[16px] text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 whitespace-nowrap shrink-0 border",
+                    effectiveQueueTab === tab.id 
+                      ? tab.activeColor 
+                      : `bg-white border-slate-100 text-slate-500 hover:border-slate-300`
                   )}
                 >
                   {tab.label}
+                  <span className={cn(
+                    "px-1.5 py-0.5 rounded-full text-[9px]",
+                    effectiveQueueTab === tab.id ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"
+                  )}>
+                    {tab.count}
+                  </span>
                 </button>
               ))}
             </div>
           </div>
+          {/* Section header */}
           <div className="flex items-center justify-between px-4">
-            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-mono">
-              {effectiveQueueTab} Queue ({filteredLeads.length})
-            </h3>
+            <div>
+              <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] font-mono">
+                {leadTypeFilter !== 'All' ? leadTypeFilter : effectiveQueueTab === 'all' ? 'All Leads' : `${effectiveQueueTab} Queue`}
+              </h3>
+              <p className="text-[9px] text-slate-300 font-bold mt-0.5">{filteredLeads.length} lead{filteredLeads.length !== 1 ? 's' : ''}</p>
+            </div>
             <button
               onClick={() => setShowAddLead(true)}
               className="px-3 py-2 bg-blue-600 text-white font-black text-[10px] uppercase tracking-widest rounded-xl shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all flex items-center gap-1.5"
@@ -2143,7 +2052,9 @@ export default function EmployeeDashboard({
               <PlusCircle size={14} /> Add Lead
             </button>
           </div>
-          <div className="px-4">
+
+          {/* Search + Filters */}
+          <div className="px-4 space-y-2.5">
             <div className="relative">
               <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -2151,439 +2062,569 @@ export default function EmployeeDashboard({
                 value={leadSearchQuery}
                 onChange={e => setLeadSearchQuery(e.target.value)}
                 placeholder="Search by name, number, source..."
-                className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 placeholder:text-slate-400 focus:ring-4 focus:ring-blue-100 focus:border-blue-300 outline-none"
+                className="w-full pl-10 pr-12 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 placeholder:text-slate-400 focus:ring-4 focus:ring-blue-100 focus:border-blue-300 outline-none"
               />
-            </div>
-          </div>
-          <div className="space-y-3 max-h-none lg:max-h-[calc(100vh-450px)] overflow-visible lg:overflow-y-auto pr-0 lg:pr-2 pb-2 custom-scrollbar">
-            {filteredLeads.map((lead, idx) => (
-              <motion.button
-                key={lead.id}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: idx * 0.03 }}
-                whileHover={{ x: 4 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => setSelectedLeadIndex(idx)}
-                className={cn(
-                  "w-full text-left p-3 sm:p-4 rounded-2xl sm:rounded-[24px] border transition-all duration-300 flex items-center gap-3 group",
-                  selectedLeadIndex === idx 
-                    ? "bg-white border-blue-500 shadow-xl shadow-blue-900/10 ring-2 ring-blue-50/50" 
-                    : "bg-white border-slate-100 shadow-md shadow-slate-200/10 hover:border-blue-200"
-                )}
+              <button
+                onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
               >
-                <div className={cn(
-                  "w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center font-black text-sm sm:text-base transition-all duration-500 shrink-0",
-                  selectedLeadIndex === idx 
-                    ? "bg-blue-600 text-white rotate-3 scale-110 shadow-md shadow-blue-200" 
-                    : "bg-slate-50 text-slate-400 group-hover:bg-blue-50 group-hover:text-blue-600 group-hover:rotate-6"
-                )}>
-                  {lead.name[0]}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-black text-slate-800 truncate tracking-tight text-sm">{lead.name}</p>
-                  <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                    <Phone size={10} className="text-slate-300" />
-                    <p className="text-[10px] text-slate-400 font-bold tracking-tight">
-                      {lead.phone}
-                    </p>
-                    <a
-                      href={getWhatsAppUrl(lead.phone)}
-                      target="_blank"
-                      rel="noreferrer"
-                      onClick={(event) => event.stopPropagation()}
-                      className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[8px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"
-                      title="Chat on WhatsApp"
-                    >
-                      WA
-                    </a>
+                <Filter size={16} className={showAdvancedFilters ? "text-blue-600" : ""} />
+              </button>
+            </div>
+
+            <AnimatePresence>
+              {showAdvancedFilters && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden space-y-2.5"
+                >
+                  {/* Lead Status Filter */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+                    {([
+                      { v: 'All',          label: 'All',            cls: 'bg-slate-900 text-white', inact: 'bg-white border-slate-100 text-slate-500 hover:bg-slate-50' },
+                      { v: 'Interested',   label: 'âœ“ Interested',   cls: 'bg-emerald-600 text-white', inact: 'bg-white border-slate-100 text-slate-500 hover:bg-emerald-50' },
+                      { v: 'Not Interested', label: 'âœ• Not Interested', cls: 'bg-rose-600 text-white', inact: 'bg-white border-slate-100 text-slate-500 hover:bg-rose-50' },
+                      { v: 'Pending',      label: 'Â· Pending',      cls: 'bg-amber-500 text-white', inact: 'bg-white border-slate-100 text-slate-500 hover:bg-amber-50' },
+                    ] as const).map(({ v, label, cls, inact }) => (
+                      <button
+                        key={v}
+                        onClick={() => { setLeadTypeFilter(v); setSelectedLeadIndex(null); }}
+                        className={cn(
+                          "whitespace-nowrap px-3 py-1.5 rounded-full font-black text-[9px] uppercase tracking-widest transition-all border",
+                          leadTypeFilter === v ? cls : inact
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
-                  {lead.lastInteractionAt && (
-                    <div className="flex items-center gap-1 mt-1">
-                      <History size={10} className="text-blue-400" />
-                      <p className="text-[9px] text-blue-500 font-black uppercase tracking-tighter">
-                        Last: {formatDateValue(lead.lastInteractionAt, 'MMM dd, HH:mm')}
-                      </p>
+
+                  {/* Purpose Filter â€” hidden when Not Interested is active since those leads have no queue */}
+                  {leadTypeFilter !== 'Not Interested' && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+                      <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest shrink-0">Purpose:</span>
+                      {(['All', 'Follow-up', 'Site Visit', 'Meeting', 'Closure'] as const).map(purpose => (
+                        <button
+                          key={purpose}
+                          onClick={() => { setLeadPurposeFilter(purpose); setSelectedLeadIndex(null); }}
+                          className={cn(
+                            "whitespace-nowrap px-3 py-1.5 rounded-full font-black text-[9px] uppercase tracking-widest transition-all border",
+                            leadPurposeFilter === purpose
+                              ? "bg-indigo-600 text-white border-indigo-600"
+                              : "bg-white border-slate-100 text-slate-500 hover:bg-indigo-50"
+                          )}
+                        >
+                          {purpose}
+                        </button>
+                      ))}
                     </div>
                   )}
-                  {lead.nextFollowupAt && (
-                    <div className="flex items-center gap-1 mt-1">
-                      <Clock size={10} className="text-indigo-400" />
-                      <p className="text-[9px] text-indigo-500 font-black uppercase tracking-tighter">
-                        Next: {formatDateValue(lead.nextFollowupAt, lead.hasFollowupTime ? 'MMM dd, hh:mm a' : 'MMM dd')}
-                      </p>
-                    </div>
-                  )}
-                </div>
-                <div className="flex flex-col items-end gap-1.5">
-                  {effectiveQueueTab === 'overdue' && (
-                    <span className="px-2 py-1 rounded-lg bg-rose-50 text-rose-600 text-[9px] font-black uppercase tracking-wider whitespace-nowrap">
-                      {(() => {
-                        const nextDateValue = toDateValue(lead.nextFollowupAt);
-                        if (!nextDateValue) return 'No date';
-                        const delayDays = Math.max(1, Math.floor((startOfDay(new Date()).getTime() - startOfDay(nextDateValue).getTime()) / (24 * 60 * 60 * 1000)));
-                        return `${delayDays}d overdue`;
-                      })()}
-                    </span>
-                  )}
-                  {effectiveQueueTab === 'today' && (
-                    <span className={cn(
-                      "px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider whitespace-nowrap",
-                      toDateValue(lead.createdAt) && isToday(toDateValue(lead.createdAt) as Date)
-                        ? "bg-emerald-50 text-emerald-600"
-                        : "bg-indigo-50 text-indigo-600"
-                    )}>
-                      {toDateValue(lead.createdAt) && isToday(toDateValue(lead.createdAt) as Date) ? 'New' : 'Today'}
-                    </span>
-                  )}
-                  {effectiveQueueTab === 'upcoming' && lead.nextFollowupAt && (
-                    <span className="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-600 text-[9px] font-black uppercase tracking-wider whitespace-nowrap">
-                      {formatDateValue(lead.nextFollowupAt, lead.hasFollowupTime ? 'dd MMM, hh:mm a' : 'dd MMM')}
-                    </span>
-                  )}
-                  <div className={cn(
-                    "w-8 h-8 rounded-full flex items-center justify-center transition-all",
-                    selectedLeadIndex === idx ? "bg-blue-100 text-blue-600" : "bg-slate-50 text-slate-300 group-hover:bg-blue-50 group-hover:text-blue-400"
-                  )}>
-                    <ChevronRight size={16} className={cn("transition-transform", selectedLeadIndex === idx && "translate-x-0.5")} />
-                  </div>
-                </div>
-              </motion.button>
-            ))}
-            {filteredLeads.length === 0 && (
-              <div className="text-center py-20 bg-white/50 rounded-[48px] border-4 border-dashed border-slate-100">
-                <div className="w-20 h-20 bg-slate-50 text-slate-200 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <ClipboardList size={40} />
-                </div>
-                <p className="text-slate-400 font-black text-xs uppercase tracking-[0.2em]">Queue is Clear</p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Not Interested info banner */}
+            {leadTypeFilter === 'Not Interested' && (
+              <div className="flex items-center gap-2 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
+                <span className="text-[9px] font-black text-rose-600 uppercase tracking-widest">
+                  Showing {filteredLeads.length} not-interested lead{filteredLeads.length !== 1 ? 's' : ''} from all time â€” click to re-engage
+                </span>
               </div>
             )}
           </div>
+
+          {/* Lead Cards */}
+          <div className="space-y-2 max-h-none lg:max-h-[calc(100vh-480px)] overflow-visible lg:overflow-y-auto pr-0 lg:pr-2 pb-2 custom-scrollbar px-4">
+            {filteredLeads.map((lead, idx) => {
+              const isNotInterested = lead.status === 'not_interested';
+              const isInterested = lead.status === 'interested' || lead.status === 'interest';
+              const statusColor = isNotInterested
+                ? 'bg-rose-100 text-rose-600'
+                : isInterested
+                ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-amber-50 text-amber-600';
+              const avatarColor = isNotInterested
+                ? (selectedLeadIndex === idx ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-400 group-hover:bg-rose-100')
+                : isInterested
+                ? (selectedLeadIndex === idx ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-500 group-hover:bg-emerald-100')
+                : (selectedLeadIndex === idx ? 'bg-blue-600 text-white' : 'bg-slate-50 text-slate-400 group-hover:bg-blue-50 group-hover:text-blue-600');
+              return (
+                <motion.button
+                  key={lead.id}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: idx * 0.025 }}
+                  whileHover={{ x: 3 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setSelectedLeadIndex(idx)}
+                  className={cn(
+                    "w-full text-left p-3 sm:p-4 rounded-2xl border transition-all duration-200 flex items-start gap-3 group",
+                    selectedLeadIndex === idx
+                      ? "bg-white border-blue-400 shadow-xl shadow-blue-900/10 ring-2 ring-blue-50"
+                      : isNotInterested
+                      ? "bg-rose-50/40 border-rose-100 shadow-sm hover:border-rose-200"
+                      : "bg-white border-slate-100 shadow-sm hover:border-blue-200"
+                  )}
+                >
+                  {/* Avatar */}
+                  <div className={cn(
+                    "w-9 h-9 rounded-xl flex items-center justify-center font-black text-sm transition-all duration-300 shrink-0 mt-0.5",
+                    avatarColor,
+                    selectedLeadIndex === idx && "rotate-3 scale-110 shadow-md"
+                  )}>
+                    {lead.name[0]?.toUpperCase()}
+                  </div>
+
+                  {/* Info */}
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-black text-slate-800 truncate tracking-tight text-sm">{lead.name}</p>
+                      <span className={cn("px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase tracking-wider", statusColor)}>
+                        {isNotInterested ? 'Not Interested' : isInterested ? 'Interested' : 'Pending'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-slate-400 font-bold">{lead.phone}</span>
+                      <a
+                        href={getWhatsAppUrl(lead.phone)}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        className="inline-flex items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-100"
+                      >WA</a>
+                      {lead.lastPurpose && (
+                        <span className={cn(
+                          "inline-flex items-center rounded-full px-2 py-0.5 text-[8px] font-black uppercase tracking-widest",
+                          lead.lastPurpose === 'Site Visit' ? 'bg-fuchsia-50 text-fuchsia-700' :
+                          lead.lastPurpose === 'Meeting' ? 'bg-emerald-50 text-emerald-700' :
+                          lead.lastPurpose === 'Closure' ? 'bg-orange-50 text-orange-700' :
+                          'bg-blue-50 text-blue-700'
+                        )}>
+                          {lead.lastPurpose}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                      {lead.lastInteractionAt && (
+                        <div className="flex items-center gap-1">
+                          <History size={9} className="text-slate-300" />
+                          <span className="text-[9px] text-slate-400 font-bold">
+                            {formatDateValue(lead.lastInteractionAt, 'MMM dd')}
+                          </span>
+                        </div>
+                      )}
+                      {lead.nextFollowupAt && !isNotInterested && (
+                        <div className="flex items-center gap-1">
+                          <Clock size={9} className="text-indigo-400" />
+                          <span className="text-[9px] text-indigo-500 font-black">
+                            {formatDateValue(lead.nextFollowupAt, lead.hasFollowupTime ? 'MMM dd, hh:mm a' : 'MMM dd')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right side badges */}
+                  <div className="flex flex-col items-end gap-1.5 shrink-0">
+                    {isNotInterested ? (
+                      <span className="px-2 py-1 rounded-lg bg-rose-100 text-rose-600 text-[8px] font-black uppercase tracking-wider whitespace-nowrap">Re-engage?</span>
+                    ) : effectiveQueueTab === 'overdue' ? (
+                      <span className="px-2 py-1 rounded-lg bg-rose-50 text-rose-600 text-[9px] font-black uppercase tracking-wider whitespace-nowrap">
+                        {(() => {
+                          const d = toDateValue(lead.nextFollowupAt);
+                          if (!d) return 'No date';
+                          const days = Math.max(1, Math.floor((startOfDay(new Date()).getTime() - startOfDay(d).getTime()) / 86400000));
+                          return `${days}d overdue`;
+                        })()}
+                      </span>
+                    ) : effectiveQueueTab === 'today' ? (
+                      <span className={cn(
+                        "px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider whitespace-nowrap",
+                        toDateValue(lead.createdAt) && isToday(toDateValue(lead.createdAt) as Date)
+                          ? "bg-emerald-50 text-emerald-600"
+                          : "bg-indigo-50 text-indigo-600"
+                      )}>
+                        {toDateValue(lead.createdAt) && isToday(toDateValue(lead.createdAt) as Date) ? 'New' : 'Today'}
+                      </span>
+                    ) : effectiveQueueTab === 'upcoming' && lead.nextFollowupAt ? (
+                      <span className="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-600 text-[9px] font-black uppercase tracking-wider whitespace-nowrap">
+                        {formatDateValue(lead.nextFollowupAt, lead.hasFollowupTime ? 'dd MMM, hh:mm a' : 'dd MMM')}
+                      </span>
+                    ) : null}
+                    <div className={cn(
+                      "w-7 h-7 rounded-full flex items-center justify-center transition-all",
+                      selectedLeadIndex === idx ? "bg-blue-100 text-blue-600" : "bg-slate-50 text-slate-300 group-hover:bg-blue-50 group-hover:text-blue-400"
+                    )}>
+                      <ChevronRight size={14} className={cn("transition-transform", selectedLeadIndex === idx && "translate-x-0.5")} />
+                    </div>
+                  </div>
+                </motion.button>
+              );
+            })}
+
+            {/* Empty state */}
+            {filteredLeads.length === 0 && (
+              <div className="text-center py-16 bg-white/50 rounded-[32px] border-4 border-dashed border-slate-100">
+                <div className="w-16 h-16 bg-slate-50 text-slate-200 rounded-full flex items-center justify-center mx-auto mb-3">
+                  {leadTypeFilter === 'Not Interested'
+                    ? <ThumbsDown size={28} />
+                    : <ClipboardList size={28} />
+                  }
+                </div>
+                <p className="text-slate-400 font-black text-xs uppercase tracking-[0.2em]">
+                  {leadTypeFilter === 'Not Interested' ? 'No Not-Interested Leads' : 'Queue is Clear'}
+                </p>
+                <p className="text-slate-300 text-[10px] font-medium mt-1">
+                  {leadTypeFilter === 'Not Interested'
+                    ? 'Great â€” no one has said no yet!'
+                    : leadTypeFilter !== 'All'
+                    ? 'Try switching the filter above'
+                    : 'All caught up for this time slot'
+                  }
+                </p>
+              </div>
+            )}
+          </div>
+
         </div>
 
-        {/* Lead Detail / Focused View */}
-        <div className="flex-1">
-          <AnimatePresence mode="wait">
-            {currentLead ? (
-              <motion.div
-                key={currentLead.id}
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="bg-white rounded-3xl border border-gray-100 shadow-xl overflow-hidden flex flex-col"
-              >
-                {/* Enhanced Detail View */}
-                <div className="p-4 sm:p-8 md:p-10 bg-slate-50/50 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6">
-                  <div className="flex items-start sm:items-center gap-4 sm:gap-6 min-w-0">
-                    <div className="w-14 h-14 sm:w-20 sm:h-20 rounded-2xl sm:rounded-[32px] bg-blue-600 flex items-center justify-center text-white text-2xl sm:text-3xl font-black shadow-2xl shadow-blue-200 ring-4 sm:ring-8 ring-blue-50 shrink-0">
-                      {currentLead.name[0]}
+        {/* Lead Detail â€” Fixed fullscreen overlay on mobile, inline panel on desktop */}
+        {currentLead && (
+          <div className="fixed inset-0 z-[80] bg-white overflow-y-auto lg:static lg:inset-auto lg:z-auto lg:flex-1 lg:overflow-visible">
+            <div className="relative min-h-full flex flex-col">
+              {/* Top Bar */}
+              <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-slate-100 sticky top-0 z-10">
+                <div className="flex items-center gap-3">
+                  <button onClick={() => setSelectedLeadIndex(null)} className="p-2 text-slate-700 hover:bg-slate-50 rounded-full transition-colors">
+                    <ArrowLeft size={20} />
+                  </button>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Lead Details</h3>
+                    <p className="text-[10px] text-slate-500 font-medium">{filteredLeads.indexOf(currentLead) + 1} / {filteredLeads.length}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => setShowHistory(prev => !prev)} className="p-2 text-slate-700 hover:bg-slate-50 rounded-full transition-colors">
+                    <History size={20} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Lead Info Card */}
+              <div className="p-4 bg-white space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center text-white text-xl font-black shrink-0">
+                    {currentLead.name ? currentLead.name[0] : 'U'}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-xl font-black text-slate-900 uppercase tracking-wide truncate">{currentLead.name}</h2>
+                      {currentLead.addedByName && (
+                        <span className="text-[9px] font-black uppercase tracking-widest text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full whitespace-nowrap">
+                          EMPLOYEE ADDED
+                        </span>
+                      )}
                     </div>
-                    <div className="min-w-0">
-                      <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight break-words leading-tight">{currentLead.name}</h2>
-                      <div className="flex flex-wrap items-center gap-2 sm:gap-4 mt-2">
-                        <a href={`tel:${currentLead.phone}`} className="bg-white px-3 py-1.5 rounded-full shadow-sm border border-slate-100 text-blue-600 font-black text-[10px] sm:text-[11px] uppercase tracking-widest hover:bg-blue-50 transition-all flex items-center gap-2">
-                          <Phone size={12} /> {currentLead.phone}
-                        </a>
-                        <a
-                          href={getWhatsAppUrl(currentLead.phone)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="bg-emerald-50 px-3 py-1.5 rounded-full shadow-sm border border-emerald-100 text-emerald-700 font-black text-[10px] sm:text-[11px] uppercase tracking-widest hover:bg-emerald-100 transition-all flex items-center gap-2"
-                          title="Chat on WhatsApp"
-                        >
-                          <MessageSquare size={12} /> WhatsApp
-                        </a>
-                        <div className="flex items-center gap-2 text-slate-400 font-bold text-[9px] sm:text-[10px] uppercase tracking-widest">
-                          <Clock size={12} /> Added {formatDateValue(currentLead.createdAt, 'MMM dd', 'Unknown')}
-                        </div>
-                        {currentLead.lastInteractionAt && (
-                          <div className="flex items-center gap-2 text-blue-500 font-black text-[9px] sm:text-[10px] uppercase tracking-widest bg-blue-50 px-3 py-1 rounded-full border border-blue-100">
-                            <History size={12} /> Last Follow-up: {formatDateValue(currentLead.lastInteractionAt, 'MMM dd, hh:mm a', 'N/A')}
-                          </div>
-                        )}
-                        <div className="bg-slate-900 text-white px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-[0.2em]">
-                          {currentLead.source}
-                        </div>
-                        {currentLead.addedByName && (
-                          <div className="bg-blue-50 text-blue-600 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-[0.2em] border border-blue-100">
-                            Added By: {currentLead.addedByName}
-                          </div>
-                        )}
-                        {!canManageCurrentLead && (
-                          <div className="bg-amber-50 text-amber-600 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-[0.2em] border border-amber-100">
-                            View Only
-                          </div>
-                        )}
+                    <p className="text-xs text-slate-500 font-medium">{currentLead.phone}</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <a href={`tel:${currentLead.phone}`} className="flex-1 py-2.5 border border-slate-200 rounded-xl flex items-center justify-center gap-2 text-emerald-600 font-bold text-xs hover:bg-slate-50 transition-colors">
+                    <Phone size={14} /> Call
+                  </a>
+                  <a href={getWhatsAppUrl(currentLead.phone)} target="_blank" rel="noreferrer" className="flex-1 py-2.5 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center justify-center gap-2 text-emerald-700 font-bold text-xs hover:bg-emerald-100 transition-colors">
+                    <MessageSquare size={14} /> WhatsApp
+                  </a>
+                </div>
+              </div>
+
+              {/* Last Interaction Card */}
+              <div className="px-4 pb-4 bg-white">
+                {currentLead.lastInteractionAt ? (
+                  <div className="p-4 bg-blue-50/50 border border-blue-100/50 rounded-2xl relative">
+                    <h4 className="flex items-center gap-2 text-[10px] font-black text-blue-600 uppercase tracking-widest mb-2">
+                      <MessageSquare size={14} /> LAST INTERACTION
+                    </h4>
+                    <p className="text-xs text-slate-700 font-medium mb-3 pr-20 line-clamp-2">
+                      &ldquo;{currentLead.lastRemark || 'No notes available.'}&rdquo;
+                    </p>
+                    <div className="flex items-center justify-between mt-1 text-[9px] text-slate-500 font-medium">
+                      <span>{formatDateValue(currentLead.lastInteractionAt, 'd MMM yyyy')} &bull; {formatDateValue(currentLead.lastInteractionAt, 'h:mm a')} &bull; By {currentLead.updatedByName || currentLead.addedByName || 'System'}</span>
+                    </div>
+                    <button onClick={() => setShowHistory(true)} className="absolute bottom-4 right-4 text-[10px] font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                      View History <ChevronRight size={12} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-4 bg-slate-50 border border-slate-100 rounded-2xl">
+                    <h4 className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                      <MessageSquare size={14} /> LAST INTERACTION
+                    </h4>
+                    <p className="text-xs text-slate-500 italic">No interactions recorded yet.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* View Only Banner */}
+              {!canManageCurrentLead && (
+                <div className="mx-4 mb-4 p-4 bg-amber-50 border border-amber-100 rounded-2xl">
+                  <p className="text-xs font-black text-amber-600 uppercase tracking-widest">View Only Lead</p>
+                  <p className="text-sm font-medium text-amber-700 mt-1">This lead is no longer assigned to you. You can view it because you added it.</p>
+                </div>
+              )}
+
+              {/* Not Interested Re-engage Panel */}
+              {currentLead.status === 'not_interested' && (
+                <div className="mx-4 mb-4 space-y-4">
+                  <div className="flex items-center gap-3 bg-rose-50 border border-rose-200 rounded-2xl p-4">
+                    <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center shrink-0">
+                      <ThumbsDown size={18} className="text-rose-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-rose-700">This Lead Said No</p>
+                      <p className="text-xs text-rose-500 mt-0.5">Marked not-interested. Add a new note and re-engage if the situation has changed.</p>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-black text-slate-900 flex items-center gap-2 uppercase text-xs tracking-[0.2em]">
+                        <MessageSquare className="text-blue-500" size={16} /> Re-engage Note
+                      </h4>
+                      <span className={cn("text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest transition-colors",
+                        remark.length === 0 ? "bg-slate-100 text-slate-400" : remark.length > 400 ? "bg-rose-100 text-rose-600" : "bg-blue-50 text-blue-600"
+                      )}>{remark.length} / 400</span>
+                    </div>
+                    <textarea
+                      placeholder="What changed? Why are you re-engaging this lead?"
+                      maxLength={400}
+                      value={remark}
+                      onChange={e => setRemark(e.target.value)}
+                      className="w-full h-28 px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:bg-white focus:border-blue-300 outline-none transition-all resize-none font-medium text-slate-600 leading-relaxed text-sm"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button type="button" disabled={!canManageCurrentLead || loading}
+                      onClick={() => { handleUpdateLead('interested'); }}
+                      className="flex items-center justify-center gap-2 py-3.5 bg-emerald-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all disabled:opacity-40">
+                      <ThumbsUp size={16} /> Re-engage
+                    </button>
+                    <button type="button" disabled={!canManageCurrentLead || loading || !remark.trim()}
+                      onClick={() => handleUpdateLead('not_interested')}
+                      className="flex items-center justify-center gap-2 py-3.5 bg-slate-100 text-slate-600 rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-slate-200 active:scale-95 transition-all disabled:opacity-40">
+                      <MessageSquare size={16} /> Save Note
+                    </button>
+                  </div>
+                  <button type="button" disabled={!canManageCurrentLead}
+                    onClick={() => setShowTransferModal(true)}
+                    className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 hover:border-orange-300 hover:text-orange-500 font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-40">
+                    <ArrowLeftRight size={14} /> Transfer to Another Executive
+                  </button>
+                </div>
+              )}
+
+              {/* Normal Interaction Form */}
+              {currentLead.status !== 'not_interested' && (
+                <div className="space-y-4 px-4 pb-4 bg-white">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="font-black text-slate-900 flex items-center gap-1.5 uppercase text-[10px] tracking-widest">
+                        <MessageSquare className="text-blue-500" size={14} /> Record New Interaction
+                      </h4>
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest bg-slate-50 px-2 py-0.5 rounded-full">{remark.length} / 400</span>
+                    </div>
+                    <div className="relative">
+                      <textarea
+                        placeholder="Log call details, client requirements, or notes..."
+                        maxLength={400}
+                        value={remark}
+                        onChange={e => setRemark(e.target.value)}
+                        className="w-full h-20 px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-blue-100 focus:bg-white focus:border-blue-200 outline-none transition-all resize-none font-medium text-slate-600 text-xs"
+                      />
+                      {remark.length > 0 && (
+                        <button onClick={() => setRemark('')} className="absolute top-2 right-2 p-1 text-slate-400 hover:text-slate-600 bg-white rounded-md shadow-sm">
+                          <XSquare size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-black text-blue-600 uppercase tracking-widest flex items-center gap-1.5"><Calendar size={12}/> Next Follow-up</label>
+                    <div className="flex gap-2">
+                      <div className="flex-1 relative">
+                        <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
+                        <input type="date" value={nextDate} onChange={e => setNextDate(e.target.value)}
+                          className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-blue-100 outline-none font-bold text-slate-700 text-xs" />
+                      </div>
+                      <div className="flex-1 relative">
+                        <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
+                        <input type="time" value={nextTime} onChange={e => setNextTime(e.target.value)}
+                          className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-blue-100 outline-none font-bold text-slate-700 text-xs" />
                       </div>
                     </div>
                   </div>
-                  <div className="flex flex-wrap md:flex-nowrap gap-2 sm:gap-3 w-full md:w-auto">
-                    <button
-                      onClick={() => setShowTransferModal(true)}
-                      disabled={!canManageCurrentLead}
-                      className="flex-1 md:flex-none px-4 sm:px-5 py-2.5 bg-white border border-slate-200 rounded-2xl text-orange-600 hover:bg-orange-50 transition-all shadow-sm flex items-center justify-center gap-2 font-black text-[10px] sm:text-[11px] uppercase tracking-widest disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <ArrowLeftRight size={16} /> Transfer
+
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-black text-blue-600 uppercase tracking-widest flex items-center gap-1.5"><Info size={12}/> Follow-up Purpose</label>
+                    <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
+                      {(['Follow-up', 'Site Visit', 'Meeting', 'Closure'] as const).map(p => (
+                        <button key={p} onClick={() => setFollowupPurpose(p)}
+                          className={cn("px-4 py-3 border rounded-xl whitespace-nowrap font-black text-xs transition-all flex flex-col items-center justify-center gap-1.5 min-w-[72px]",
+                            followupPurpose === p ? "bg-blue-50 border-blue-200 text-blue-700 shadow-inner" : "bg-white border-slate-100 text-slate-500 hover:bg-slate-50")}>
+                          {p === 'Follow-up' && <Clock size={16} className={followupPurpose === p ? 'text-blue-500' : 'text-blue-400'}/>}
+                          {p === 'Site Visit' && <MapPin size={16} className={followupPurpose === p ? 'text-fuchsia-500' : 'text-fuchsia-400'}/>}
+                          {p === 'Meeting' && <Users size={16} className={followupPurpose === p ? 'text-emerald-500' : 'text-emerald-400'}/>}
+                          {p === 'Closure' && <CheckCircle2 size={16} className={followupPurpose === p ? 'text-orange-500' : 'text-orange-400'}/>}
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <button onClick={() => setSelectedStatus(selectedStatus === 'interested' ? null : 'interested')}
+                      disabled={!canManageCurrentLead || loading || !remark.trim()}
+                      className={cn("flex-1 py-3 font-black text-[10px] uppercase tracking-widest rounded-xl transition-all border flex items-center justify-center gap-2",
+                        selectedStatus === 'interested' ? "bg-emerald-500 border-emerald-600 text-white shadow-md shadow-emerald-200" : "bg-emerald-50 border-emerald-100 text-emerald-600 hover:bg-emerald-100 disabled:opacity-50")}>
+                      <ThumbsUp size={14} /> Interested
                     </button>
-                    <button
-                      onClick={() => setShowHistory(prev => !prev)}
-                      className={cn(
-                        "flex-1 md:flex-none px-4 sm:px-5 py-2.5 border rounded-2xl transition-all shadow-sm flex items-center justify-center gap-2 font-black text-[10px] sm:text-[11px] uppercase tracking-widest",
-                        showHistory
-                          ? "bg-blue-50 border-blue-200 text-blue-700"
-                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                      )}
-                    >
-                      <History size={16} /> History
+                    <button onClick={() => setSelectedStatus(selectedStatus === 'not_interested' ? null : 'not_interested')}
+                      disabled={!canManageCurrentLead || loading || !remark.trim()}
+                      className={cn("flex-1 py-3 font-black text-[10px] uppercase tracking-widest rounded-xl transition-all border flex items-center justify-center gap-2",
+                        selectedStatus === 'not_interested' ? "bg-rose-500 border-rose-600 text-white shadow-md shadow-rose-200" : "bg-rose-50 border-rose-100 text-rose-600 hover:bg-rose-100 disabled:opacity-50")}>
+                      <ThumbsDown size={14} /> Not Interested
                     </button>
-                    <button 
-                      onClick={() => {
-                        const nextIdx = filteredLeads.indexOf(currentLead) + 1;
-                        if (nextIdx < filteredLeads.length) setSelectedLeadIndex(nextIdx);
-                        else setSelectedLeadIndex(null);
+                  </div>
+
+                  <div className="flex gap-3 mt-2">
+                    <button onClick={() => handleUpdateLead(selectedStatus || currentLead.status, false)}
+                      disabled={!canManageCurrentLead || loading || !remark.trim() || !nextDate}
+                      className="flex-[2] py-3.5 bg-blue-600 text-white font-black text-[11px] uppercase tracking-widest rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all active:scale-95 flex items-center justify-center gap-2">
+                      <Save size={16} /> Save
+                    </button>
+                    <button onClick={() => {
+                        if (selectedLeadIndex !== null && selectedLeadIndex < filteredLeads.length - 1) {
+                          setSelectedLeadIndex(selectedLeadIndex + 1);
+                        } else {
+                          setSelectedLeadIndex(null);
+                        }
                       }}
-                      className="flex-1 md:flex-none px-4 sm:px-5 py-2.5 bg-blue-600 text-white rounded-2xl shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all flex items-center justify-center gap-2 font-black text-[10px] sm:text-[11px] uppercase tracking-widest"
-                    >
+                      className="flex-1 py-3.5 bg-slate-100 text-slate-700 font-black text-[11px] uppercase tracking-widest rounded-xl hover:bg-slate-200 transition-all active:scale-95 flex items-center justify-center gap-2">
                       Next <ChevronRight size={16} />
                     </button>
                   </div>
                 </div>
+              )}
 
-                <div className="flex flex-col md:flex-row divide-y md:divide-y-0 md:divide-x divide-slate-100">
-                  {/* Action Panel */}
-                  <div className="flex-1 p-8 md:p-10 space-y-10">
-                    {!canManageCurrentLead && (
-                      <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl">
-                        <p className="text-xs font-black text-amber-600 uppercase tracking-widest">View Only Lead</p>
-                        <p className="text-sm font-medium text-amber-700 mt-1">
-                          This lead is no longer assigned to you. You can view it because you added it.
-                        </p>
-                      </div>
-                    )}
-                    <div className="space-y-6">
-                      <div className="flex items-center justify-between">
-                        <h4 className="font-black text-slate-900 flex items-center gap-2 uppercase text-xs tracking-[0.2em]">
-                          <MessageSquare className="text-blue-500" size={18} /> Record Interaction
-                        </h4>
-                        <span className={cn(
-                          "text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest transition-colors",
-                          remark.length === 0 ? "bg-slate-100 text-slate-400" : 
-                          remark.length > 400 ? "bg-rose-100 text-rose-600" : "bg-blue-50 text-blue-600"
-                        )}>
-                          {remark.length} / 400
-                        </span>
-                      </div>
-                      <div className="relative group">
-                        <textarea
-                          placeholder="Log call details, client requirements, or specific notes..."
-                          required
-                          maxLength={400}
-                          value={remark}
-                          onChange={e => setRemark(e.target.value)}
-                          className="w-full h-44 px-6 py-5 bg-slate-50 border border-slate-200 rounded-[32px] focus:ring-4 focus:ring-blue-100 focus:bg-white focus:border-blue-300 outline-none transition-all resize-none font-medium text-slate-600 leading-relaxed shadow-inner"
-                        />
-                        {remark.length > 0 && (
-                          <button 
-                            onClick={() => setRemark('')}
-                            className="absolute top-4 right-4 text-slate-300 hover:text-slate-500"
-                          >
-                            <XSquare size={20} />
-                          </button>
-                        )}
-                      </div>
+              {/* Accordions */}
+              <div className="px-4 pb-32 space-y-3">
+                <details className="group bg-white rounded-2xl border border-slate-100 overflow-hidden">
+                  <summary className="flex items-center justify-between p-4 cursor-pointer marker:content-none font-black text-[10px] text-slate-900 uppercase tracking-widest bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                    <span className="flex items-center gap-2"><Info size={14} className="text-blue-500"/> Lead Information</span>
+                    <ChevronDown size={16} className="text-slate-400 group-open:rotate-180 transition-transform" />
+                  </summary>
+                  <div className="p-4 border-t border-slate-100 space-y-3 bg-white">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="font-bold text-slate-500 uppercase tracking-widest">Added Date</span>
+                      <span className="font-black text-slate-900">{formatDateValue(currentLead.createdAt, 'MMM dd, yyyy', 'Unknown')}</span>
                     </div>
-
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Next Followup Date</label>
-                          <input
-                            type="date"
-                            value={nextDate}
-                            onChange={e => setNextDate(e.target.value)}
-                            className="w-full px-6 py-3.5 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Next Followup Time (Optional)</label>
-                          <input
-                            type="time"
-                            value={nextTime}
-                            onChange={e => setNextTime(e.target.value)}
-                            className="w-full px-6 py-3.5 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 outline-none font-bold text-slate-700"
-                          />
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => handleUpdateLead(selectedStatus || currentLead.status)}
-                        disabled={!canManageCurrentLead || loading || !remark.trim() || !nextDate}
-                        className="w-full h-[56px] bg-blue-600 text-white font-black text-xs uppercase tracking-widest rounded-2xl hover:bg-blue-700 shadow-2xl shadow-blue-200 disabled:opacity-30 disabled:grayscale transition-all active:scale-95"
-                      >
-                        Save & Schedule
-                      </button>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="font-bold text-slate-500 uppercase tracking-widest">Source</span>
+                      <span className="font-black text-slate-900 bg-slate-100 px-2 py-0.5 rounded-full">{currentLead.source}</span>
                     </div>
-
-                      <div className="flex items-center gap-2">
-                        <button 
-                          onClick={() => setSelectedStatus('interested')}
-                          disabled={!canManageCurrentLead || loading || !remark.trim()}
-                          className={cn(
-                            "flex-1 py-3 font-black text-[10px] uppercase tracking-[0.2em] rounded-xl transition-colors disabled:opacity-30",
-                            selectedStatus === 'interested'
-                              ? "bg-green-600 text-white shadow-md shadow-green-200"
-                              : "bg-green-50 text-green-600 hover:bg-green-100"
-                          )}
-                        >
-                          Interested
-                        </button>
-                        <button 
-                          onClick={() => handleUpdateLead('not_interested')}
-                          disabled={!canManageCurrentLead || loading || !remark.trim()}
-                          className="flex-1 py-3 bg-rose-50 text-rose-600 font-black text-[10px] uppercase tracking-[0.2em] rounded-xl hover:bg-rose-100 transition-colors disabled:opacity-30"
-                        >
-                          Not Interested
-                        </button>
-                      </div>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                        Choose <span className="text-green-600">Interested</span>, then tap <span className="text-blue-600">Save &amp; Schedule</span> to submit.
-                      </p>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
-                      <button 
-                        onClick={startCamera}
-                        disabled={!canManageCurrentLead}
-                        className="p-6 border-2 border-dashed border-slate-200 rounded-[32px] flex flex-col items-center justify-center gap-3 text-blue-600 hover:bg-blue-50 transition-all hover:border-blue-300 group disabled:opacity-30 disabled:cursor-not-allowed"
-                      >
-                        <Camera className="w-8 h-8 group-hover:scale-110 transition-transform text-blue-500" />
-                        <span className="font-black text-xs uppercase tracking-widest">Real-time Site Visit</span>
-                      </button>
-                      <button 
-                        onClick={() => handleUpdateLead('deal_pending')}
-                        disabled={!canManageCurrentLead}
-                        className="p-6 bg-slate-900 border border-slate-800 rounded-[32px] flex flex-col items-center justify-center gap-3 text-white hover:bg-black shadow-2xl shadow-slate-200 transition-all active:scale-95 group disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        <ShieldCheck className="w-8 h-8 group-hover:scale-110 transition-transform text-indigo-400" />
-                        <span className="font-black text-xs uppercase tracking-widest">Submit for Review</span>
-                      </button>
-                    </div>
-
-                    <div className="space-y-4 p-6 bg-indigo-50/40 rounded-[32px] border border-indigo-100">
-                      <h4 className="font-black text-slate-900 flex items-center gap-2 uppercase text-xs tracking-[0.2em]">
-                        <FileText className="text-indigo-500" size={18} /> KYC Documents
-                      </h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {([
-                          { key: 'aadhaar' as const, label: 'Aadhaar Card', existingUrl: currentLead.kycAadhaarUrl, existingName: currentLead.kycAadhaarName },
-                          { key: 'pan' as const, label: 'PAN Card', existingUrl: currentLead.kycPanUrl, existingName: currentLead.kycPanName },
-                        ]).map((docItem) => {
-                          const selectedFile = kycFiles[docItem.key];
-                          return (
-                            <label key={docItem.key} className="block rounded-2xl border-2 border-dashed border-indigo-200 bg-white p-4 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-all">
-                              <span className="block text-[10px] font-black text-indigo-600 uppercase tracking-widest">
-                                {docItem.label} <span className="text-rose-500">*</span>
-                              </span>
-                              <span className="mt-2 block text-xs font-bold text-slate-600 truncate">
-                                {selectedFile?.name || docItem.existingName || (docItem.existingUrl ? 'Uploaded document' : 'Upload image or PDF')}
-                              </span>
-                              {docItem.existingUrl && !selectedFile && (
-                                <a
-                                  href={docItem.existingUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  onClick={(event) => event.stopPropagation()}
-                                  className="mt-2 inline-flex text-[10px] font-black uppercase tracking-widest text-blue-600 hover:underline"
-                                >
-                                  View Current
-                                </a>
-                              )}
-                              <input
-                                type="file"
-                                accept="image/*,.pdf"
-                                className="hidden"
-                                onChange={(event) => {
-                                  const file = event.target.files?.[0] || null;
-                                  setKycFiles((prev) => ({ ...prev, [docItem.key]: file }));
-                                }}
-                              />
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {currentLead.siteVisitPhoto && (
-                      <div className="space-y-4 p-6 bg-violet-50/40 rounded-[32px] border border-violet-100">
-                        <h4 className="font-black text-slate-900 flex items-center gap-2 uppercase text-xs tracking-[0.2em]">
-                          <MapPin className="text-violet-500" size={18} /> Site Visit Evidence
-                        </h4>
-                        <a
-                          href={currentLead.siteVisitPhoto}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block rounded-2xl overflow-hidden border border-violet-100 bg-white shadow-sm"
-                          title="Open full image"
-                        >
-                          <img
-                            src={currentLead.siteVisitPhoto}
-                            alt="Site visit capture"
-                            className="w-full h-52 object-cover"
-                            referrerPolicy="no-referrer"
-                          />
-                        </a>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div className="p-3 bg-white rounded-xl border border-violet-100">
-                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Captured At</p>
-                            <p className="text-sm font-bold text-slate-800">
-                              {currentLead.siteVisitAt ? formatDateValue(currentLead.siteVisitAt, 'MMM dd, yyyy hh:mm a', 'Not available') : 'Not available'}
-                            </p>
-                          </div>
-                          <div className="p-3 bg-white rounded-xl border border-violet-100">
-                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">GPS Coordinates</p>
-                            <p className="text-sm font-bold text-slate-800 break-all">
-                              {currentLead.siteVisitLocation
-                                ? `${currentLead.siteVisitLocation.latitude.toFixed(6)}, ${currentLead.siteVisitLocation.longitude.toFixed(6)}`
-                                : 'Not available'}
-                            </p>
-                          </div>
-                        </div>
+                    {currentLead.addedByName && (
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-bold text-slate-500 uppercase tracking-widest">Added By</span>
+                        <span className="font-black text-slate-900">{currentLead.addedByName}</span>
                       </div>
                     )}
                   </div>
+                </details>
 
-                  {/* Sidebar Info/History */}
-                  {showHistory && (
-                    <div className="hidden md:block w-full md:w-80 bg-gray-50/50 p-6 md:p-8">
-                      <h4 className="font-bold text-gray-900 mb-6 flex items-center gap-2">
-                        <History size={20} className="text-gray-400" /> Timeline
-                      </h4>
-                      <div className="relative space-y-6 before:absolute before:left-3 before:top-2 before:bottom-2 before:w-0.5 before:bg-gray-200">
-                        {followups.map(f => (
-                          <div key={f.id} className="relative pl-8">
-                            <div className="absolute left-1.5 top-1.5 w-3 h-3 rounded-full bg-blue-500 border-4 border-white shadow-sm" />
-                            <p className="text-xs font-bold text-gray-400 mb-1">{formatDateValue(f.date, 'MMM dd, hh:mm a')}</p>
-                            <p className="text-sm text-gray-700 leading-relaxed font-medium bg-white p-3 rounded-xl border border-gray-100 shadow-sm">{f.remark}</p>
-                          </div>
-                        ))}
-                        {followups.length === 0 && (
-                          <p className="text-center py-12 text-gray-400 text-sm italic">New lead. No interaction yet.</p>
-                        )}
-                      </div>
+                <details className="group bg-white rounded-2xl border border-slate-100 overflow-hidden" open>
+                  <summary className="flex items-center justify-between p-4 cursor-pointer marker:content-none font-black text-[10px] text-slate-900 uppercase tracking-widest bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                    <span className="flex items-center gap-2"><History size={14} className="text-blue-500"/> Follow-Up History ({followups.length})</span>
+                    <ChevronDown size={16} className="text-slate-400 group-open:rotate-180 transition-transform" />
+                  </summary>
+                  <div className="p-4 border-t border-slate-100 bg-white">
+                    <div className="relative space-y-6 before:absolute before:left-3 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
+                      {followups.map(f => (
+                        <div key={f.id} className="relative pl-8">
+                          <div className="absolute left-1.5 top-1.5 w-3 h-3 rounded-full bg-blue-500 border-4 border-white shadow-sm" />
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">{formatDateValue(f.date, 'MMM dd, hh:mm a')}</p>
+                          <p className="text-xs text-slate-700 font-medium leading-relaxed bg-slate-50 p-3 rounded-xl border border-slate-100">{f.remark}</p>
+                        </div>
+                      ))}
+                      {followups.length === 0 && (
+                        <p className="text-center py-8 text-slate-400 text-[10px] font-black uppercase tracking-widest">New lead. No interaction yet.</p>
+                      )}
                     </div>
-                  )}
-                </div>
-              </motion.div>
-            ) : (
-              <div className="flex-1 bg-white rounded-3xl border border-dashed border-gray-200 py-16 sm:py-32 flex flex-col items-center justify-center text-center px-6 sm:px-8">
-                <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center text-blue-600 mb-4 animate-pulse">
-                  <UserIcon size={40} />
-                </div>
-                <h3 className="text-xl font-bold text-gray-900">Wait for next lead...</h3>
-                <p className="text-gray-500 mt-2 max-w-xs">Select a client from the queue to start follow-up process.</p>
+                  </div>
+                </details>
               </div>
-            )}
-          </AnimatePresence>
-        </div>
+
+              {/* Quick Actions FAB */}
+              <div className="fixed bottom-24 right-6 z-[90]">
+                <AnimatePresence>
+                  {showQuickActions && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10, scale: 0.9 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.9 }}
+                      className="absolute bottom-full right-0 mb-4 bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl shadow-slate-900/50 p-2 min-w-[220px] flex flex-col gap-1"
+                    >
+                      <button onClick={() => { setAssignedLeadEditName(currentLead.name); setAssignedLeadEditStatus(currentLead.status); setSelectedAssignedLead(currentLead); setShowQuickActions(false); }}
+                        className="w-full text-left px-4 py-3 text-white font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 rounded-xl transition-all flex items-center gap-3">
+                        <UserCircle2 size={16} className="text-blue-400" /> Edit Name / Status
+                      </button>
+                      <button onClick={() => { handleUpdateLead('interested'); setShowQuickActions(false); }} disabled={!canManageCurrentLead || loading}
+                        className="w-full text-left px-4 py-3 text-white font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 rounded-xl transition-all flex items-center gap-3 disabled:opacity-50">
+                        <ThumbsUp size={16} className="text-emerald-400" /> Mark Interested
+                      </button>
+                      <button onClick={() => { setShowTransferModal(true); setShowQuickActions(false); }} disabled={!canManageCurrentLead}
+                        className="w-full text-left px-4 py-3 text-white font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 rounded-xl transition-all flex items-center gap-3 disabled:opacity-50">
+                        <ArrowLeftRight size={16} className="text-orange-400" /> Transfer
+                      </button>
+                      <button onClick={() => { setShowQuickActions(false); startCamera(); }} disabled={!canManageCurrentLead}
+                        className="w-full text-left px-4 py-3 text-white font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 rounded-xl transition-all flex items-center gap-3 disabled:opacity-50">
+                        <Camera size={16} className="text-violet-400" /> Mark Site Visit
+                      </button>
+                      <button onClick={() => { setShowQuickActions(false); setShowDealApprovalModal(true); }} disabled={!canManageCurrentLead}
+                        className="w-full text-left px-4 py-3 text-white font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 rounded-xl transition-all flex items-center gap-3 disabled:opacity-50">
+                        <ShieldCheck size={16} className="text-indigo-400" /> Submit Deal Approval
+                      </button>
+                      <div className="h-px bg-slate-800 my-1"></div>
+                      <button onClick={() => { handleDeleteLead(currentLead.id); setShowQuickActions(false); }}
+                        className="w-full text-left px-4 py-3 text-rose-400 hover:text-rose-300 font-black text-[10px] uppercase tracking-widest hover:bg-rose-950/30 rounded-xl transition-all flex items-center gap-3">
+                        <Trash2 size={16} /> Delete Lead
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <button onClick={() => setShowQuickActions(!showQuickActions)}
+                  className={cn("w-16 h-16 rounded-full flex flex-col items-center justify-center gap-1 shadow-2xl transition-all active:scale-95 border-2 border-white/20",
+                    showQuickActions ? "bg-slate-800 text-white shadow-slate-900/40" : "bg-blue-600 text-white shadow-blue-500/40 hover:bg-blue-700")}>
+                  {showQuickActions ? <XSquare size={20} /> : <Zap size={20} />}
+                  <span className="text-[8px] font-black uppercase tracking-widest leading-none mt-0.5">Actions</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {!currentLead && (
+          <div className="hidden lg:flex flex-1 bg-white rounded-3xl border border-dashed border-gray-200 py-32 flex-col items-center justify-center text-center px-8">
+            <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center text-blue-600 mb-4 animate-pulse">
+              <UserIcon size={40} />
+            </div>
+            <h3 className="text-xl font-bold text-gray-900">Wait for next lead...</h3>
+            <p className="text-gray-500 mt-2 max-w-xs">Select a client from the queue to start follow-up process.</p>
+          </div>
+        )}
       </div>
+
     )}
 
       <AnimatePresence>
@@ -2659,24 +2700,24 @@ export default function EmployeeDashboard({
                 </button>
               </div>
 
-              <div className="p-5 overflow-y-auto space-y-5">
+              <div className="p-5 overflow-y-auto">
                 <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_180px_auto_auto] sm:items-end">
+                  <div className="flex flex-col gap-4">
                     <div>
-                      <label className="block text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1">Lead Name</label>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1.5">Lead Name</label>
                       <input
                         type="text"
                         value={assignedLeadEditName}
                         onChange={(event) => setAssignedLeadEditName(event.target.value)}
-                        className="w-full rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm font-bold text-slate-800 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                        className="w-full rounded-xl border border-blue-100 bg-white px-3 py-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100 transition-all"
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1">Status</label>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1.5">Status</label>
                       <select
                         value={assignedLeadEditStatus}
                         onChange={(event) => setAssignedLeadEditStatus(event.target.value as Lead['status'])}
-                        className="w-full rounded-xl border border-blue-100 bg-white px-3 py-2.5 text-sm font-bold text-slate-800 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                        className="w-full rounded-xl border border-blue-100 bg-white px-3 py-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100 transition-all appearance-none"
                       >
                         <option value="pending">Pending</option>
                         <option value="interested">Interested</option>
@@ -2687,55 +2728,10 @@ export default function EmployeeDashboard({
                       type="button"
                       onClick={handleUpdateAssignedLeadDetails}
                       disabled={loading || selectedAssignedLead.assignedTo !== user.uid}
-                      className="rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-blue-100 hover:bg-blue-700 disabled:opacity-50"
+                      className="w-full mt-2 rounded-xl bg-blue-600 px-4 py-3.5 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-blue-100 hover:bg-blue-700 disabled:opacity-50 transition-all active:scale-95"
                     >
                       {loading ? 'Saving...' : 'Save'}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteLead(selectedAssignedLead.id)}
-                      disabled={loading || selectedAssignedLead.assignedTo !== user.uid}
-                      className="rounded-xl bg-rose-50 text-rose-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest hover:bg-rose-100 disabled:opacity-50 transition-colors"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Source</p>
-                    <p className="mt-1 text-sm font-bold text-slate-800">{selectedAssignedLead.source || '-'}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Status</p>
-                    <p className="mt-1 text-sm font-bold text-slate-800 uppercase">{(selectedAssignedLead.status || 'pending').replace('_', ' ')}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Created</p>
-                    <p className="mt-1 text-sm font-bold text-slate-800">{formatDateValue(selectedAssignedLead.createdAt, 'MMM dd, yyyy hh:mm a', 'N/A')}</p>
-                  </div>
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Last Follow-up</p>
-                    <p className="mt-1 text-sm font-bold text-slate-800">{formatDateValue(selectedAssignedLead.lastInteractionAt, 'MMM dd, yyyy hh:mm a', 'N/A')}</p>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-100 bg-white p-4">
-                  <h4 className="font-black text-slate-900 text-xs uppercase tracking-widest flex items-center gap-2">
-                    <History size={14} className="text-slate-500" /> Interaction Timeline
-                  </h4>
-                  <div className="mt-4 relative space-y-4 before:absolute before:left-2.5 before:top-1 before:bottom-1 before:w-0.5 before:bg-slate-200">
-                    {selectedAssignedLeadFollowups.map((f) => (
-                      <div key={f.id} className="relative pl-7">
-                        <div className="absolute left-0.5 top-1.5 w-2.5 h-2.5 rounded-full bg-blue-500 border-2 border-white shadow-sm" />
-                        <p className="text-[11px] font-black text-slate-400">{formatDateValue(f.date, 'MMM dd, hh:mm a')}</p>
-                        <p className="mt-1 text-sm font-medium text-slate-700 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">{f.remark}</p>
-                      </div>
-                    ))}
-                    {selectedAssignedLeadFollowups.length === 0 && (
-                      <p className="text-sm text-slate-400 italic py-4">No follow-up activity yet.</p>
-                    )}
                   </div>
                 </div>
               </div>
@@ -3067,25 +3063,7 @@ export default function EmployeeDashboard({
                     placeholder="10-digit mobile"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-1">Source <span className="text-rose-500">*</span></label>
-                  <input
-                    value={leadForm.source}
-                    disabled
-                    className="w-full px-4 py-3 bg-gray-100 border border-gray-200 rounded-xl text-gray-500 cursor-not-allowed"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">Allocation Mode</label>
-                  <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 rounded-xl">
-                    <div className="py-2 text-sm font-bold rounded-lg bg-white text-blue-600 shadow-sm text-center">
-                      Automatic
-                    </div>
-                    <div className="py-2 text-sm font-bold rounded-lg text-gray-400 text-center">
-                      Self
-                    </div>
-                  </div>
-                </div>
+
                 <div className="flex gap-3 pt-6 mt-2 border-t border-gray-100">
                   <button
                     type="button"
@@ -3305,7 +3283,14 @@ export default function EmployeeDashboard({
             onClick={() => { setFollowupsFooterMode(true); setInventoryFooterMode(false); setActiveTab('followups'); }} 
             className={cn("flex flex-col items-center justify-center text-[11px] font-semibold w-20 transition-colors", followupsFooterMode ? "text-blue-600" : "text-slate-500 hover:text-slate-800")}
           >
-            <Clock className={cn("h-5 w-5 mb-0.5", followupsFooterMode ? "text-blue-600" : "")} />
+            <div className="relative mb-0.5 flex items-center justify-center">
+              <Clock className={cn("h-5 w-5", followupsFooterMode ? "text-blue-600" : "")} />
+              {pendingFollowupsCount > 0 && (
+                <span className="absolute -top-1.5 -right-2 bg-rose-500 text-white text-[9px] font-bold px-1 min-w-[14px] h-[14px] rounded-full flex items-center justify-center border-2 border-white/95">
+                  {pendingFollowupsCount > 99 ? '99+' : pendingFollowupsCount}
+                </span>
+              )}
+            </div>
             <span>Followups</span>
           </button>
           <button 
@@ -3316,7 +3301,7 @@ export default function EmployeeDashboard({
             <span className="text-blue-600">Add</span>
           </button>
           <button 
-            onClick={() => { setInventoryFooterMode(true); setFollowupsFooterMode(false); setActiveTab('inventory'); }} 
+            onClick={() => { setInventoryFooterMode(true); setFollowupsFooterMode(false); setInventoryAddSignal(0); setActiveTab('inventory'); }} 
             className={cn("flex flex-col items-center justify-center text-[11px] font-semibold w-20 transition-colors", inventoryFooterMode ? "text-blue-600" : "text-slate-500 hover:text-slate-800")}
           >
             <LayoutGrid className={cn("h-5 w-5 mb-0.5", inventoryFooterMode ? "text-blue-600" : "")} />
@@ -3402,7 +3387,7 @@ export default function EmployeeDashboard({
                       { id: 'activity_logs', icon: ClipboardList, label: 'Activity Log', color: 'bg-cyan-100 text-cyan-600' },
                       { id: 'deleted_leads', icon: Trash2, label: 'Deleted', color: 'bg-rose-100 text-rose-600' },
                     ].map(item => (
-                      <button key={item.id} onClick={() => { setShowProfileMenu(false); setProfileView('menu'); setInventoryFooterMode(false); setFollowupsFooterMode(false); setActiveTab(item.id as any); }}
+                      <button key={item.id} onClick={() => { setShowProfileMenu(false); setProfileView('menu'); setInventoryFooterMode(false); setFollowupsFooterMode(false); setInventoryAddSignal(0); setActiveTab(item.id as any); }}
                         className="flex flex-col items-center gap-1.5"
                       >
                         <div className={cn("w-11 h-11 rounded-2xl flex items-center justify-center", item.color)}><item.icon size={18} /></div>
@@ -3435,6 +3420,76 @@ export default function EmployeeDashboard({
                   <PasswordResetInline onDone={() => setProfileView('menu')} />
                 </div>
               )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Deal Approval Modal */}
+      <AnimatePresence>
+        {showDealApprovalModal && currentLead && (
+          <div className="fixed inset-0 z-[150] flex flex-col justify-end sm:items-center sm:justify-center">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setShowDealApprovalModal(false)}
+            />
+            <motion.div 
+              initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
+              className="relative bg-white rounded-t-[32px] sm:rounded-[32px] p-6 shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-xl font-black text-slate-900">Deal Approval</h3>
+                <button onClick={() => setShowDealApprovalModal(false)} className="p-2 text-slate-400 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-2xl">
+                  <h4 className="font-black text-indigo-900 flex items-center gap-2 uppercase text-xs tracking-[0.2em] mb-3">
+                    <FileText className="text-indigo-500" size={16} /> KYC Documents
+                  </h4>
+                  <div className="space-y-3">
+                    {([
+                      { key: 'aadhaar' as const, label: 'Upload Aadhaar', existingUrl: currentLead.kycAadhaarUrl, existingName: currentLead.kycAadhaarName },
+                      { key: 'pan' as const, label: 'Upload PAN', existingUrl: currentLead.kycPanUrl, existingName: currentLead.kycPanName },
+                    ]).map((docItem) => {
+                      const selectedFile = kycFiles[docItem.key];
+                      return (
+                        <label key={docItem.key} className="block rounded-xl border-2 border-dashed border-indigo-200 bg-white p-4 cursor-pointer hover:border-indigo-400 transition-all">
+                          <span className="block text-[10px] font-black text-indigo-600 uppercase tracking-widest">
+                            {docItem.label}
+                          </span>
+                          <span className="mt-1 block text-xs font-bold text-slate-600 truncate">
+                            {selectedFile?.name || docItem.existingName || (docItem.existingUrl ? 'Document uploaded' : 'Tap to select file')}
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/*,.pdf"
+                            className="hidden"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] || null;
+                              setKycFiles((prev) => ({ ...prev, [docItem.key]: file }));
+                            }}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => {
+                    handleUpdateLead('deal_pending');
+                    setShowDealApprovalModal(false);
+                  }}
+                  disabled={loading}
+                  className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-black transition-all shadow-xl shadow-slate-200"
+                >
+                  <ShieldCheck size={18} className="text-indigo-400" /> Submit for Deal Approval
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
@@ -3474,7 +3529,7 @@ export default function EmployeeDashboard({
                   <span className="text-xs font-bold">Need</span>
                 </button>
                 <button 
-                  onClick={() => { setShowAddDrawer(false); setActiveTab('inventory'); }}
+                  onClick={() => { setShowAddDrawer(false); setInventoryAddSignal(s => s + 1); setActiveTab('inventory'); }}
                   className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
                 >
                   <LayoutGrid className="h-8 w-8" />
