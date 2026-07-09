@@ -1220,7 +1220,11 @@ export default function EmployeeDashboard({
         updateData.kycUploadedAt = serverTimestamp();
       }
 
-      if (nextDate && !isNaN(new Date(nextDate).getTime())) {
+      if (status === 'not_interested' || status === 'deal_approved') {
+        updateData.nextFollowupAt = deleteField();
+        updateData.hasFollowupTime = deleteField();
+        updateData.nextFollowupTime = deleteField();
+      } else if (nextDate && !isNaN(new Date(nextDate).getTime())) {
         const [year, month, day] = nextDate.split('-').map(Number);
         const dateObj = new Date(year, month - 1, day);
         if (nextTime) {
@@ -1235,13 +1239,40 @@ export default function EmployeeDashboard({
           updateData.hasFollowupTime = false;
           updateData.nextFollowupTime = deleteField();
         }
-      } else if (status === 'not_interested' || status === 'deal_approved') {
-        updateData.nextFollowupAt = deleteField();
-        updateData.hasFollowupTime = deleteField();
-        updateData.nextFollowupTime = deleteField();
       }
 
       await updateDoc(leadRef, updateData);
+
+      const localUpdateData: Partial<Lead> = {
+        status,
+        lastRemark: remark,
+        updatedAt: Timestamp.now(),
+        lastInteractionAt: Timestamp.now(),
+      };
+
+      if (status === 'not_interested' || status === 'deal_approved') {
+        localUpdateData.nextFollowupAt = undefined;
+        localUpdateData.hasFollowupTime = undefined;
+        localUpdateData.nextFollowupTime = undefined;
+      } else if (nextDate && !isNaN(new Date(nextDate).getTime())) {
+        const [year, month, day] = nextDate.split('-').map(Number);
+        const dateObj = new Date(year, month - 1, day);
+        if (nextTime) {
+          const [hours, minutes] = nextTime.split(':').map(Number);
+          dateObj.setHours(hours, minutes, 0, 0);
+          localUpdateData.nextFollowupAt = Timestamp.fromDate(dateObj);
+          localUpdateData.hasFollowupTime = true;
+          localUpdateData.nextFollowupTime = nextTime;
+        } else {
+          dateObj.setHours(0, 0, 0, 0);
+          localUpdateData.nextFollowupAt = Timestamp.fromDate(dateObj);
+          localUpdateData.hasFollowupTime = false;
+          localUpdateData.nextFollowupTime = undefined;
+        }
+      }
+
+      setLeads((prev) => prev.map((lead) => (lead.id === currentLead.id ? ({ ...lead, ...localUpdateData } as Lead) : lead)));
+
       await addAuditLog(db, {
         action: status === 'deal_pending' ? 'lead_sent_for_approval' : 'lead_followup_updated',
         actorId: user.uid,
@@ -2485,14 +2516,13 @@ export default function EmployeeDashboard({
                   </div>
 
                   <div className="flex gap-3 pt-2">
-                    <button onClick={() => setSelectedStatus(selectedStatus === 'interested' ? null : 'interested')}
+                    <button onClick={() => handleUpdateLead('interested', false)}
                       disabled={!canManageCurrentLead || loading || !remark.trim()}
                       className={cn("flex-1 py-3 font-black text-[10px] uppercase tracking-widest rounded-xl transition-all border flex items-center justify-center gap-2",
-                        selectedStatus === 'interested' ? "bg-emerald-500 border-emerald-600 text-white shadow-md shadow-emerald-200" : "bg-emerald-50 border-emerald-100 text-emerald-600 hover:bg-emerald-100 disabled:opacity-50")}>
+                        selectedStatus === 'interested' ? "bg-emerald-500 border-emerald-600 text-white shadow-md shadow-emerald-200" : "bg-emerald-50 border-emerald-100 text-emerald-600 hover:bg-emerald-100 disabled:opacity-50")}> 
                       <ThumbsUp size={14} /> Interested
                     </button>
-                    <button onClick={() => setSelectedStatus(selectedStatus === 'not_interested' ? null : 'not_interested')}
-                      disabled={!canManageCurrentLead || loading || !remark.trim()}
+                    <button onClick={() => handleUpdateLead('not_interested', false)}
                       className={cn("flex-1 py-3 font-black text-[10px] uppercase tracking-widest rounded-xl transition-all border flex items-center justify-center gap-2",
                         selectedStatus === 'not_interested' ? "bg-rose-500 border-rose-600 text-white shadow-md shadow-rose-200" : "bg-rose-50 border-rose-100 text-rose-600 hover:bg-rose-100 disabled:opacity-50")}>
                       <ThumbsDown size={14} /> Not Interested
@@ -2501,7 +2531,7 @@ export default function EmployeeDashboard({
 
                   <div className="flex gap-3 mt-2">
                     <button onClick={() => handleUpdateLead(selectedStatus || currentLead.status, false)}
-                      disabled={!canManageCurrentLead || loading || !remark.trim() || !nextDate}
+                      disabled={!canManageCurrentLead || loading || !remark.trim() || ((selectedStatus || currentLead.status) !== 'not_interested' && !nextDate)}
                       className="flex-[2] py-3.5 bg-blue-600 text-white font-black text-[11px] uppercase tracking-widest rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all active:scale-95 flex items-center justify-center gap-2">
                       <Save size={16} /> Save
                     </button>
