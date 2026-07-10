@@ -442,18 +442,28 @@ export default function InventoryManagement({ user, onBack, initialShowForm = fa
   }, [showForm]);
 
   useEffect(() => {
-    if (!isSuperAdmin) {
+    if (!isAdmin) {
       setBrokers([]);
       return;
     }
 
-    const q = query(collection(db, 'brokers'), orderBy('name', 'asc'));
+    const trueSuper = user.role === 'super_admin' || user.role === 'admin';
+    // For client-scoped query, sort client-side to avoid requiring a composite index
+    // (index is defined in firestore.indexes.json but may not be deployed yet)
+    const q = trueSuper
+      ? query(collection(db, 'brokers'), orderBy('name', 'asc'))
+      : query(collection(db, 'brokers'), where('clientId', '==', tenantClientId));
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setBrokers(snapshot.docs.map((brokerDoc) => ({ id: brokerDoc.id, ...brokerDoc.data() } as Broker)));
+      const docs = snapshot.docs.map((brokerDoc) => ({ id: brokerDoc.id, ...brokerDoc.data() } as Broker));
+      if (!trueSuper) {
+        docs.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      }
+      setBrokers(docs);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'brokers'));
 
     return () => unsubscribe();
-  }, [isSuperAdmin]);
+  }, [isAdmin, tenantClientId, user.role]);
 
   useEffect(() => {
     if (!isAdmin || items.length === 0) return;
@@ -1232,7 +1242,46 @@ export default function InventoryManagement({ user, onBack, initialShowForm = fa
                 Back
               </button>
           )}
-
+          <button
+            onClick={() => {
+              setEditingItem(null);
+              setFormData({
+                title: '',
+                description: '',
+                brokerId: '',
+                visibilityScope: 'internal',
+                listingMode: 'single',
+                type: 'house',
+                areaValue: '',
+                areaUnit: 'sqft',
+                subType: 'new',
+                approvalStatus: 'non_approved',
+                rate: '',
+                rateUnit: 'total',
+                location: '',
+                nearbyLocation: '',
+                landmark: '',
+                locationLink: '',
+                houseType: 'simplex',
+                bhk: '',
+                bathrooms: '',
+                kitchenType: '',
+                features: [],
+                newFeature: '',
+                projectUnits: [createProjectUnitDraft()],
+                latitude: 20.5937,
+                longitude: 78.9629,
+              });
+              setFiles({ photos: [], videos: [], attachments: [] });
+              setVideoLinks([]);
+              setVideoLinkInput('');
+              setShowForm(true);
+            }}
+            className="px-6 py-3 bg-slate-900 text-white font-bold text-xs uppercase tracking-widest rounded-2xl shadow-xl shadow-slate-200 hover:bg-slate-800 transition-all flex items-center gap-2 active:scale-95"
+          >
+            <Plus size={18} />
+            New Listing
+          </button>
         </div>
       </div>
 

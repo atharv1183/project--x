@@ -1658,8 +1658,12 @@ export default function AdminDashboard({
     const normalizedLeadPhone = normalizePhone(leadForm.phone);
     if (!normalizedLeadPhone || !leadForm.source) return alert('Phone and Source are mandatory');
     if (normalizedLeadPhone.length !== 10) return alert('Mobile number must be exactly 10 digits.');
+    if (!tenantClientId && user.role !== 'super_admin') {
+      alert('Company mapping missing for your account. Please contact super admin.');
+      return;
+    }
 
-    const duplicateSnapshot = await getDocs(query(collection(db, 'leads'), where('phone', '==', normalizedLeadPhone)));
+    const duplicateSnapshot = await getDocs(query(collection(db, 'leads'), where('clientId', '==', tenantClientId), where('phone', '==', normalizedLeadPhone)));
     const activeDuplicate = duplicateSnapshot.docs.find(doc => !doc.data().deletedAt);
     if (activeDuplicate) {
       const existingLead = activeDuplicate.data() as Lead;
@@ -1688,7 +1692,7 @@ export default function AdminDashboard({
         }
 
         const createdLeadRef = await addDoc(collection(db, 'leads'), {
-          clientId: (user as any).clientId || null,
+          clientId: tenantClientId,
           clientName: (user as any).clientName || null,
           name: leadName,
           phone: normalizedLeadPhone,
@@ -1718,7 +1722,7 @@ export default function AdminDashboard({
           const newLeadRef = doc(collection(db, 'leads'));
           createdLeadId = newLeadRef.id;
           transaction.set(newLeadRef, {
-            clientId: (user as any).clientId || null,
+            clientId: tenantClientId,
             clientName: (user as any).clientName || null,
             name: leadName,
             phone: normalizedLeadPhone,
