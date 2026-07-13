@@ -1299,14 +1299,13 @@ export default function EmployeeDashboard({
         newValue: { status, remark, nextDate: nextDate || null, nextTime: nextTime || null },
       });
 
+      // Ensure strict compliance with firestore.rules (exactly 3 keys required)
+      const finalRemark = followupPurpose ? `[${followupPurpose}] ${remark}` : remark;
       const followupData: any = {
         date: serverTimestamp(),
-        remark,
+        remark: finalRemark,
         employeeId: user.uid
       };
-      if (followupPurpose) {
-        followupData.purpose = followupPurpose;
-      }
       await addDoc(collection(db, 'leads', currentLead.id, 'followups'), followupData);
 
       setRemark('');
@@ -2050,7 +2049,7 @@ export default function EmployeeDashboard({
       ) : (
         <div className="flex flex-col lg:flex-row gap-5 md:gap-6">
         {/* Leads List Side */}
-        <div className={cn("w-full lg:w-[400px] space-y-4", selectedLeadIndex !== null && "hidden lg:block")}>
+        <div className={cn("w-full lg:w-[400px] space-y-4", !!currentLead && "hidden lg:block")}>
           <div className="px-4">
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2">
               {[
