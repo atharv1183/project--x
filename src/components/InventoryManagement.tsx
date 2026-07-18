@@ -51,7 +51,8 @@ import {
   Film,
   Link2,
   ExternalLink,
-  SlidersHorizontal
+  SlidersHorizontal,
+  ScanLine
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -295,6 +296,10 @@ export default function InventoryManagement({ user, onBack, initialShowForm = fa
     videos: [],
     attachments: []
   });
+  // Panorama (360° Tour) state
+  const [newPanoFiles, setNewPanoFiles] = useState<File[]>([]);
+  const [panoramaLabels, setPanoramaLabels] = useState<string[]>([]);
+  const [showPanoTip, setShowPanoTip] = useState(false);
   const [videoLinks, setVideoLinks] = useState<string[]>([]);
   const [videoLinkInput, setVideoLinkInput] = useState('');
   const tenantAlertShownRef = useRef(false);
@@ -793,6 +798,20 @@ export default function InventoryManagement({ user, onBack, initialShowForm = fa
         payload.projectUnits = [];
         payload.projectUnitCount = 0;
 
+        // Upload panorama photos
+        const panoUrls: string[] = editingItem ? [...(editingItem.panoramaPhotos || [])] : [];
+        for (const file of newPanoFiles) {
+          try {
+            const url = await handleFileUpload(file, 'panoramas');
+            panoUrls.push(url);
+          } catch (uploadError) {
+            console.error('Panorama upload failed:', uploadError);
+            uploadWarnings.push(`Panorama upload failed: ${file.name}`);
+          }
+        }
+        payload.panoramaPhotos = panoUrls;
+        payload.panoramaLabels = panoramaLabels.length > 0 ? panoramaLabels : panoUrls.map((_, i) => `Room ${i + 1}`);
+
         if (formData.type === 'house') {
           payload.houseType = formData.houseType;
           payload.bhk = Number(formData.bhk);
@@ -917,6 +936,8 @@ export default function InventoryManagement({ user, onBack, initialShowForm = fa
         longitude: 78.9629
       });
       setFiles({ photos: [], videos: [], attachments: [] });
+      setNewPanoFiles([]);
+      setPanoramaLabels([]);
       setVideoLinks([]);
       setVideoLinkInput('');
       
@@ -1087,6 +1108,8 @@ export default function InventoryManagement({ user, onBack, initialShowForm = fa
     });
     setVideoLinks([]);
     setVideoLinkInput('');
+    setNewPanoFiles([]);
+    setPanoramaLabels(item.panoramaLabels || []);
     setShowForm(true);
   };
 
@@ -2083,6 +2106,133 @@ export default function InventoryManagement({ user, onBack, initialShowForm = fa
                                  }} />
                               </label>
                            </div>
+                        </section>
+                        )}
+
+                        {/* 360 Panorama Upload Section (single listings only) */}
+                        {formData.listingMode === 'single' && (
+                        <section className="space-y-5">
+                           <header className="flex items-center justify-between border-b border-slate-100 pb-4">
+                             <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center">
+                                  <ScanLine size={20} />
+                                </div>
+                                <div>
+                                  <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Interior 360° Tour</h3>
+                                  <p className="text-[10px] text-slate-400 font-semibold">Upload panoramic photos — one per room</p>
+                                </div>
+                             </div>
+                             <p className="text-[10px] font-bold text-slate-400 uppercase">Optional</p>
+                           </header>
+
+                           {/* Photo-taking tip accordion */}
+                           <div className="rounded-2xl border border-blue-100 bg-blue-50 overflow-hidden">
+                             <button
+                               type="button"
+                               onClick={() => setShowPanoTip(v => !v)}
+                               className="w-full flex items-center justify-between px-4 py-3 text-blue-700"
+                             >
+                               <div className="flex items-center gap-2">
+                                 <Info size={14} />
+                                 <span className="text-xs font-bold">How to take panoramic photos on your phone</span>
+                               </div>
+                               <ChevronDown size={14} className={`transition-transform ${showPanoTip ? 'rotate-180' : ''}`} />
+                             </button>
+                             {showPanoTip && (
+                               <div className="px-4 pb-4 text-xs text-blue-800 space-y-2 leading-relaxed">
+                                 <p className="font-bold">📱 iPhone:</p>
+                                 <p>Camera app → swipe to <strong>Pano</strong> mode → hold phone <strong>vertically</strong> → sweep slowly left to right until the bar fills 100%.</p>
+                                 <p className="font-bold">🤖 Android:</p>
+                                 <p>Camera → <strong>More → Panorama</strong> → hold phone vertically → slowly sweep left to right for a full 360° sweep.</p>
+                                 <p className="font-bold pt-1">💡 Tips:</p>
+                                 <ul className="list-disc list-inside space-y-1">
+                                   <li>Take <strong>one photo per room</strong> (Living Room, Kitchen, Bedroom, etc.)</li>
+                                   <li>Stand in the center of the room for best coverage</li>
+                                   <li>Move slowly and steadily — no shaking</li>
+                                   <li>Label each room below after uploading</li>
+                                 </ul>
+                               </div>
+                             )}
+                           </div>
+
+                           {/* Uploaded pano previews */}
+                           {[...(editingItem?.panoramaPhotos || []), ...newPanoFiles].length > 0 && (
+                             <div className="space-y-3">
+                               {(editingItem?.panoramaPhotos || []).map((url, i) => (
+                                 <div key={`existing-pano-${i}`} className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-2xl">
+                                   <img src={url} alt={`Pano ${i + 1}`} className="w-16 h-10 object-cover rounded-lg flex-shrink-0" />
+                                   <input
+                                     type="text"
+                                     value={panoramaLabels[i] || editingItem?.panoramaLabels?.[i] || ''}
+                                     onChange={e => {
+                                       const updated = [...panoramaLabels];
+                                       updated[i] = e.target.value;
+                                       setPanoramaLabels(updated);
+                                     }}
+                                     placeholder={`Room label (e.g. Living Room)`}
+                                     className="flex-1 text-xs bg-white border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                                   />
+                                   <button
+                                     type="button"
+                                     onClick={() => {
+                                       if (editingItem) {
+                                         const updatedPhotos = editingItem.panoramaPhotos!.filter((_, idx) => idx !== i);
+                                         const updatedLabels = (editingItem.panoramaLabels || []).filter((_, idx) => idx !== i);
+                                         setEditingItem({ ...editingItem, panoramaPhotos: updatedPhotos, panoramaLabels: updatedLabels });
+                                         setPanoramaLabels(prev => prev.filter((_, idx) => idx !== i));
+                                       }
+                                     }}
+                                     className="p-1.5 rounded-lg bg-rose-50 text-rose-500 hover:bg-rose-100 transition-colors"
+                                   >
+                                     <Trash2 size={14} />
+                                   </button>
+                                 </div>
+                               ))}
+                               {newPanoFiles.map((file, i) => {
+                                 const globalIdx = (editingItem?.panoramaPhotos?.length || 0) + i;
+                                 return (
+                                   <div key={`new-pano-${i}`} className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-100 rounded-2xl">
+                                     <img src={URL.createObjectURL(file)} alt={`New pano ${i + 1}`} className="w-16 h-10 object-cover rounded-lg flex-shrink-0" />
+                                     <input
+                                       type="text"
+                                       value={panoramaLabels[globalIdx] || ''}
+                                       onChange={e => {
+                                         const updated = [...panoramaLabels];
+                                         updated[globalIdx] = e.target.value;
+                                         setPanoramaLabels(updated);
+                                       }}
+                                       placeholder={`Room label (e.g. Kitchen)`}
+                                       className="flex-1 text-xs bg-white border border-blue-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                                     />
+                                     <button
+                                       type="button"
+                                       onClick={() => setNewPanoFiles(prev => prev.filter((_, idx) => idx !== i))}
+                                       className="p-1.5 rounded-lg bg-rose-50 text-rose-500 hover:bg-rose-100 transition-colors"
+                                     >
+                                       <Trash2 size={14} />
+                                     </button>
+                                   </div>
+                                 );
+                               })}
+                             </div>
+                           )}
+
+                           {/* Upload button */}
+                           <label className="flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-blue-200 hover:border-blue-400 hover:bg-blue-50 rounded-2xl cursor-pointer transition-all text-blue-500 hover:text-blue-700">
+                             <Upload size={18} />
+                             <span className="text-sm font-bold">Add Panoramic Photo</span>
+                             <input
+                               type="file"
+                               accept="image/*"
+                               multiple
+                               className="hidden"
+                               onChange={e => {
+                                 if (e.target.files) {
+                                   setNewPanoFiles(prev => [...prev, ...Array.from(e.target.files!)]);
+                                 }
+                               }}
+                             />
+                           </label>
                         </section>
                         )}
 

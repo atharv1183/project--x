@@ -275,6 +275,8 @@ export interface InventoryItem {
   photos: string[]; // URLs
   videos?: string[]; // URLs
   attachments: { name: string; url: string }[];
+  panoramaPhotos?: string[];  // Cylindrical/360° panoramic photo URLs (one per room)
+  panoramaLabels?: string[];  // Optional room labels e.g. "Living Room", "Kitchen"
   
   // House specific
   houseType?: HouseType;

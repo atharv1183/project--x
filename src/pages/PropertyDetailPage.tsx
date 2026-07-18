@@ -5,8 +5,10 @@ import { InventoryItem, ProjectUnit } from '../types';
 import { 
   MapPin, Bed, Bath, Layers, Grid, List, Share2, Compass, 
   ChevronLeft, ChevronRight, Phone, MessageSquare, Check, 
-  ExternalLink, Home, ArrowLeft, ImageIcon, Video as VideoIcon
+  ExternalLink, Home, ArrowLeft, ImageIcon, Video as VideoIcon,
+  ScanLine
 } from 'lucide-react';
+import PanoramaViewer from '../components/PanoramaViewer';
 
 interface PropertyDetailPageProps {
   propertyId: string;
@@ -21,6 +23,7 @@ export default function PropertyDetailPage({ propertyId }: PropertyDetailPagePro
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
   const [selectedBhkFilter, setSelectedBhkFilter] = useState<string>('all');
   const [copied, setCopied] = useState(false);
+  const [showTour, setShowTour] = useState(false);
 
   // Read referrer phone from URL queries
   const searchParams = new URLSearchParams(window.location.search);
@@ -268,12 +271,18 @@ Please share more details with me. Thank you!`;
       <main className="flex-1 max-w-6xl w-full mx-auto p-4 space-y-8 pb-20">
         
         {/* Photo/Video Carousel Section */}
-        <section className="relative rounded-3xl overflow-hidden border border-slate-900 bg-slate-900/40 aspect-[16/10] md:aspect-[21/9] flex items-center justify-center">
+        <section
+          className="relative rounded-3xl overflow-hidden border border-slate-900 bg-slate-900/40 aspect-[16/10] md:aspect-[21/9] flex items-center justify-center group"
+          onClick={() => {
+            if ((property.panoramaPhotos?.length ?? 0) > 0) setShowTour(true);
+          }}
+          style={{ cursor: (property.panoramaPhotos?.length ?? 0) > 0 ? 'pointer' : 'default' }}
+        >
           {photos.length > 0 ? (
             <img 
               src={photos[activePhotoIndex]} 
               alt={`Property image ${activePhotoIndex + 1}`} 
-              className="w-full h-full object-cover"
+              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
             />
           ) : (
             <div className="flex flex-col items-center justify-center text-slate-500 space-y-2">
@@ -285,24 +294,38 @@ Please share more details with me. Thank you!`;
           {/* Carousel Dark Overlay Gradient */}
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent pointer-events-none"></div>
 
-          {/* Carousel Controls */}
+          {/* 360 Tour Badge — only when panos exist */}
+          {(property.panoramaPhotos?.length ?? 0) > 0 && (
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+              <div className="flex flex-col items-center gap-2">
+                <div className="w-16 h-16 rounded-full bg-black/70 backdrop-blur-md border border-white/20 flex items-center justify-center">
+                  <ScanLine size={28} className="text-blue-400" />
+                </div>
+                <span className="px-3 py-1 bg-black/70 backdrop-blur-md border border-white/10 rounded-full text-white text-xs font-bold tracking-wide">
+                  View 360° Tour
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Carousel Controls — stop propagation so arrows don't open tour */}
           {photos.length > 1 && (
             <>
               <button 
-                onClick={() => setActivePhotoIndex((prev) => (prev === 0 ? photos.length - 1 : prev - 1))}
-                className="absolute left-4 p-2.5 rounded-full bg-slate-950/70 border border-slate-800/80 text-white hover:bg-slate-900 transition-all"
+                onClick={(e) => { e.stopPropagation(); setActivePhotoIndex((prev) => (prev === 0 ? photos.length - 1 : prev - 1)); }}
+                className="absolute left-4 p-2.5 rounded-full bg-slate-950/70 border border-slate-800/80 text-white hover:bg-slate-900 transition-all z-20"
               >
                 <ChevronLeft size={20} />
               </button>
               <button 
-                onClick={() => setActivePhotoIndex((prev) => (prev === photos.length - 1 ? 0 : prev + 1))}
-                className="absolute right-4 p-2.5 rounded-full bg-slate-950/70 border border-slate-800/80 text-white hover:bg-slate-900 transition-all"
+                onClick={(e) => { e.stopPropagation(); setActivePhotoIndex((prev) => (prev === photos.length - 1 ? 0 : prev + 1)); }}
+                className="absolute right-4 p-2.5 rounded-full bg-slate-950/70 border border-slate-800/80 text-white hover:bg-slate-900 transition-all z-20"
               >
                 <ChevronRight size={20} />
               </button>
               
               {/* Carousel Dot Indicators */}
-              <div className="absolute bottom-4 flex gap-1.5 justify-center w-full">
+              <div className="absolute bottom-4 flex gap-1.5 justify-center w-full z-20" onClick={(e) => e.stopPropagation()}>
                 {photos.map((_, index) => (
                   <button 
                     key={index} 
@@ -315,7 +338,7 @@ Please share more details with me. Thank you!`;
           )}
 
           {/* Tag Badges */}
-          <div className="absolute top-4 left-4 flex gap-2">
+          <div className="absolute top-4 left-4 flex gap-2 z-20" onClick={(e) => e.stopPropagation()}>
             <span className="px-3 py-1 bg-blue-600/90 text-white text-[10px] font-bold tracking-wider uppercase rounded-full shadow-lg">
               {getInventoryTypeLabel(property.type)}
             </span>
@@ -324,8 +347,34 @@ Please share more details with me. Thank you!`;
                 {property.subType}
               </span>
             )}
+            {(property.panoramaPhotos?.length ?? 0) > 0 && (
+              <span className="px-3 py-1 bg-blue-900/90 border border-blue-700/50 text-blue-200 text-[10px] font-bold tracking-wider uppercase rounded-full shadow-lg flex items-center gap-1">
+                <ScanLine size={10} />
+                360° Tour
+              </span>
+            )}
           </div>
         </section>
+
+        {/* 360 Tour Banner — persistent button shown below carousel when panos exist */}
+        {(property.panoramaPhotos?.length ?? 0) > 0 && (
+          <button
+            onClick={() => setShowTour(true)}
+            className="w-full flex items-center justify-center gap-3 py-3.5 bg-gradient-to-r from-blue-950/80 to-indigo-950/80 border border-blue-800/40 rounded-2xl text-blue-300 hover:text-white hover:border-blue-600/60 hover:from-blue-900/80 hover:to-indigo-900/80 active:scale-[0.99] transition-all group"
+          >
+            <ScanLine size={18} className="text-blue-400 group-hover:animate-spin" style={{ animationDuration: '3s' }} />
+            <span className="text-sm font-bold tracking-wide">Open Interior 360° Tour</span>
+            <span className="text-[10px] font-semibold text-blue-400/70">{property.panoramaPhotos!.length} room{property.panoramaPhotos!.length > 1 ? 's' : ''}</span>
+          </button>
+        )}
+
+        {/* Panorama Viewer Modal */}
+        <PanoramaViewer
+          isOpen={showTour}
+          onClose={() => setShowTour(false)}
+          panoramaPhotos={property.panoramaPhotos || []}
+          panoramaLabels={property.panoramaLabels || []}
+        />
 
         {/* Info Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
