@@ -5,7 +5,7 @@ import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export const PublicHeroBlogsSection = () => {
-  const blogs = useMemo(() => allContent.filter(c => c.type === 'blog'), []);
+  const blogs = useMemo(() => allContent.filter(c => c.type === 'blog' || c.type === 'city').reverse(), []);
   const categories = useMemo(() => {
     const cats = new Set(blogs.map(b => b.category).filter(Boolean));
     return ['All', ...Array.from(cats)];
@@ -71,7 +71,7 @@ export const PublicHeroBlogsSection = () => {
           <div className="flex-1">
             <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-6">
               {visibleBlogs.map((blog) => (
-                <a key={blog.slug} href={`/blog/${blog.slug}`} className="group block">
+                <a key={blog.slug} href={`/${blog.type}/${blog.slug}`} className="group block">
                   <Card className="h-full border border-gray-100 overflow-hidden hover:shadow-lg transition-all duration-300 hover:-translate-y-1 bg-white flex flex-col">
                     <div className="aspect-[4/3] bg-gray-100 relative overflow-hidden shrink-0">
                       {blog.imageUrl ? (
@@ -122,7 +122,7 @@ export const PublicHeroBlogsSection = () => {
           {/* Right Featured Section */}
           <div className="lg:w-[320px] xl:w-[380px] shrink-0 flex flex-col gap-6">
             {mainFeatured && (
-              <a href={`/blog/${mainFeatured.slug}`} className="block group">
+              <a href={`/${mainFeatured.type}/${mainFeatured.slug}`} className="block group">
                 <div className="relative rounded-2xl overflow-hidden bg-blue-600 text-white h-full min-h-[320px] p-8 flex flex-col justify-center">
                   <div className="absolute inset-0 bg-gradient-to-tr from-blue-700 to-blue-500 opacity-90 z-0"></div>
                   {mainFeatured.imageUrl && (
@@ -152,7 +152,7 @@ export const PublicHeroBlogsSection = () => {
                 <h4 className="font-bold text-lg text-blue-900 mb-4">Featured Blog</h4>
                 <div className="space-y-4">
                   {sideFeatured.slice(0, 3).map((blog) => (
-                    <a key={blog.slug} href={`/blog/${blog.slug}`} className="flex gap-4 group">
+                    <a key={blog.slug} href={`/${blog.type}/${blog.slug}`} className="flex gap-4 group">
                       <div className="w-24 h-16 rounded-lg bg-gray-200 overflow-hidden shrink-0">
                         {blog.imageUrl && (
                            <img 

@@ -11,6 +11,8 @@ import growthImg from "@/assets/growth-illustration.png";
 import { PublicHeader } from "./PublicHeader";
 import { PublicFooter } from "./PublicFooter";
 import { PricingSection } from "./PricingSection";
+import { PublicHeroBlogsSection } from "./PublicHeroBlogsSection";
+
 
 const stats = [
   { label: "Leads Managed", value: "50,000+", icon: Users },
@@ -297,6 +299,9 @@ const Index = () => {
 
       {/* PRICING */}
       <PricingSection />
+
+      {/* BLOGS */}
+      <PublicHeroBlogsSection />
 
       {/* CTA */}
       <section className="py-24 relative">
