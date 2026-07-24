@@ -4,17 +4,39 @@ const path = require('path');
 const blogsDir = 'D:/ADS Internship/blogs';
 const indexFile = 'src/data/content/index.ts';
 
+function getTodayDate() {
+  const d = new Date();
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+}
+
 async function main() {
   let indexContent = fs.readFileSync(indexFile, 'utf8');
   
-  // First fix the 6 mistakes
+  // Fix any leftover 'City' categories
   indexContent = indexContent.replace(/category: 'City',/g, "category: 'City Pages',");
+
+  // Extract existing slugs to avoid duplicates
+  const existingSlugs = new Set();
+  const slugMatches = indexContent.matchAll(/slug:\s*'([^']+)'/g);
+  for (const match of slugMatches) {
+    existingSlugs.add(match[1]);
+  }
 
   const files = fs.readdirSync(blogsDir).filter(f => f.endsWith('.md'));
   
   let newEntries = [];
+  let skipped = 0;
 
   for (const file of files) {
+    const slug = file.replace(/\.md$/, '');
+
+    // Skip if already imported
+    if (existingSlugs.has(slug)) {
+      skipped++;
+      continue;
+    }
+
     const fullPath = path.join(blogsDir, file);
     const text = fs.readFileSync(fullPath, 'utf8');
 
@@ -32,20 +54,14 @@ async function main() {
     let description = descMatch ? descMatch[1].trim() : '';
 
     // Extract actual content (remove meta parts)
-    let content = text.replace(/.*\*\*Meta Title:\*\*.*(\r?\n)+/i, '')
-                      .replace(/.*Meta Title:.*(\r?\n)+/i, '')
-                      .replace(/.*\*\*Meta Description:\*\*.*(\r?\n)+/i, '')
-                      .replace(/.*Meta Description:.*(\r?\n)+/i, '')
+    let content = text.replace(/.*\*\*Meta Title:\*\*.*/i, '')
+                      .replace(/.*Meta Title:.*/i, '')
+                      .replace(/.*\*\*Meta Description:\*\*.*/i, '')
+                      .replace(/.*Meta Description:.*/i, '')
+                      .replace(/^\s*---\s*/m, '')
                       .trim();
-    
-    // Ensure content starts cleanly (sometimes there are markdown dividers '---')
-    if (content.startsWith('---')) {
-      content = content.replace(/^---\s*(\r?\n)+/, '').trim();
-    }
 
-    const slug = file.replace(/\.md$/, '');
-
-    // Format content inside template literals. Need to escape backticks and ${}
+    // Escape backticks and ${} for template literal safety
     const escapedContent = content.replace(/`/g, '\\`').replace(/\$/g, '\\$');
 
     const entry = `  {
@@ -53,13 +69,19 @@ async function main() {
     type: 'city',
     title: '${title.replace(/'/g, "\\'")}',
     category: 'City Pages',
-    date: '23 July 2026',
+    date: '${getTodayDate()}',
     description: '${description.replace(/'/g, "\\'")}',
     featured: false,
     content: \`${escapedContent}\`
   }`;
 
     newEntries.push(entry);
+  }
+
+  if (newEntries.length === 0) {
+    console.log(`No new blogs to add. Skipped ${skipped} already-imported file(s).`);
+    fs.writeFileSync(indexFile, indexContent);
+    return;
   }
 
   // Insert before the last `];`
@@ -69,15 +91,13 @@ async function main() {
   }
 
   const before = indexContent.slice(0, lastBracketIndex).trimEnd();
-  // if the array ended with a comma, great. If not, we might need one.
   const hasComma = before.endsWith(',');
-  
   const separator = hasComma ? '\n' : ',\n';
   
   const finalContent = before + separator + newEntries.join(',\n') + '\n];\n';
   
   fs.writeFileSync(indexFile, finalContent);
-  console.log(`Successfully added ${newEntries.length} blogs to index.ts!`);
+  console.log(`✓ Added ${newEntries.length} new blog(s). Skipped ${skipped} already-imported file(s).`);
 }
 
 main().catch(console.error);
